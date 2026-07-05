@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none" role="img" aria-label="Lumorius symbol">
+  <!-- Symbol-only mark, no wordmark, transparent background -->
+  <defs>
+    <linearGradient id="gSym" x1="10" y1="10" x2="70" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer ring -->
+  <circle cx="40" cy="40" r="36" stroke="url(#gSym)" stroke-width="1.2" stroke-opacity="0.3" fill="none"/>
+  <!-- Cardinal rays -->
+  <polygon points="40,4 42.5,34 37.5,34" fill="url(#gSym)" fill-opacity="0.9"/>
+  <polygon points="40,76 42.5,46 37.5,46" fill="url(#gSym)" fill-opacity="0.9"/>
+  <polygon points="76,40 46,42.5 46,37.5" fill="url(#gSym)" fill-opacity="0.9"/>
+  <polygon points="4,40 34,42.5 34,37.5" fill="url(#gSym)" fill-opacity="0.9"/>
+  <!-- Diagonal rays -->
+  <polygon points="65.5,14.5 44,36 41.5,33" fill="url(#gSym)" fill-opacity="0.45"/>
+  <polygon points="65.5,65.5 41.5,47 44,44" fill="url(#gSym)" fill-opacity="0.45"/>
+  <polygon points="14.5,65.5 39,44 41.5,47" fill="url(#gSym)" fill-opacity="0.45"/>
+  <polygon points="14.5,14.5 41.5,33 39,36" fill="url(#gSym)" fill-opacity="0.45"/>
+  <!-- Central diamond -->
+  <polygon points="40,25 53,40 40,55 27,40" fill="url(#gSym)" fill-opacity="0.12" stroke="url(#gSym)" stroke-width="1.5"/>
+  <polygon points="40,30 47,40 40,50 33,40" fill="url(#gSym)"/>
+  <circle cx="40" cy="40" r="3" fill="#FEF9C3"/>
+</svg>

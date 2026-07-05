@@ -1,0 +1,66 @@
+{
+  "__inputs": [
+    { "name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "pluginId": "prometheus" }
+  ],
+  "title": "Lumorius AI — Business Metrics",
+  "uid": "lumorius-business-metrics",
+  "version": 1,
+  "schemaVersion": 38,
+  "tags": ["lumorius", "business"],
+  "timezone": "browser",
+  "refresh": "5m",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "title": "Total Organisations", "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "lumorius_organizations_total", "legendFormat": "orgs" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } }
+    },
+    {
+      "id": 2, "title": "Total Users", "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "lumorius_users_total", "legendFormat": "users" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } }
+    },
+    {
+      "id": 3, "title": "Documents Indexed (24h)", "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "increase(lumorius_documents_indexed_total[24h])", "legendFormat": "docs" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } }
+    },
+    {
+      "id": 4, "title": "Meetings Processed (24h)", "type": "stat",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "increase(lumorius_meetings_processed_total[24h])", "legendFormat": "meetings" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "cyan" } } }
+    },
+    {
+      "id": 5, "title": "New Registrations (7d)", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "increase(lumorius_user_registrations_total[1d])", "legendFormat": "registrations/day" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 20 } } }
+    },
+    {
+      "id": 6, "title": "Active Subscriptions by Plan", "type": "piechart",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "lumorius_subscriptions_active by (plan)", "legendFormat": "{{ plan }}" }]
+    },
+    {
+      "id": 7, "title": "Tasks Created vs Completed (7d)", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "expr": "increase(lumorius_tasks_created_total[1d])", "legendFormat": "Created" },
+        { "expr": "increase(lumorius_tasks_completed_total[1d])", "legendFormat": "Completed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ]
+}

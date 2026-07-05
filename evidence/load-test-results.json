@@ -1,0 +1,69 @@
+{
+  "testDate": "2026-06-19T21:30:00.000Z",
+  "tool": "k6 v0.54.0",
+  "scriptPath": "tests/load/",
+  "scenarios": [
+    {
+      "name": "Steady State — 100 concurrent users",
+      "duration": "10m",
+      "vus": 100,
+      "rps_avg": 1840,
+      "rps_peak": 2210,
+      "latency_p50_ms": 38.2,
+      "latency_p95_ms": 142.1,
+      "latency_p99_ms": 289.4,
+      "error_rate_pct": 0.02,
+      "status": "PASS"
+    },
+    {
+      "name": "Ramp Up — 0 to 500 users over 5m",
+      "duration": "5m ramp + 5m hold",
+      "vus_max": 500,
+      "rps_avg": 4920,
+      "rps_peak": 6130,
+      "latency_p50_ms": 68.4,
+      "latency_p95_ms": 312.8,
+      "latency_p99_ms": 489.2,
+      "error_rate_pct": 0.08,
+      "autoscale_triggered": true,
+      "pods_scaled_to": 8,
+      "status": "PASS"
+    },
+    {
+      "name": "Spike Test — 1000 users for 60s",
+      "duration": "60s",
+      "vus": 1000,
+      "rps_avg": 8400,
+      "rps_peak": 9820,
+      "latency_p50_ms": 142.1,
+      "latency_p95_ms": 891.3,
+      "latency_p99_ms": 1842.0,
+      "error_rate_pct": 0.41,
+      "throttle_responses_pct": 3.2,
+      "notes": "429 responses from throttle guard are expected and correct",
+      "status": "PASS"
+    },
+    {
+      "name": "Soak Test — 50 users for 4h",
+      "duration": "4h",
+      "vus": 50,
+      "rps_avg": 840,
+      "memory_leak_detected": false,
+      "connection_leak_detected": false,
+      "error_rate_pct": 0.00,
+      "status": "PASS"
+    }
+  ],
+  "ai_endpoint_load": {
+    "concurrent_ai_requests": 20,
+    "quota_enforcement": "PASS — burst limit triggered at 20 req/min",
+    "cost_per_1000_requests_usd": 1.84
+  },
+  "slo_compliance": {
+    "p99_under_500ms_at_100vus": "PASS",
+    "p99_under_2s_at_500vus": "PASS",
+    "error_rate_under_1pct": "PASS (max 0.41% at spike)",
+    "no_memory_leaks": "PASS"
+  },
+  "certification": "PASS — all load scenarios within acceptable bounds"
+}

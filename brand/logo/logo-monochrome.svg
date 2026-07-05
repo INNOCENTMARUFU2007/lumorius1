@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none" role="img" aria-label="Lumorius">
+  <!-- Single-color version for print, embossing, watermarks -->
+
+  <!-- Outer ring -->
+  <circle cx="120" cy="120" r="74" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.3" fill="none"/>
+
+  <!-- Ray: North -->
+  <polygon points="120,46 124,104 116,104" fill="currentColor" fill-opacity="0.85"/>
+  <!-- Ray: South -->
+  <polygon points="120,194 124,136 116,136" fill="currentColor" fill-opacity="0.85"/>
+  <!-- Ray: East -->
+  <polygon points="194,120 136,124 136,116" fill="currentColor" fill-opacity="0.85"/>
+  <!-- Ray: West -->
+  <polygon points="46,120 104,124 104,116" fill="currentColor" fill-opacity="0.85"/>
+
+  <!-- Ray: NE -->
+  <polygon points="172.3,67.7 126,112 119,105" fill="currentColor" fill-opacity="0.45"/>
+  <!-- Ray: SE -->
+  <polygon points="172.3,172.3 119,135 126,128" fill="currentColor" fill-opacity="0.45"/>
+  <!-- Ray: SW -->
+  <polygon points="67.7,172.3 121,128 114,135" fill="currentColor" fill-opacity="0.45"/>
+  <!-- Ray: NW -->
+  <polygon points="67.7,67.7 121,105 114,112" fill="currentColor" fill-opacity="0.45"/>
+
+  <!-- Central diamond -->
+  <polygon points="120,100 136,120 120,140 104,120" fill="currentColor" fill-opacity="0.1" stroke="currentColor" stroke-width="2"/>
+  <polygon points="120,108 128,120 120,132 112,120" fill="currentColor"/>
+  <circle cx="120" cy="120" r="3.5" fill="currentColor" fill-opacity="0.6"/>
+</svg>

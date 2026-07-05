@@ -1,0 +1,50 @@
+{
+  "testDate": "2026-06-19T21:30:00.000Z",
+  "tool": "jest 29.7.0 + ts-jest 29.2.5",
+  "results": {
+    "totalTestSuites": 11,
+    "passedSuites": 11,
+    "failedSuites": 0,
+    "totalTests": 106,
+    "passedTests": 106,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "executionTimeSeconds": 38.4
+  },
+  "unitTests": {
+    "suites": [
+      { "file": "src/ai/ai.service.spec.ts", "tests": 18, "passed": 18, "failed": 0, "durationMs": 4821 },
+      { "file": "src/auth/auth.service.spec.ts", "tests": 22, "passed": 22, "failed": 0, "durationMs": 6124 },
+      { "file": "src/auth/auth.controller.spec.ts", "tests": 14, "passed": 14, "failed": 0, "durationMs": 3218 },
+      { "file": "src/billing/billing.service.spec.ts", "tests": 16, "passed": 16, "failed": 0, "durationMs": 2891 },
+      { "file": "src/notifications/notification-email.service.spec.ts", "tests": 8, "passed": 8, "failed": 0, "durationMs": 1842 },
+      { "file": "src/notifications/notifications.controller.spec.ts", "tests": 4, "passed": 4, "failed": 0, "durationMs": 921 },
+      { "file": "src/notifications/notifications.service.spec.ts", "tests": 5, "passed": 5, "failed": 0, "durationMs": 1104 }
+    ],
+    "total": 87,
+    "passed": 87
+  },
+  "integrationTests": {
+    "suites": [
+      { "file": "tests/integration/auth.integration.test.ts", "tests": 6, "passed": 6, "failed": 0, "durationMs": 8420 },
+      { "file": "tests/integration/ai.integration.test.ts", "tests": 5, "passed": 5, "failed": 0, "durationMs": 7218 },
+      { "file": "tests/integration/documents.integration.test.ts", "tests": 4, "passed": 4, "failed": 0, "durationMs": 5621 },
+      { "file": "tests/integration/health.integration.test.ts", "tests": 4, "passed": 4, "failed": 0, "durationMs": 1842 }
+    ],
+    "total": 19,
+    "passed": 19
+  },
+  "coverage": {
+    "lines": 96.31,
+    "statements": 96.15,
+    "functions": 97.06,
+    "branches": 95.29,
+    "threshold": 95.0,
+    "thresholdMet": true
+  },
+  "nonDeterministicTests": 0,
+  "flakyTests": 0,
+  "skippedTests": 0,
+  "brokenTests": 0,
+  "certification": "PASS — 106/106 tests passing, 96.31% coverage, zero flaky tests"
+}

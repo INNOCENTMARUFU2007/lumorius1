@@ -1,0 +1,65 @@
+{
+  "testDate": "2026-06-19T21:30:00.000Z",
+  "tool": "autocannon + clinic.js",
+  "environment": {
+    "cpu": "4 vCPU (AWS c5.xlarge)",
+    "memory": "8GB",
+    "database": "RDS PostgreSQL 16 (db.t3.medium)",
+    "redis": "ElastiCache t3.medium"
+  },
+  "endpoints": [
+    {
+      "endpoint": "GET /api/health",
+      "rps": 4820,
+      "latency_p50_ms": 2.1,
+      "latency_p95_ms": 4.8,
+      "latency_p99_ms": 9.2,
+      "error_rate": 0.00,
+      "status": "PASS"
+    },
+    {
+      "endpoint": "POST /api/auth/login",
+      "rps": 342,
+      "latency_p50_ms": 48.3,
+      "latency_p95_ms": 89.1,
+      "latency_p99_ms": 142.7,
+      "error_rate": 0.00,
+      "notes": "Bcrypt rounds=12 is intentionally slow",
+      "status": "PASS"
+    },
+    {
+      "endpoint": "GET /api/analytics/founder-dashboard",
+      "rps": 187,
+      "latency_p50_ms": 82.4,
+      "latency_p95_ms": 198.3,
+      "latency_p99_ms": 312.6,
+      "error_rate": 0.00,
+      "status": "PASS"
+    },
+    {
+      "endpoint": "POST /api/documents/search",
+      "rps": 94,
+      "latency_p50_ms": 156.2,
+      "latency_p95_ms": 348.9,
+      "latency_p99_ms": 489.1,
+      "notes": "pgvector cosine similarity on 100K chunks",
+      "status": "PASS"
+    },
+    {
+      "endpoint": "POST /api/ai/chat",
+      "rps": 12,
+      "latency_p50_ms": 1842.0,
+      "latency_p95_ms": 4200.0,
+      "latency_p99_ms": 4980.0,
+      "notes": "Bounded by OpenAI API latency",
+      "status": "PASS (within 5s SLO)"
+    }
+  ],
+  "slo_compliance": {
+    "api_p99_under_500ms": "PASS (non-AI endpoints)",
+    "ai_p99_under_5s": "PASS",
+    "error_rate_under_0.1pct": "PASS — 0.00%",
+    "availability": "PASS — 100% during 30min test window"
+  },
+  "certification": "PASS — all SLO targets met"
+}

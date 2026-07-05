@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lumorius-api
+  namespace: lumorius
+  labels:
+    app: lumorius-api
+    app.kubernetes.io/part-of: lumorius
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: lumorius-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: lumorius-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "3001"
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    1001
+        fsGroup:      1001
+
+      containers:
+        - name: api
+          image: ${ECR_API_IMAGE}
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: lumorius-config
+            - secretRef:
+                name: lumorius-secrets
+
+          resources:
+            requests:
+              cpu:    250m
+              memory: 256Mi
+            limits:
+              cpu:    1000m
+              memory: 1Gi
+
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds:       15
+            timeoutSeconds:      5
+            failureThreshold:    3
+
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds:       10
+            timeoutSeconds:      3
+            failureThreshold:    3
+
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 3001
+            failureThreshold: 12
+            periodSeconds:    10
+
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   false
+            capabilities:
+              drop: [ALL]
+
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: lumorius-uploads-pvc
+
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lumorius-api
+  namespace: lumorius
+  labels:
+    app: lumorius-api
+spec:
+  selector:
+    app: lumorius-api
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+      protocol: TCP
+  type: ClusterIP

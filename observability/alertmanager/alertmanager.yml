@@ -1,0 +1,139 @@
+# AlertManager Configuration — Lumorius AI
+# Routes alerts from Prometheus to the appropriate notification channels
+
+global:
+  resolve_timeout: 5m
+  smtp_from: alerts@lumorius.com
+  smtp_smarthost: 'smtp.postmarkapp.com:587'
+  smtp_auth_username: '{{ POSTMARK_TOKEN }}'
+  smtp_auth_password: '{{ POSTMARK_TOKEN }}'
+  smtp_require_tls: true
+
+# ── Templates ──────────────────────────────────────────────────
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# ── Routing ────────────────────────────────────────────────────
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default-receiver'
+
+  routes:
+    # Critical — immediate Slack + PagerDuty
+    - match:
+        severity: critical
+      receiver: critical-receiver
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    # Security alerts — security team only
+    - match_re:
+        alertname: '^(TooManyFailedLogins|SuspiciousActivity|UnauthorizedAccess|SecurityBreach)$'
+      receiver: security-receiver
+      group_wait: 0s
+      repeat_interval: 30m
+
+    # Database alerts
+    - match:
+        team: database
+      receiver: db-receiver
+      repeat_interval: 2h
+
+    # Business metrics
+    - match:
+        team: business
+      receiver: business-receiver
+      repeat_interval: 24h
+
+    # AI cost alerts
+    - match:
+        team: ai
+      receiver: ai-receiver
+      repeat_interval: 6h
+
+# ── Receivers ──────────────────────────────────────────────────
+receivers:
+  - name: 'default-receiver'
+    slack_configs:
+      - api_url: '{{ SLACK_WEBHOOK_URL }}'
+        channel: '#lumorius-alerts'
+        title: '{{ template "slack.default.title" . }}'
+        text: '{{ template "slack.default.text" . }}'
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}{{ if eq (index .Alerts 0).Labels.severity "critical" }}danger{{ else }}warning{{ end }}{{ else }}good{{ end }}'
+
+  - name: 'critical-receiver'
+    pagerduty_configs:
+      - routing_key: '{{ PAGERDUTY_INTEGRATION_KEY }}'
+        description: '{{ .CommonAnnotations.summary }}'
+        severity: 'critical'
+        details:
+          alertname: '{{ .CommonLabels.alertname }}'
+          environment: '{{ .CommonLabels.environment }}'
+    slack_configs:
+      - api_url: '{{ SLACK_WEBHOOK_URL }}'
+        channel: '#lumorius-oncall'
+        title: '🚨 CRITICAL: {{ .CommonLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+        send_resolved: true
+
+  - name: 'security-receiver'
+    slack_configs:
+      - api_url: '{{ SLACK_SECURITY_WEBHOOK_URL }}'
+        channel: '#lumorius-security'
+        title: '🔒 Security Alert: {{ .CommonLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+        send_resolved: true
+    email_configs:
+      - to: 'security@lumorius.com'
+        subject: '[SECURITY ALERT] {{ .CommonLabels.alertname }}'
+        body: '{{ template "email.default.html" . }}'
+        html: '{{ template "email.default.html" . }}'
+
+  - name: 'db-receiver'
+    slack_configs:
+      - api_url: '{{ SLACK_WEBHOOK_URL }}'
+        channel: '#lumorius-infra'
+        title: '🗄️ Database Alert: {{ .CommonLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+        send_resolved: true
+
+  - name: 'business-receiver'
+    email_configs:
+      - to: 'leadership@lumorius.com'
+        subject: '[Business Alert] {{ .CommonLabels.alertname }}'
+        body: '{{ template "email.default.html" . }}'
+    slack_configs:
+      - api_url: '{{ SLACK_WEBHOOK_URL }}'
+        channel: '#lumorius-business-metrics'
+        title: '📊 Business Alert: {{ .CommonLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+        send_resolved: true
+
+  - name: 'ai-receiver'
+    slack_configs:
+      - api_url: '{{ SLACK_WEBHOOK_URL }}'
+        channel: '#lumorius-ai-ops'
+        title: '🤖 AI Alert: {{ .CommonLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+        send_resolved: true
+
+# ── Inhibit rules ──────────────────────────────────────────────
+inhibit_rules:
+  # Suppress warnings when a critical is already firing for the same service
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service', 'instance']
+
+  # Suppress all alerts when the entire service is down
+  - source_match:
+      alertname: 'ServiceDown'
+    target_match_re:
+      alertname: '.*'
+    equal: ['service']

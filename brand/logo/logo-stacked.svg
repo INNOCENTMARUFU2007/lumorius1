@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 320" fill="none" role="img" aria-label="Lumorius">
+  <defs>
+    <linearGradient id="bgS" x1="0" y1="0" x2="280" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#050C1A"/>
+      <stop offset="100%" stop-color="#0A1628"/>
+    </linearGradient>
+    <linearGradient id="gS" x1="60" y1="40" x2="220" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="goldFadeS" x1="140" y1="20" x2="140" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F59E0B" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="280" height="320" rx="32" fill="url(#bgS)"/>
+
+  <!-- Glow -->
+  <circle cx="140" cy="130" r="90" fill="url(#goldFadeS)"/>
+
+  <!-- Outer ring -->
+  <circle cx="140" cy="130" r="84" stroke="url(#gS)" stroke-width="1.5" stroke-opacity="0.3" fill="none"/>
+
+  <!-- Cardinal rays -->
+  <polygon points="140,46 144,112 136,112" fill="url(#gS)" fill-opacity="0.9"/>
+  <polygon points="140,214 144,148 136,148" fill="url(#gS)" fill-opacity="0.9"/>
+  <polygon points="224,130 158,134 158,126" fill="url(#gS)" fill-opacity="0.9"/>
+  <polygon points="56,130 122,134 122,126" fill="url(#gS)" fill-opacity="0.9"/>
+  <!-- Diagonal rays -->
+  <polygon points="199.4,76.6 148,127 141,120" fill="url(#gS)" fill-opacity="0.45"/>
+  <polygon points="199.4,183.4 140,132 147,125" fill="url(#gS)" fill-opacity="0.45"/>
+  <polygon points="80.6,183.4 140,125 147,132" fill="url(#gS)" fill-opacity="0.45"/>
+  <polygon points="80.6,76.6 141,120 148,127" fill="url(#gS)" fill-opacity="0.45"/>
+  <!-- Central diamond -->
+  <polygon points="140,107 161,130 140,153 119,130" fill="url(#gS)" fill-opacity="0.12" stroke="url(#gS)" stroke-width="2"/>
+  <polygon points="140,115 150,130 140,145 130,130" fill="url(#gS)"/>
+  <circle cx="140" cy="130" r="4" fill="#FEF3C7"/>
+
+  <!-- Wordmark -->
+  <text x="140" y="253"
+    font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif"
+    font-size="34" font-weight="700" letter-spacing="-0.5"
+    fill="#F8FAFC" text-anchor="middle">Lumorius</text>
+
+  <!-- Tagline -->
+  <text x="140" y="278"
+    font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif"
+    font-size="9" font-weight="400" letter-spacing="3.5"
+    fill="#64748B" text-anchor="middle">ENTERPRISE AI PLATFORM</text>
+</svg>

@@ -1,0 +1,68 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lumorius-ingress
+  namespace: lumorius
+  annotations:
+    # NGINX Ingress Controller
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size:    100m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+
+    # SSL — cert-manager
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "60"
+
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Permissions-Policy: camera=(), microphone=(), geolocation=()";
+
+    # Stripe webhooks bypass rate limit
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location /api/v1/billing/webhook {
+        proxy_pass http://lumorius-api:3001;
+        proxy_set_header Host $host;
+      }
+spec:
+  tls:
+    - hosts:
+        - lumorius.com
+        - www.lumorius.com
+      secretName: lumorius-tls
+
+  rules:
+    - host: lumorius.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: lumorius-api
+                port:
+                  number: 3001
+
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lumorius-web
+                port:
+                  number: 3000
+
+    - host: www.lumorius.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lumorius-web
+                port:
+                  number: 3000

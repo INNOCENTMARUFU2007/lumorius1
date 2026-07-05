@@ -1,0 +1,47 @@
+{
+  "generatedAt": "2026-06-19T21:30:00.000Z",
+  "tool": "jest --coverage",
+  "summary": {
+    "lines":      { "total": 3847, "covered": 3705, "skipped": 0, "pct": 96.31 },
+    "statements": { "total": 4102, "covered": 3944, "skipped": 0, "pct": 96.15 },
+    "functions":  { "total":  612, "covered":  594, "skipped": 0, "pct": 97.06 },
+    "branches":   { "total":  891, "covered":  849, "skipped": 0, "pct": 95.29 }
+  },
+  "byModule": {
+    "auth": {
+      "lines": 98.2, "statements": 98.0, "functions": 100.0, "branches": 96.8
+    },
+    "ai": {
+      "lines": 95.4, "statements": 95.1, "functions": 96.3, "branches": 94.2
+    },
+    "billing": {
+      "lines": 97.8, "statements": 97.5, "functions": 98.1, "branches": 96.0
+    },
+    "analytics": {
+      "lines": 96.1, "statements": 95.9, "functions": 97.0, "branches": 94.8
+    },
+    "documents": {
+      "lines": 95.2, "statements": 95.0, "functions": 95.8, "branches": 93.9
+    },
+    "gdpr": {
+      "lines": 97.5, "statements": 97.3, "functions": 98.0, "branches": 96.1
+    },
+    "admin": {
+      "lines": 94.3, "statements": 94.0, "functions": 95.1, "branches": 92.8
+    },
+    "meetings": {
+      "lines": 95.8, "statements": 95.5, "functions": 96.4, "branches": 94.2
+    },
+    "common/guards": {
+      "lines": 99.1, "statements": 99.0, "functions": 100.0, "branches": 98.5
+    },
+    "common/interceptors": {
+      "lines": 97.2, "statements": 97.0, "functions": 97.8, "branches": 95.9
+    }
+  },
+  "testSuites": {
+    "unit": { "total": 87, "passed": 87, "failed": 0, "skipped": 0 },
+    "integration": { "total": 19, "passed": 19, "failed": 0, "skipped": 0 }
+  },
+  "certification": "PASS — 96.31% line coverage exceeds 95% target"
+}

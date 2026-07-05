@@ -1,0 +1,121 @@
+replicaCount:
+  api: 2
+  web: 2
+
+image:
+  api:
+    repository: ghcr.io/lumorius/api
+    tag: latest
+    pullPolicy: IfNotPresent
+  web:
+    repository: ghcr.io/lumorius/web
+    tag: latest
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "5000"
+  prometheus.io/path: "/api/metrics"
+
+podSecurityContext:
+  fsGroup: 1001
+  runAsNonRoot: true
+  runAsUser: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: false
+
+service:
+  api:
+    type: ClusterIP
+    port: 5000
+  web:
+    type: ClusterIP
+    port: 3000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  hosts:
+    - host: lumorius.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: web
+  tls:
+    - secretName: lumorius-tls
+      hosts: [lumorius.com]
+
+resources:
+  api:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:    { cpu: 1000m, memory: 2Gi }
+  web:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:    { cpu: 500m, memory: 1Gi }
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [lumorius-api]
+          topologyKey: kubernetes.io/hostname
+
+env:
+  NODE_ENV: production
+
+secrets:
+  existingSecret: lumorius-secrets
+
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: 5000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/health/ready
+    port: 5000
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 3
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

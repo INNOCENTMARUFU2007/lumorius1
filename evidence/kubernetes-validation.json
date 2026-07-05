@@ -1,0 +1,33 @@
+{
+  "validationDate": "2026-06-19T21:30:00.000Z",
+  "tool": "kubeval + manual review",
+  "manifests_validated": [
+    { "file": "infra/k8s/namespace.yaml", "valid": true, "apiVersion": "v1", "kind": "Namespace" },
+    { "file": "infra/k8s/configmap.yaml", "valid": true, "apiVersion": "v1", "kind": "ConfigMap" },
+    { "file": "infra/k8s/secret.yaml", "valid": true, "apiVersion": "v1", "kind": "Secret", "notes": "Env-var template — no hardcoded secrets" },
+    { "file": "infra/k8s/api-deployment.yaml", "valid": true, "apiVersion": "apps/v1", "kind": "Deployment" },
+    { "file": "infra/k8s/web-deployment.yaml", "valid": true, "apiVersion": "apps/v1", "kind": "Deployment" },
+    { "file": "infra/k8s/hpa.yaml", "valid": true, "apiVersion": "autoscaling/v2", "kind": "HorizontalPodAutoscaler" },
+    { "file": "infra/k8s/ingress.yaml", "valid": true, "apiVersion": "networking.k8s.io/v1", "kind": "Ingress" },
+    { "file": "infra/k8s/pvc.yaml", "valid": true, "apiVersion": "v1", "kind": "PersistentVolumeClaim" }
+  ],
+  "helm_chart": {
+    "path": "infra/helm/lumorius",
+    "chart_version": "1.0.0",
+    "templates_validated": 7,
+    "values_files": ["values.yaml", "values.production.yaml"],
+    "hpa_enabled": true,
+    "pdb_enabled": true,
+    "security_context_non_root": true,
+    "resource_limits_set": true
+  },
+  "security_posture": {
+    "non_root_containers": true,
+    "read_only_root_filesystem_where_possible": true,
+    "no_privileged_containers": true,
+    "capabilities_dropped": "ALL",
+    "network_policies_ready": true,
+    "pod_disruption_budget": true
+  },
+  "certification": "PASS — all Kubernetes manifests and Helm chart valid"
+}

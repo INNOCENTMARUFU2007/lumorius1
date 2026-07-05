@@ -1,0 +1,144 @@
+# OpenTelemetry Collector Configuration — Lumorius AI
+# Receives traces/metrics from NestJS (OTLP), exports to Jaeger + Prometheus
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - "http://localhost:3000"
+            - "https://lumorius.com"
+
+  # Collect host metrics
+  hostmetrics:
+    collection_interval: 10s
+    scrapers:
+      cpu:
+      disk:
+      filesystem:
+      load:
+      memory:
+      network:
+      paging:
+      process:
+        include:
+          names: ['node', 'postgres']
+          match_type: regexp
+
+  # Prometheus scrape (for metrics that use Prometheus format)
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['localhost:8888']
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 5s
+
+  # Add Lumorius-specific attributes
+  resource:
+    attributes:
+      - key: service.namespace
+        value: lumorius
+        action: upsert
+      - key: deployment.environment
+        from_attribute: DEPLOYMENT_ENVIRONMENT
+        action: upsert
+
+  # Filter out health check spans (too noisy)
+  filter:
+    spans:
+      exclude:
+        match_type: regexp
+        span_names:
+          - "GET /api/v1/health"
+          - "GET /api/v1/metrics"
+
+  transform:
+    metric_statements:
+      - context: metric
+        statements:
+          - set(description, "Lumorius: " + description) where description != ""
+
+exporters:
+  # Jaeger distributed tracing
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+  # Prometheus metrics
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: lumorius
+    send_timestamps: true
+    metric_expiration: 180m
+    enable_open_metrics: true
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Debug logging (development only)
+  debug:
+    verbosity: basic
+    sampling_initial:   5
+    sampling_thereafter: 200
+
+  # OTLP to external APM (if configured)
+  otlp/external:
+    endpoint: "${OTEL_EXPORTER_ENDPOINT:-localhost:4317}"
+    tls:
+      insecure: true
+    headers:
+      authorization: "Bearer ${OTEL_AUTH_TOKEN:-}"
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+  pprof:
+    endpoint: localhost:1777
+
+  zpages:
+    endpoint: localhost:55679
+
+service:
+  extensions: [health_check, pprof, zpages]
+  pipelines:
+    traces:
+      receivers:  [otlp]
+      processors: [memory_limiter, resourcedetection, resource, filter, batch]
+      exporters:  [jaeger]
+
+    metrics:
+      receivers:  [otlp, prometheus, hostmetrics]
+      processors: [memory_limiter, resourcedetection, resource, batch]
+      exporters:  [prometheus]
+
+    logs:
+      receivers:  [otlp]
+      processors: [memory_limiter, resourcedetection, resource, batch]
+      exporters:  [debug]
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888

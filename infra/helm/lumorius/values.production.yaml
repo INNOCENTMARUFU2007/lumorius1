@@ -1,0 +1,254 @@
+# =============================================================================
+# Lumorius — Production Helm Values
+# =============================================================================
+# Usage:
+#   helm upgrade --install lumorius ./infra/helm/lumorius \
+#     -f infra/helm/lumorius/values.yaml \
+#     -f infra/helm/lumorius/values.production.yaml \
+#     --namespace lumorius \
+#     --create-namespace
+#
+# SECRETS — never put real values in this file.
+# Create the lumorius-secrets k8s Secret first:
+#
+#   kubectl create secret generic lumorius-secrets \
+#     --namespace lumorius \
+#     --from-literal=DATABASE_URL="postgresql://lumorius:<pass>@<rds-endpoint>:5432/lumorius_db" \
+#     --from-literal=REDIS_URL="redis://<elasticache-primary>:6379" \
+#     --from-literal=REDIS_SENTINELS="<sentinel1>:26379,<sentinel2>:26379,<sentinel3>:26379" \
+#     --from-literal=REDIS_SENTINEL_NAME="mymaster" \
+#     --from-literal=JWT_SECRET="<64-char-random-hex>" \
+#     --from-literal=JWT_REFRESH_SECRET="<64-char-different-random-hex>" \
+#     --from-literal=SESSION_SECRET="<64-char-random-hex>" \
+#     --from-literal=OPENAI_API_KEY="sk-..." \
+#     --from-literal=ANTHROPIC_API_KEY="sk-ant-..." \
+#     --from-literal=GOOGLE_CLIENT_ID="<id>.apps.googleusercontent.com" \
+#     --from-literal=GOOGLE_CLIENT_SECRET="GOCSPX-..." \
+#     --from-literal=GITHUB_CLIENT_ID="Iv1...." \
+#     --from-literal=GITHUB_CLIENT_SECRET="<secret>" \
+#     --from-literal=STRIPE_SECRET_KEY="sk_live_..." \
+#     --from-literal=STRIPE_WEBHOOK_SECRET="whsec_..." \
+#     --from-literal=SMTP_HOST="smtp.postmarkapp.com" \
+#     --from-literal=SMTP_PORT="587" \
+#     --from-literal=SMTP_USER="<postmark-api-token>" \
+#     --from-literal=SMTP_PASS="<postmark-api-token>" \
+#     --from-literal=SMTP_FROM="no-reply@lumorius.com" \
+#     --from-literal=AWS_ACCESS_KEY_ID="AKIA..." \
+#     --from-literal=AWS_SECRET_ACCESS_KEY="<secret>" \
+#     --from-literal=AWS_REGION="us-east-1" \
+#     --from-literal=S3_BUCKET="lumorius-uploads-prod" \
+#     --from-literal=VAULT_ADDR="https://vault.lumorius.internal:8200" \
+#     --from-literal=VAULT_TOKEN="<vault-token>" \
+#     --from-literal=VAULT_MOUNT="secret" \
+#     --from-literal=VAULT_SECRET_PATH="lumorius/prod"
+#
+# Generate secure random values with:
+#   openssl rand -hex 32
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Container images — set to the exact digest/tag from your CI pipeline
+# ---------------------------------------------------------------------------
+image:
+  api:
+    repository: ghcr.io/lumorius/api   # ← replace with your ECR/GHCR registry
+    tag: "1.0.0"                       # ← pin to a specific semver tag, never "latest"
+    pullPolicy: IfNotPresent
+  web:
+    repository: ghcr.io/lumorius/web
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+
+# Pull secret if your registry is private
+# imagePullSecrets:
+#   - name: ghcr-pull-secret
+
+# ---------------------------------------------------------------------------
+# Replica counts — start at 2 for HA; HPA will scale up to 20
+# ---------------------------------------------------------------------------
+replicaCount:
+  api: 3   # 3 ensures quorum during rolling update (1 unavailable → 2 serving)
+  web: 2
+
+# ---------------------------------------------------------------------------
+# Ingress — set your real domain here
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    # HSTS — one year, include subdomains, preload
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    # Rate limiting at the ingress level (additional layer on top of app throttle)
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+  hosts:
+    - host: lumorius.com           # ← your primary domain
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: web
+    - host: www.lumorius.com       # ← www redirect (if needed)
+      paths:
+        - path: /
+          pathType: Prefix
+          service: web
+  tls:
+    - secretName: lumorius-tls
+      hosts:
+        - lumorius.com
+        - www.lumorius.com
+
+# ---------------------------------------------------------------------------
+# Resource sizing — production-grade (right-sized for a 1K-org deployment)
+# ---------------------------------------------------------------------------
+resources:
+  api:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  web:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# ---------------------------------------------------------------------------
+# Autoscaling — aggressive scale-out, conservative scale-in
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 65      # scale out earlier to avoid cold hits
+  targetMemoryUtilizationPercentage: 75
+
+# ---------------------------------------------------------------------------
+# Pod disruption budget — always keep 2 API pods during cluster maintenance
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# ---------------------------------------------------------------------------
+# Liveness / readiness probes — tuned for production startup time
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: 5000
+  initialDelaySeconds: 45    # give NestJS time to boot + pgvector check
+  periodSeconds: 15
+  failureThreshold: 3
+  timeoutSeconds: 5
+  successThreshold: 1
+
+readinessProbe:
+  httpGet:
+    path: /api/health/ready
+    port: 5000
+  initialDelaySeconds: 15
+  periodSeconds: 5
+  failureThreshold: 3
+  timeoutSeconds: 3
+  successThreshold: 1
+
+# ---------------------------------------------------------------------------
+# Non-sensitive environment variables
+# (secrets are always in the lumorius-secrets k8s Secret above)
+# ---------------------------------------------------------------------------
+env:
+  NODE_ENV: production
+  APP_URL: "https://lumorius.com"
+  API_PORT: "5000"
+  DB_POOL_MAX: "20"
+  DB_POOL_IDLE_TIMEOUT_MS: "30000"
+  REDIS_SENTINEL_NAME: "mymaster"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  THROTTLE_SHORT_TTL: "1000"
+  THROTTLE_SHORT_LIMIT: "20"
+  THROTTLE_MEDIUM_TTL: "10000"
+  THROTTLE_MEDIUM_LIMIT: "100"
+  THROTTLE_LONG_TTL: "60000"
+  THROTTLE_LONG_LIMIT: "500"
+  AI_BURST_LIMIT: "20"
+  AI_BURST_WINDOW_SECONDS: "60"
+  GDPR_DELETION_GRACE_DAYS: "30"
+  DOCUMENT_MAX_SIZE_MB: "50"
+  EMAIL_FROM: "Lumorius AI <no-reply@lumorius.com>"
+  SENTRY_ENVIRONMENT: "production"   # populate SENTRY_DSN in secret if using Sentry
+
+# Reference to the k8s Secret (created via kubectl above)
+secrets:
+  existingSecret: lumorius-secrets
+
+# ---------------------------------------------------------------------------
+# Pod annotations — Prometheus scraping + optional Datadog / Sentry
+# ---------------------------------------------------------------------------
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "5000"
+  prometheus.io/path: "/api/metrics"
+  # Uncomment if using Datadog:
+  # ad.datadoghq.com/api.check_names: '["openmetrics"]'
+  # ad.datadoghq.com/api.init_configs: '[{}]'
+
+# ---------------------------------------------------------------------------
+# Pod anti-affinity — spread API pods across nodes for HA
+# ---------------------------------------------------------------------------
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values: [lumorius]
+            - key: app.kubernetes.io/component
+              operator: In
+              values: [api]
+        topologyKey: kubernetes.io/hostname
+
+# ---------------------------------------------------------------------------
+# Node selector — run on dedicated application node pool if available
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+# nodeSelector:
+#   node-pool: application
+#   kubernetes.io/arch: amd64
+
+# ---------------------------------------------------------------------------
+# Tolerations — uncomment if using tainted node pools
+# ---------------------------------------------------------------------------
+tolerations: []
+# tolerations:
+#   - key: "dedicated"
+#     operator: "Equal"
+#     value: "app"
+#     effect: "NoSchedule"
+
+# ---------------------------------------------------------------------------
+# Service account — annotate with AWS IAM role for IRSA (S3, CloudWatch)
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  annotations:
+    # AWS IRSA — replace <account-id> and <role-name>
+    # eks.amazonaws.com/role-arn: arn:aws:iam::<account-id>:role/<lumorius-prod-role>
+  name: lumorius-api

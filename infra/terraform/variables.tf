@@ -1,0 +1,24 @@
+variable "aws_region"          { default = "us-east-1" }
+variable "environment"         { default = "prod" }
+variable "vpc_cidr"            { default = "10.0.0.0/16" }
+variable "availability_zones"  { default = ["us-east-1a", "us-east-1b", "us-east-1c"] }
+variable "db_name"             { default = "lumorius_db" }
+variable "db_username"         { default = "lumorius" }
+variable "db_password"         { description = "RDS master password" ; sensitive = true }
+variable "rds_instance_class"  { default = "db.t3.medium" }
+variable "rds_allocated_storage" { default = 100 }
+variable "redis_node_type"     { default = "cache.t3.medium" }
+variable "redis_num_cache_nodes" { default = 2 }
+variable "s3_bucket_name"      { default = "lumorius-uploads" }
+variable "ecr_api_image"       { description = "ECR image URI for API" }
+variable "ecr_web_image"       { description = "ECR image URI for Web" }
+variable "api_cpu"             { default = 1024 }
+variable "api_memory"          { default = 2048 }
+variable "web_cpu"             { default = 512 }
+variable "web_memory"          { default = 1024 }
+variable "desired_count"       { default = 2 }
+variable "jwt_secret"          { sensitive = true }
+variable "jwt_refresh_secret"  { sensitive = true }
+variable "openai_api_key"      { sensitive = true }
+variable "anthropic_api_key"   { sensitive = true }
+variable "stripe_secret_key"   { sensitive = true }

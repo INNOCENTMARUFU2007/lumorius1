@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lumorius-uploads-pvc
+  namespace: lumorius
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: managed-nfs  # Replace with your cloud provider's RWX storage class

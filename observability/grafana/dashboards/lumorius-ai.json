@@ -1,0 +1,76 @@
+{
+  "__inputs": [
+    { "name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "pluginId": "prometheus" }
+  ],
+  "title": "Lumorius AI — AI Platform Metrics",
+  "uid": "lumorius-ai-metrics",
+  "version": 1,
+  "schemaVersion": 38,
+  "tags": ["lumorius", "ai"],
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "title": "AI Requests/min", "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "sum(rate(lumorius_ai_requests_total[1m])) * 60", "legendFormat": "req/min" }],
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "steps": [{"value":0,"color":"green"},{"value":100,"color":"yellow"},{"value":500,"color":"red"}] } } }
+    },
+    {
+      "id": 2, "title": "Total Tokens Used (1h)", "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "increase(lumorius_ai_tokens_total[1h])", "legendFormat": "tokens" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } }
+    },
+    {
+      "id": 3, "title": "Avg AI Response Time (p95)", "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(lumorius_ai_response_duration_ms_bucket[5m])) by (le))", "legendFormat": "p95" }],
+      "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{"value":0,"color":"green"},{"value":3000,"color":"yellow"},{"value":10000,"color":"red"}] } } }
+    },
+    {
+      "id": 4, "title": "AI Error Rate (%)", "type": "stat",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "sum(rate(lumorius_ai_errors_total[5m])) / sum(rate(lumorius_ai_requests_total[5m])) * 100", "legendFormat": "error %" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [{"value":0,"color":"green"},{"value":1,"color":"yellow"},{"value":5,"color":"red"}] } } }
+    },
+    {
+      "id": 5, "title": "Token Usage by Feature", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "sum(rate(lumorius_ai_tokens_total[5m])) by (feature)", "legendFormat": "{{ feature }}" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10, "stacking": { "mode": "normal" } } } }
+    },
+    {
+      "id": 6, "title": "Vector Search Latency (p95)", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(lumorius_vector_search_duration_ms_bucket[5m])) by (le))", "legendFormat": "p95 latency" }],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 7, "title": "Documents in Queue", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "expr": "lumorius_queue_waiting{queue=\"documents\"}", "legendFormat": "Waiting" },
+        { "expr": "lumorius_queue_active{queue=\"documents\"}", "legendFormat": "Processing" },
+        { "expr": "lumorius_queue_failed{queue=\"documents\"}", "legendFormat": "Failed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 8, "title": "OpenAI API Cost Estimate (USD/day)", "type": "stat",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "increase(lumorius_ai_cost_usd_total[24h])", "legendFormat": "USD/day" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{"value":0,"color":"green"},{"value":50,"color":"yellow"},{"value":200,"color":"red"}] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" }
+    }
+  ]
+}

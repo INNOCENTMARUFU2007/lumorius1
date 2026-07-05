@@ -1,0 +1,133 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { motion } from 'framer-motion';
+import { CheckCircle, XCircle, Loader2, Mail } from 'lucide-react';
+import api from '@/lib/api';
+import Link from 'next/link';
+
+type State = 'loading' | 'success' | 'error' | 'no-token';
+
+export default function VerifyEmailPage() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const token = params.get('token');
+  const [state, setState] = useState<State>(token ? 'loading' : 'no-token');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!token) return;
+    api.post('/auth/verify-email', { token })
+      .then(() => {
+        setState('success');
+        setTimeout(() => router.push('/dashboard'), 3000);
+      })
+      .catch((err) => {
+        setError(err?.response?.data?.message ?? 'Verification failed');
+        setState('error');
+      });
+  }, [token, router]);
+
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-md"
+      >
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-2.5 mb-2">
+            <div className="w-10 h-10 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-xl flex items-center justify-center">
+              <span className="text-white font-black text-lg">N</span>
+            </div>
+            <span className="text-2xl font-black text-white">Lumorius</span>
+          </div>
+        </div>
+
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 text-center">
+          {state === 'loading' && (
+            <>
+              <div className="w-16 h-16 mx-auto mb-4 bg-violet-500/10 rounded-full flex items-center justify-center">
+                <Loader2 className="w-8 h-8 text-violet-400 animate-spin" />
+              </div>
+              <h1 className="text-xl font-bold text-white mb-2">Verifying your email…</h1>
+              <p className="text-gray-400 text-sm">Please wait a moment.</p>
+            </>
+          )}
+
+          {state === 'success' && (
+            <>
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 200 }}
+                className="w-16 h-16 mx-auto mb-4 bg-emerald-500/10 rounded-full flex items-center justify-center"
+              >
+                <CheckCircle className="w-8 h-8 text-emerald-400" />
+              </motion.div>
+              <h1 className="text-xl font-bold text-white mb-2">Email verified! ✓</h1>
+              <p className="text-gray-400 text-sm mb-6">
+                Your email has been confirmed. Redirecting you to the dashboard…
+              </p>
+              <Link
+                href="/dashboard"
+                className="inline-block px-6 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-semibold text-sm transition"
+              >
+                Go to Dashboard →
+              </Link>
+            </>
+          )}
+
+          {state === 'error' && (
+            <>
+              <div className="w-16 h-16 mx-auto mb-4 bg-red-500/10 rounded-full flex items-center justify-center">
+                <XCircle className="w-8 h-8 text-red-400" />
+              </div>
+              <h1 className="text-xl font-bold text-white mb-2">Verification failed</h1>
+              <p className="text-gray-400 text-sm mb-2">{error}</p>
+              <p className="text-gray-500 text-xs mb-6">
+                The link may have expired or already been used.
+              </p>
+              <div className="space-y-2">
+                <Link
+                  href="/dashboard"
+                  className="block px-6 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-semibold text-sm transition text-center"
+                >
+                  Go to Dashboard
+                </Link>
+                <button
+                  onClick={() => api.post('/auth/resend-verification').then(() =>
+                    alert('New verification email sent!')
+                  )}
+                  className="block w-full px-6 py-3 border border-gray-700 hover:bg-gray-800 text-gray-300 rounded-xl text-sm transition"
+                >
+                  Resend verification email
+                </button>
+              </div>
+            </>
+          )}
+
+          {state === 'no-token' && (
+            <>
+              <div className="w-16 h-16 mx-auto mb-4 bg-violet-500/10 rounded-full flex items-center justify-center">
+                <Mail className="w-8 h-8 text-violet-400" />
+              </div>
+              <h1 className="text-xl font-bold text-white mb-2">Check your inbox</h1>
+              <p className="text-gray-400 text-sm mb-6">
+                We sent a verification link to your email. Click the link to verify your account.
+              </p>
+              <Link
+                href="/dashboard"
+                className="inline-block px-6 py-3 border border-gray-700 hover:bg-gray-800 text-gray-300 rounded-xl text-sm transition"
+              >
+                Back to Dashboard
+              </Link>
+            </>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}

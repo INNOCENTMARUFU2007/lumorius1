@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none" role="img" aria-label="Lumorius">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="240" y2="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#050C1A"/>
+      <stop offset="100%" stop-color="#0A1628"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="60" y1="60" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="goldFade" x1="120" y1="40" x2="120" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="240" height="240" rx="40" fill="url(#bg)"/>
+
+  <!-- Ambient glow behind mark -->
+  <circle cx="120" cy="120" r="72" fill="url(#goldFade)" filter="url(#glow)"/>
+
+  <!-- Outer ring -->
+  <circle cx="120" cy="120" r="74" stroke="url(#gold)" stroke-width="1.5" stroke-opacity="0.35" fill="none"/>
+
+  <!-- Ray: North -->
+  <polygon points="120,46 124,104 116,104" fill="url(#gold)" fill-opacity="0.85"/>
+  <!-- Ray: South -->
+  <polygon points="120,194 124,136 116,136" fill="url(#gold)" fill-opacity="0.85"/>
+  <!-- Ray: East -->
+  <polygon points="194,120 136,124 136,116" fill="url(#gold)" fill-opacity="0.85"/>
+  <!-- Ray: West -->
+  <polygon points="46,120 104,124 104,116" fill="url(#gold)" fill-opacity="0.85"/>
+
+  <!-- Ray: NE -->
+  <polygon points="172.3,67.7 126,112 119,105" fill="url(#gold)" fill-opacity="0.45"/>
+  <!-- Ray: SE -->
+  <polygon points="172.3,172.3 119,135 126,128" fill="url(#gold)" fill-opacity="0.45"/>
+  <!-- Ray: SW -->
+  <polygon points="67.7,172.3 121,128 114,135" fill="url(#gold)" fill-opacity="0.45"/>
+  <!-- Ray: NW -->
+  <polygon points="67.7,67.7 121,105 114,112" fill="url(#gold)" fill-opacity="0.45"/>
+
+  <!-- Central diamond (rhombus) — the focal lens -->
+  <polygon points="120,100 136,120 120,140 104,120" fill="url(#gold)" fill-opacity="0.12" stroke="url(#gold)" stroke-width="2"/>
+
+  <!-- Inner diamond core — filled, bright -->
+  <polygon points="120,108 128,120 120,132 112,120" fill="url(#gold)"/>
+
+  <!-- Center point -->
+  <circle cx="120" cy="120" r="3.5" fill="#FEF3C7"/>
+</svg>

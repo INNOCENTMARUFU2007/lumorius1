@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none" role="img" aria-label="Lumorius">
+  <!-- Transparent background, gold mark — use on any dark surface -->
+  <defs>
+    <linearGradient id="goldL" x1="60" y1="60" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer ring -->
+  <circle cx="120" cy="120" r="74" stroke="url(#goldL)" stroke-width="1.5" stroke-opacity="0.3" fill="none"/>
+
+  <!-- Ray: North -->
+  <polygon points="120,46 124,104 116,104" fill="url(#goldL)" fill-opacity="0.9"/>
+  <!-- Ray: South -->
+  <polygon points="120,194 124,136 116,136" fill="url(#goldL)" fill-opacity="0.9"/>
+  <!-- Ray: East -->
+  <polygon points="194,120 136,124 136,116" fill="url(#goldL)" fill-opacity="0.9"/>
+  <!-- Ray: West -->
+  <polygon points="46,120 104,124 104,116" fill="url(#goldL)" fill-opacity="0.9"/>
+
+  <!-- Ray: NE -->
+  <polygon points="172.3,67.7 126,112 119,105" fill="url(#goldL)" fill-opacity="0.5"/>
+  <!-- Ray: SE -->
+  <polygon points="172.3,172.3 119,135 126,128" fill="url(#goldL)" fill-opacity="0.5"/>
+  <!-- Ray: SW -->
+  <polygon points="67.7,172.3 121,128 114,135" fill="url(#goldL)" fill-opacity="0.5"/>
+  <!-- Ray: NW -->
+  <polygon points="67.7,67.7 121,105 114,112" fill="url(#goldL)" fill-opacity="0.5"/>
+
+  <!-- Central diamond -->
+  <polygon points="120,100 136,120 120,140 104,120" fill="url(#goldL)" fill-opacity="0.12" stroke="url(#goldL)" stroke-width="2"/>
+  <polygon points="120,108 128,120 120,132 112,120" fill="url(#goldL)"/>
+  <circle cx="120" cy="120" r="3.5" fill="#FEF9C3"/>
+</svg>
