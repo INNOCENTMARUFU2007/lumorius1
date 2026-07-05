@@ -12,7 +12,7 @@
 
 1.1 The Company hereby employs the Employee in the position of **[Job Title]**, and the Employee accepts such employment, subject to the terms and conditions set forth in this Agreement.
 
-1.2 This Agreement constitutes a contract of employment governed by applicable Indian labour law, including the Industrial Employment (Standing Orders) Act, 1946, and the Shops and Establishments Act of the relevant state.
+1.2 This Agreement constitutes a contract of employment governed by applicable Zimbabwean labour Act[Chapter: 28:01], including the relevent National Employment Council Collective Bargaining Agreement(Standing Orders)  and the Shops and Establishments Act of the relevant state.
 
 ---
 
@@ -26,7 +26,7 @@
 
 ## 3. Compensation
 
-3.1 **Basic Salary:** ₹[Amount] per month (Cost to Company: ₹[CTC] per annum)
+3.1 **Basic Salary:** $[Amount] per month (Cost to Company: $[CTC] per annum)
 
 3.2 The full compensation breakdown is set out in Schedule B (CTC Letter).
 
@@ -41,7 +41,7 @@
 | Benefit | Details |
 |---------|---------|
 | Provident Fund (PF) | Employer contribution: 12% of Basic, as per law |
-| Health Insurance | Group health insurance: ₹[Amount] sum insured; Employee + Spouse + 2 children |
+| Health Insurance | Group health insurance: $[Amount] sum insured; Employee + Spouse + 2 children |
 | Paid Leave | 18 days Earned Leave, 12 days Sick Leave, 12 days Casual Leave per year |
 | Work from Home | [Policy details] |
 | Equipment | [Laptop / allowance details] |
@@ -52,7 +52,7 @@
 
 5.1 Standard working hours are [X] hours per day, [5/6] days per week.
 
-5.2 The Employee's primary place of work is [Bengaluru, India / Remote-first with quarterly in-person].
+5.2 The Employee's primary place of work is [Harare, Zimbabwe / Remote-first with quarterly in-person].
 
 5.3 The Employee may be required to travel for business purposes. Travel expenses will be reimbursed per Company policy.
 
@@ -98,11 +98,11 @@
 
 ## 10. Termination
 
-10.1 **Probation Period:** The first [3/6] months of employment is a probationary period. During probation, either party may terminate with 2 weeks' notice (or payment in lieu).
+10.1 **Probation Period:** The first [3/6] months of employment is a probationary period. During probation, either party may terminate with 2 weeks' notice (or payment in USD).
 
 10.2 **After Probation — Notice Period:**
 - Employee to Company: 30 days
-- Company to Employee: 30 days (or payment in lieu)
+- Company to Employee: 30 days (or payment in USD)
 
 10.3 **Summary Termination:** The Company may terminate without notice for: (a) serious misconduct; (b) breach of this Agreement; (c) misrepresentation in the hiring process; (d) criminal conviction.
 
@@ -127,9 +127,9 @@ Copies are provided in the Employee Handbook.
 
 12.1 Disputes shall first be attempted to be resolved informally between the parties.
 
-12.2 Unresolved disputes shall be referred to mediation and, if unsuccessful, arbitration under the Arbitration and Conciliation Act, 1996, in Bengaluru.
+12.2 Any dispute arising from this Agreement shall first be referred to internal grievance procedures.If unresolved,the matter shall be referred to a Labour Officer for conciliation in terms of the Labour Act [Chapter 28:01].If conciliation fails, the dispute shall be referred to the Labour Court of Zimbabwe for determination.
 
-12.3 This Agreement is governed by the laws of India.
+12.3 This Agreement is governed by the laws of Zimbabwe.
 
 ---
 
@@ -154,4 +154,4 @@ Address: ____________________
 
 ---
 
-*INMARTECH PVT LTD · Bengaluru, India · hr@lumorius.com*
+*INMARTECH PVT LTD · Harare, Zimbabwe · hr@lumorius.com*

@@ -30,7 +30,7 @@
 
 ## 3. Compensation
 
-3.1 **Rate:** [₹__/hour] OR [₹__ fixed fee for SOW deliverables]
+3.1 **Rate:** [$__/hour] OR [$__ fixed fee for SOW deliverables]
 
 3.2 **Payment Terms:** Company shall pay Contractor within 30 days of receipt of a valid invoice. Invoices shall be submitted [weekly / bi-weekly / upon milestone completion].
 
@@ -104,7 +104,7 @@ CONTRACTOR'S AGGREGATE LIABILITY FOR ALL CLAIMS UNDER THIS AGREEMENT SHALL NOT E
 
 ## 11. General
 
-11.1 **Governing Law.** This Agreement is governed by the laws of India, subject to the courts of Bengaluru, Karnataka.
+11.1 **Governing Law.** This Agreement is governed by the laws of Zimbabwe, subject to the courts of Zimbabwe, Harare.
 
 11.2 **Entire Agreement.** This Agreement and the attached SOW constitute the entire agreement and supersede all prior understandings.
 
@@ -127,4 +127,4 @@ Bank Details: ________________
 
 ---
 
-*INMARTECH PVT LTD · Bengaluru, India · legal@lumorius.com*
+*INMARTECH PVT LTD · Harare, Zimbabwe · legal@lumorius.com*

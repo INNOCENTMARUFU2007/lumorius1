@@ -8,7 +8,7 @@ BEGIN;
 -- ── Organization ──────────────────────────────────────────────
 INSERT INTO organizations (id, name, slug, plan_id, max_users, max_documents, max_meetings_per_month)
 VALUES
-  ('00000000-0000-0000-0000-000000000001', 'Acme Corp (Demo)', 'acme-corp-demo', 'professional', 25, 1000, 100)
+  ('00000000-0000-0000-0000-000000000001', 'INMARTECH LLC (Demo)', 'inmartech-llc-demo', 'professional', 25, 1000, 100)
 ON CONFLICT (id) DO NOTHING;
 
 -- ── Users ─────────────────────────────────────────────────────
@@ -18,21 +18,21 @@ VALUES
   ('00000000-0000-0000-0000-000000000010',
    'owner@demo.lumorius.com',
    '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBpj2lSc8sUNVi',
-   'Alex Owner',
+   'INNOCENT Owner',
    '00000000-0000-0000-0000-000000000001',
    'owner', TRUE, TRUE, NOW()),
 
   ('00000000-0000-0000-0000-000000000011',
    'admin@demo.lumorius.com',
    '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBpj2lSc8sUNVi',
-   'Sam Admin',
+   'Innocent Admin',
    '00000000-0000-0000-0000-000000000001',
    'admin', TRUE, TRUE, NOW()),
 
   ('00000000-0000-0000-0000-000000000012',
    'member@demo.lumorius.com',
    '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBpj2lSc8sUNVi',
-   'Jordan Member',
+   'CHRIS Member',
    '00000000-0000-0000-0000-000000000001',
    'member', TRUE, TRUE, NOW())
 ON CONFLICT (id) DO NOTHING;
@@ -149,7 +149,7 @@ VALUES
    '00000000-0000-0000-0000-000000000001',
    'task_assigned',
    'New task: Write comprehensive test suite',
-   'Assigned by Sam Admin',
+   'Assigned by Innocent Admin',
    '{"taskId":"00000000-0000-0000-0000-000000000032"}'::jsonb),
 
   ('00000000-0000-0000-0000-000000000061',

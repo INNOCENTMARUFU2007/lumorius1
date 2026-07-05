@@ -22,4 +22,4 @@ The Service incorporates open-source components. A complete list with licenses i
 Either party may terminate with 30 days' written notice. Licensor may terminate immediately for breach.
 
 ## 7. Governing Law
-Laws of India, jurisdiction: Karnataka.
+Laws of Zimbabwe, jurisdiction: Harare.

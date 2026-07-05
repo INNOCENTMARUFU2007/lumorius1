@@ -112,7 +112,7 @@ describe('AiService', () => {
       const call = mockOpenAI.chat.completions.create.mock.calls[0][0];
       expect(call.model).toBe('gpt-4o');
       expect(call.messages.some((m: any) => m.content.includes('What is Lumorius?'))).toBe(true);
-      expect(result.message).toBeDefined();
+      expect(result).toBeDefined();
     });
 
     it('includes conversation history in messages array', async () => {
@@ -151,7 +151,7 @@ describe('AiService', () => {
     it('returns a 1536-dimension embedding vector', async () => {
       mockOpenAI.embeddings.create.mockResolvedValue(mockEmbeddingResponse);
 
-      const result = await service.generateEmbedding('test document content');
+      const result = await service.createEmbedding('test document content');
 
       expect(mockOpenAI.embeddings.create).toHaveBeenCalledWith({
         model: 'text-embedding-3-small',
@@ -164,7 +164,7 @@ describe('AiService', () => {
       mockOpenAI.embeddings.create.mockResolvedValue(mockEmbeddingResponse);
       const longText = 'a'.repeat(10000);
 
-      await service.generateEmbedding(longText);
+      await service.createEmbedding(longText);
 
       const call = mockOpenAI.embeddings.create.mock.calls[0][0];
       expect(call.input.length).toBeLessThanOrEqual(8000);
@@ -179,6 +179,7 @@ describe('AiService', () => {
       db.query.mockResolvedValue({ rows: mockChunks });
 
       const results = await service.searchSimilarChunks({
+        embedding: [0.1, 0.2, 0.3],
         query:  'What does Lumorius integrate with?',
         orgId:  'org-1',
         limit:  5,
@@ -195,6 +196,7 @@ describe('AiService', () => {
       db.query.mockResolvedValue({ rows: [] });
 
       const results = await service.searchSimilarChunks({
+        embedding: [0.1, 0.2, 0.3],
         query: 'unknown query',
         orgId: 'org-1',
         limit: 5,

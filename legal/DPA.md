@@ -119,4 +119,4 @@ This DPA is governed by the laws applicable to the MSA. Disputes shall be resolv
 
 ---
 
-*INMARTECH PVT LTD · Bengaluru, India · dpo@lumorius.com*
+*INMARTECH PVT LTD · Harare, Zimbabwe · dpo@lumorius.com*

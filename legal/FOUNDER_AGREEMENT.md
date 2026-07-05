@@ -25,4 +25,4 @@ Founders maintain strict confidentiality of all Company trade secrets and propri
 A founder may be removed from the Company by board vote (75% majority) for cause. Unvested shares are forfeited upon departure.
 
 ## 8. Governing Law
-Laws of India, jurisdiction: Karnataka High Court.
+Laws of Zimbabwe, jurisdiction:  High Court of Zimbabwe.

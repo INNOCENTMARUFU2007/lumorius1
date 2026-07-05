@@ -22,4 +22,4 @@ Partners receive [X]% discount off list price. Commission paid net-30 after cust
 12-month initial term, auto-renewing. Either party may terminate with 60 days' notice.
 
 ## 6. Governing Law
-Laws of India.
+Laws of Zimbabwe.

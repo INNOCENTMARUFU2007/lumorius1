@@ -104,9 +104,9 @@ IN NO EVENT SHALL INMARTECH BE LIABLE FOR ANY INDIRECT, INCIDENTAL, OR CONSEQUEN
 
 ## 11. Governing Law
 
-This Agreement is governed by the laws of India. Disputes shall be resolved in the courts of Bengaluru, Karnataka.
+This Agreement is governed by the laws of Zimbabwe. Disputes shall be resolved in the courts of Zimbabwe, Harare.
 
 ---
 
 *Developer Support: developers@lumorius.com · Documentation: docs.lumorius.com*  
-*INMARTECH PVT LTD · Bengaluru, India*
+*INMARTECH PVT LTD · Harare, Zimbabwe*

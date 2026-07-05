@@ -65,7 +65,7 @@
 
 ## 7. General
 
-7.1 **Governing Law.** This Agreement is governed by the laws of India, subject to the exclusive jurisdiction of courts in Bengaluru, Karnataka.
+7.1 **Governing Law.** This Agreement is governed by the laws of Zimbabwe, subject to the exclusive jurisdiction of courts in Harare, Zimbabwe.
 
 7.2 **Entire Agreement.** This Agreement constitutes the entire understanding between the parties with respect to confidentiality of the subject matter described.
 
@@ -91,4 +91,4 @@ Date: ________________________
 
 ---
 
-*INMARTECH PVT LTD · Bengaluru, India · legal@lumorius.com*
+*INMARTECH PVT LTD · Harare, Zimbabwe · legal@lumorius.com*

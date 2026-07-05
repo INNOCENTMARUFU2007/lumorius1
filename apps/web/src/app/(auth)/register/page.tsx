@@ -54,7 +54,7 @@ export default function RegisterPage() {
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-2.5 mb-2">
             <div className="w-10 h-10 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-violet-500/30">
-              <span className="text-white font-black text-lg">N</span>
+              <span className="text-white font-black text-lg">L</span>
             </div>
             <span className="text-2xl font-black text-white">Lumorius AI</span>
           </div>

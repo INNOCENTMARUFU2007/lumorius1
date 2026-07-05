@@ -23,4 +23,4 @@ Any shareholder selling 25%+ must allow others to participate pro-rata.
 The following require 75% shareholder approval: new share issuances, M&A, IP licensing, debt >$500K.
 
 ## 7. Governing Law
-Laws of India, jurisdiction: Karnataka High Court.
+Laws of Zimbabwe, jurisdiction: Harare High Court.

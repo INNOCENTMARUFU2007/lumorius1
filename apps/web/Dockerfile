@@ -1,7 +1,7 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install --omit=dev --fetch-retries=5
 
 FROM node:20-alpine AS builder
 WORKDIR /app

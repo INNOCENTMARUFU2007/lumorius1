@@ -48,7 +48,7 @@ export default function LoginPage() {
       <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-violet-900/50 to-indigo-900/30 border-r border-gray-800 flex-col items-center justify-center p-12">
         <div className="max-w-xs text-center">
           <div className="w-20 h-20 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-violet-500/30">
-            <span className="text-white font-black text-3xl">N</span>
+            <span className="text-white font-black text-3xl">L</span>
           </div>
           <h2 className="text-3xl font-black text-white mb-3">Lumorius AI</h2>
           <p className="text-gray-400 text-sm leading-relaxed mb-8">
@@ -81,7 +81,7 @@ export default function LoginPage() {
           <div className="lg:hidden text-center mb-8">
             <div className="inline-flex items-center gap-2.5">
               <div className="w-10 h-10 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-xl flex items-center justify-center">
-                <span className="text-white font-black text-lg">N</span>
+                <span className="text-white font-black text-lg">L</span>
               </div>
               <span className="text-2xl font-black text-white">Lumorius AI</span>
             </div>

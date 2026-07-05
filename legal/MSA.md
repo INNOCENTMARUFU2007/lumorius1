@@ -131,4 +131,4 @@
 
 ---
 
-*INMARTECH PVT LTD · Bengaluru, India · legal@lumorius.com*
+*INMARTECH PVT LTD · Harare, Zimbabwe · legal@lumorius.com*

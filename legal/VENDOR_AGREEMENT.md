@@ -24,4 +24,4 @@ Company may audit Vendor's compliance with this Agreement with 5 days' notice.
 All deliverables created specifically for Company are owned by Company upon full payment.
 
 ## 8. Governing Law
-Laws of India, jurisdiction: Karnataka.
+Laws of Zimbabwe, jurisdiction: Harare.

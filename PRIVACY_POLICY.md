@@ -10,7 +10,7 @@
 
 INMARTECH PVT LTD ("we", "us", "our") operates the Lumorius AI platform ("Service"). This Privacy Policy explains how we collect, use, store, share, and protect your personal data when you use our Service.
 
-We are committed to GDPR compliance (EU Regulation 2016/679), the IT Act 2000 (India), and applicable data protection laws. If you are an EEA or UK resident, you have additional rights described in Section 10.
+We are committed to GDPR compliance (EU Regulation 2016/679), Cyber and Data Protection Act[chapter 12:07] (Zimbabwe), and applicable data protection laws. If you are an EEA or UK resident, you have additional rights described in Section 10.
 
 ---
 

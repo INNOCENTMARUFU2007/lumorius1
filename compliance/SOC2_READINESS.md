@@ -120,8 +120,8 @@ Q3 2027: Type II report issued
 
 ## Recommended Auditors
 - Prescient Assurance (SOC 2 specialist)
-- KPMG India
-- Deloitte India
+- KPMG Zimbambwe
+- Deloitte Zimbabwe
 - A-LIGN (remote-first; startup-friendly)
 
 *Contact: compliance@lumorius.com | INMARTECH PVT LTD*

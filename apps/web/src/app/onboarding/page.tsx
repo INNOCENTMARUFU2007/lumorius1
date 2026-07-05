@@ -166,7 +166,7 @@ export default function OnboardingPage() {
                   <textarea
                     value={form.invites}
                     onChange={(e) => setForm((f) => ({ ...f, invites: e.target.value }))}
-                    placeholder="alice@company.com, bob@company.com, charlie@company.com"
+                    placeholder="innocent@company.com, chris@company.com, charlie@company.com"
                     rows={4}
                     className="w-full px-3 py-2.5 bg-muted/40 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none"
                   />

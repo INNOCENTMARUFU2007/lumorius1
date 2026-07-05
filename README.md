@@ -359,7 +359,7 @@ Replace the Nginx config at `infra/nginx/nginx.conf` with your SSL-enabled versi
 
 ## License
 
-Proprietary — © 2025 INMARTECH PVT LTD. All rights reserved.
+Proprietary — © 2026 INMARTECH PVT LTD. All rights reserved.
 #   l u m o r i u s 1 
  
  

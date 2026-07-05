@@ -152,7 +152,7 @@ We may modify these Terms at any time. We will notify you via email and in-app n
 
 ## 15. Governing Law
 
-These Terms are governed by the laws of India. Disputes shall be resolved in the courts of India. If you are a consumer in a jurisdiction that does not permit certain limitations, those limitations do not apply to you.
+These Terms are governed by the laws of Zimbabwe. Disputes shall be resolved in the courts of Zimbabwe. If you are a consumer in a jurisdiction that does not permit certain limitations, those limitations do not apply to you.
 
 ---
 

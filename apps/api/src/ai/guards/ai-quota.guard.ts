@@ -75,6 +75,7 @@ export class AiQuotaGuard implements CanActivate {
       const res = { statusCode: 429, message: `AI rate limit — max ${this.BURST_LIMIT} requests/min. Retry after ${ttl}s.`, retryAfter: ttl };
       const exc = new HttpException(res, HttpStatus.TOO_MANY_REQUESTS);
       // Set Retry-After on the underlying response object
+      canActivate(context: ExecutionContext) {@nestjs/common}
       const http = context.switchToHttp().getResponse<{ setHeader?: (k: string, v: string) => void }>();
       http.setHeader?.('Retry-After', String(ttl));
       throw exc;
