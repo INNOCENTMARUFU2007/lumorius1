@@ -33,8 +33,8 @@ export const FIXED_UUID_3 = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
 export function makeUser(overrides: Record<string, unknown> = {}) {
   return {
     id: FIXED_UUID,
-    email: 'alice@example.com',
-    name: 'Alice Tester',
+    email: 'innocent@example.com',
+    name: 'Innocent Tester',
     password_hash: '$2b$12$hashedpassword',
     organization_id: FIXED_UUID_2,
     role: 'owner',
@@ -79,7 +79,7 @@ export function makeTask(overrides: Record<string, unknown> = {}) {
     completed_at: null,
     assignee_name: null,
     project_name: null,
-    created_by_name: 'Alice Tester',
+    created_by_name: 'Innocent Tester',
     created_at: new Date('2026-01-01'),
     updated_at: new Date('2026-01-01'),
     ...overrides,
@@ -110,7 +110,7 @@ export function makeNotification(overrides: Record<string, unknown> = {}) {
     organization_id: FIXED_UUID_2,
     type: 'task_assigned',
     title: 'New task: Write tests',
-    message: 'Assigned by Alice',
+    message: 'Assigned by Innocent',
     data: {},
     read_at: null,
     created_at: new Date('2026-01-01'),
@@ -157,7 +157,7 @@ export function makeResetToken(overrides: Record<string, unknown> = {}) {
 export function makeMagicLink(overrides: Record<string, unknown> = {}) {
   return {
     id: FIXED_UUID_3,
-    email: 'alice@example.com',
+    email: 'innocent@example.com',
     token: 'valid-magic-token',
     used: false,
     expires_at: new Date(Date.now() + 900000), // 15min

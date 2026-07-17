@@ -171,7 +171,7 @@ describe('AuthService', () => {
       db.findOne.mockResolvedValue(user);
       bcrypt.compare.mockResolvedValue(true);
 
-      const result = await service.login('alice@example.com', 'correctpassword');
+      const result = await service.login('innocent@example.com', 'correctpassword');
 
       expect(result).toMatchObject({
         accessToken: 'mock.jwt.access.token',
@@ -195,7 +195,7 @@ describe('AuthService', () => {
       db.findOne.mockResolvedValue(makeUser({ failed_login_count: 0 }));
       bcrypt.compare.mockResolvedValue(false);
 
-      await expect(service.login('alice@example.com', 'wrongpassword')).rejects.toThrow(
+      await expect(service.login('innocent@example.com', 'wrongpassword')).rejects.toThrow(
         UnauthorizedException,
       );
     });
@@ -204,7 +204,7 @@ describe('AuthService', () => {
       db.findOne.mockResolvedValue(makeUser({ failed_login_count: 2 }));
       bcrypt.compare.mockResolvedValue(false);
 
-      await expect(service.login('alice@example.com', 'wrong')).rejects.toThrow(
+      await expect(service.login('innocent@example.com', 'wrong')).rejects.toThrow(
         UnauthorizedException,
       );
       expect(db.query).toHaveBeenCalledWith(
@@ -217,7 +217,7 @@ describe('AuthService', () => {
       db.findOne.mockResolvedValue(makeUser({ failed_login_count: 4 }));
       bcrypt.compare.mockResolvedValue(false);
 
-      await expect(service.login('alice@example.com', 'wrong')).rejects.toThrow(
+      await expect(service.login('innocent@example.com', 'wrong')).rejects.toThrow(
         ForbiddenException,
       );
       expect(db.query).toHaveBeenCalledWith(
@@ -230,7 +230,7 @@ describe('AuthService', () => {
       const futureDate = new Date(Date.now() + 1800000); // 30 min from now
       db.findOne.mockResolvedValue(makeUser({ locked_until: futureDate.toISOString() }));
 
-      await expect(service.login('alice@example.com', 'anything')).rejects.toThrow(
+      await expect(service.login('innocent@example.com', 'anything')).rejects.toThrow(
         ForbiddenException,
       );
     });
@@ -239,7 +239,7 @@ describe('AuthService', () => {
       db.findOne.mockResolvedValue(makeUser({ is_active: false }));
       bcrypt.compare.mockResolvedValue(true);
 
-      await expect(service.login('alice@example.com', 'pw')).rejects.toThrow(
+      await expect(service.login('innocent@example.com', 'pw')).rejects.toThrow(
         UnauthorizedException,
       );
     });
@@ -248,7 +248,7 @@ describe('AuthService', () => {
       db.findOne.mockResolvedValue(makeUser({ mfa_enabled: true, mfa_secret: 'SECRET' }));
       bcrypt.compare.mockResolvedValue(true);
 
-      const result = await service.login('alice@example.com', 'correctpw');
+      const result = await service.login('innocent@example.com', 'correctpw');
       expect(result).toEqual({ mfaRequired: true });
     });
 
@@ -258,7 +258,7 @@ describe('AuthService', () => {
       bcrypt.compare.mockResolvedValue(true);
       speakeasy.totp.verify.mockReturnValue(true);
 
-      const result = await service.login('alice@example.com', 'pw', '123456');
+      const result = await service.login('innocent@example.com', 'pw', '123456');
       expect(result).toMatchObject({ accessToken: 'mock.jwt.access.token' });
     });
 
@@ -268,7 +268,7 @@ describe('AuthService', () => {
       bcrypt.compare.mockResolvedValue(true);
       speakeasy.totp.verify.mockReturnValue(false);
 
-      await expect(service.login('alice@example.com', 'pw', '000000')).rejects.toThrow(
+      await expect(service.login('innocent@example.com', 'pw', '000000')).rejects.toThrow(
         UnauthorizedException,
       );
     });
@@ -277,12 +277,12 @@ describe('AuthService', () => {
       db.findOne.mockResolvedValue(makeUser());
       bcrypt.compare.mockResolvedValue(true);
 
-      await service.login('alice@example.com', 'pw', undefined, '1.2.3.4', 'Chrome/120');
+      await service.login('innocent@example.com', 'pw', undefined, '1.2.3.4', 'Chrome/120');
 
       // sendLoginAlert is fire-and-forget; just verify it was called
       expect(emailService.sendLoginAlert).toHaveBeenCalledWith(
-        'alice@example.com',
-        'Alice Tester',
+        'innocent@example.com',
+        'Innocent Tester',
         '1.2.3.4',
         'Chrome/120',
       );
@@ -379,12 +379,12 @@ describe('AuthService', () => {
     it('sends reset email when user exists', async () => {
       db.findOne.mockResolvedValueOnce(makeUser());
 
-      const result = await service.requestPasswordReset('alice@example.com', '10.0.0.1');
+      const result = await service.requestPasswordReset('innocent@example.com', '10.0.0.1');
 
       expect(result).toEqual({ sent: true });
       expect(emailService.sendPasswordReset).toHaveBeenCalledWith(
-        'alice@example.com',
-        'Alice Tester',
+        'innocent@example.com',
+        'Innocent Tester',
         FIXED_UUID,
         '10.0.0.1',
       );
@@ -542,14 +542,14 @@ describe('AuthService', () => {
 
   describe('sendMagicLink()', () => {
     it('inserts a magic link and sends email', async () => {
-      await service.sendMagicLink('alice@example.com');
+      await service.sendMagicLink('innocent@example.com');
 
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO magic_links'),
         expect.any(Array),
       );
       expect(emailService.sendMagicLink).toHaveBeenCalledWith(
-        'alice@example.com',
+        'innocent@example.com',
         expect.stringContaining('/auth/magic?token='),
       );
     });

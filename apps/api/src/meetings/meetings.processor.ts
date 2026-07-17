@@ -43,7 +43,7 @@ export class MeetingsProcessor {
 
       if (this.openai && meeting.media_key) {
         const buffer = await this.storage.download(meeting.media_key as string);
-        const file = new File([buffer], 'recording.mp3', { type: 'audio/mpeg' });
+        const file = await OpenAI.toFile(buffer, "recording.mp3");
         const response = await this.openai.audio.transcriptions.create({
           file,
           model: 'whisper-1',

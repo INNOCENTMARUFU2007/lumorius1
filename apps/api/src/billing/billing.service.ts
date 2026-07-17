@@ -14,7 +14,7 @@ export class BillingService {
   ) {
     const key = this.configService.get<string>('stripe.secretKey');
     if (key) {
-      this.stripe = new Stripe(key, { apiVersion: '2024-12-18.acacia' });
+      this.stripe = new Stripe(key, { apiVersion: '2025-02-25.acacia' });
     }
   }
 

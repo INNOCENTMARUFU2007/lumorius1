@@ -26,8 +26,8 @@ const createMockAuthService = () => ({
 
 const mockUser = {
   id:           'user-1',
-  email:        'alice@lumorius.com',
-  name:         'Alice',
+  email:        'innocent@lumorius.com',
+  name:         'INNOCENT',
   role:         'admin',
   organization_id: 'org-1',
 };
@@ -60,7 +60,7 @@ describe('AuthController', () => {
   describe('register()', () => {
     it('delegates to authService.register and returns result', async () => {
       authService.register.mockResolvedValue(mockTokens);
-      const dto = { email: 'alice@lumorius.com', password: 'Pass123!', name: 'Alice' };
+      const dto = { email: 'innocent@lumorius.com', password: 'Pass123!', name: 'INNOCENT' };
       const result = await controller.register(dto as any);
       expect(authService.register).toHaveBeenCalledWith(dto);
       expect(result).toEqual(mockTokens);

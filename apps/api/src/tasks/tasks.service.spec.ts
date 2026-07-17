@@ -89,7 +89,7 @@ describe('TasksService', () => {
         taskId: FIXED_UUID,
         taskTitle: 'New task',
         assigneeId,
-        assignerName: 'Alice Tester',
+        assignerName: 'Innocent Tester',
         organizationId: orgId,
         priority: 'high',
         dueDate: undefined,
@@ -288,7 +288,7 @@ describe('TasksService', () => {
       expect(eventEmitter.emit).toHaveBeenCalledWith('task.assigned', expect.objectContaining({
         taskId: FIXED_UUID,
         assigneeId: FIXED_UUID_3,
-        assignerName: 'Alice Tester',
+        assignerName: 'Innocent Tester',
         organizationId: FIXED_UUID_2,
       }));
     });
