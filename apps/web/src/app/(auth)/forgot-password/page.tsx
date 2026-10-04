@@ -2,25 +2,30 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { Mail, ArrowLeft, CheckCircle } from 'lucide-react';
 import api from '@/lib/api';
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail]   = useState('');
-  const [sent, setSent]     = useState(false);
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState('');
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+
     try {
       await api.post('/auth/forgot-password', { email });
       setSent(true);
     } catch (err: any) {
-      setError(err?.response?.data?.message ?? 'Something went wrong. Please try again.');
+      setError(
+        err?.response?.data?.message ??
+          'Something went wrong. Please try again.',
+      );
     } finally {
       setLoading(false);
     }
@@ -35,11 +40,26 @@ export default function ForgotPasswordPage() {
       >
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2.5 mb-2">
-            <div className="w-10 h-10 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-xl flex items-center justify-center">
-              <span className="text-white font-black text-lg">N</span>
+          <div className="inline-flex items-center gap-3 mb-2">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center overflow-hidden bg-gray-900">
+              <Image
+                src="/logo.svg"
+                alt="Lumorius"
+                width={40}
+                height={40}
+                className="w-full h-full object-contain"
+                priority
+              />
             </div>
-            <span className="text-2xl font-black text-white">Lumorius</span>
+
+            <Image
+              src="/logo-wordmark.svg"
+              alt="Lumorius"
+              width={180}
+              height={50}
+              className="h-auto max-w-[180px] object-contain"
+              priority
+            />
           </div>
         </div>
 
@@ -49,15 +69,28 @@ export default function ForgotPasswordPage() {
               <motion.div
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
-                transition={{ type: 'spring', stiffness: 200 }}
+                transition={{
+                  type: 'spring',
+                  stiffness: 200,
+                }}
                 className="w-16 h-16 mx-auto mb-4 bg-emerald-500/10 rounded-full flex items-center justify-center"
               >
                 <CheckCircle className="w-8 h-8 text-emerald-400" />
               </motion.div>
-              <h1 className="text-xl font-bold text-white mb-2">Check your email</h1>
+
+              <h1 className="text-xl font-bold text-white mb-2">
+                Check your email
+              </h1>
+
               <p className="text-gray-400 text-sm mb-6">
-                If <strong className="text-white">{email}</strong> has an account, you'll receive a reset link within a few minutes.
+                If{' '}
+                <strong className="text-white">
+                  {email}
+                </strong>{' '}
+                has an account, you'll receive a reset link
+                within a few minutes.
               </p>
+
               <Link
                 href="/login"
                 className="flex items-center justify-center gap-2 text-sm text-violet-400 hover:text-violet-300 transition"
@@ -69,8 +102,13 @@ export default function ForgotPasswordPage() {
           ) : (
             <>
               <div className="mb-6">
-                <h1 className="text-2xl font-bold text-white mb-1">Forgot your password?</h1>
-                <p className="text-gray-400 text-sm">Enter your email and we'll send a reset link.</p>
+                <h1 className="text-2xl font-bold text-white mb-1">
+                  Forgot your password?
+                </h1>
+
+                <p className="text-gray-400 text-sm">
+                  Enter your email and we'll send a reset link.
+                </p>
               </div>
 
               {error && (
@@ -79,17 +117,27 @@ export default function ForgotPasswordPage() {
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form
+                onSubmit={handleSubmit}
+                className="space-y-4"
+              >
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">Work email</label>
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                    Work email
+                  </label>
+
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+
                     <input
                       type="email"
                       required
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) =>
+                        setEmail(e.target.value)
+                      }
                       placeholder="you@company.com"
+                      autoComplete="email"
                       className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-violet-500 transition placeholder-gray-600"
                     />
                   </div>
