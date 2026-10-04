@@ -23,13 +23,22 @@ exports.DatabaseModule = DatabaseModule = __decorate([
                 provide: PG_POOL,
                 inject: [config_1.ConfigService],
                 useFactory: async (config) => {
+                    const databaseUrl = config.get('database.url');
+                    const poolMax = config.get('database.poolMax', 20);
+                    const poolMin = config.get('database.poolMin', 2);
+                    if (!databaseUrl) {
+                        throw new Error('DATABASE_URL is not configured. Check your .env file.');
+                    }
                     const pool = new pg_1.Pool({
-                        connectionString: config.get('DATABASE_URL'),
-                        max: config.get('DB_POOL_MAX', 20),
+                        connectionString: databaseUrl,
+                        min: poolMin,
+                        max: poolMax,
                         idleTimeoutMillis: 30_000,
                         connectionTimeoutMillis: 5_000,
-                        ssl: config.get('NODE_ENV') === 'production'
-                            ? { rejectUnauthorized: false }
+                        ssl: config.get('nodeEnv') === 'production'
+                            ? {
+                                rejectUnauthorized: false,
+                            }
                             : undefined,
                     });
                     try {
@@ -38,9 +47,12 @@ exports.DatabaseModule = DatabaseModule = __decorate([
                             await client.query('SELECT 1');
                             logger.log('Database connection verified');
                             const extResult = await client.query(`SELECT EXISTS(
-                 SELECT 1 FROM pg_extension WHERE extname = 'vector'
-               ) AS installed`);
-                            const installed = extResult.rows[0]?.installed === true;
+                   SELECT 1
+                   FROM pg_extension
+                   WHERE extname = 'vector'
+                 ) AS installed`);
+                            const installed = extResult.rows[0]?.installed ===
+                                true;
                             if (!installed) {
                                 logger.warn('pgvector extension not found — attempting CREATE EXTENSION');
                                 try {
@@ -48,7 +60,9 @@ exports.DatabaseModule = DatabaseModule = __decorate([
                                     logger.log('pgvector extension created successfully');
                                 }
                                 catch (extErr) {
-                                    const msg = extErr instanceof Error ? extErr.message : String(extErr);
+                                    const msg = extErr instanceof Error
+                                        ? extErr.message
+                                        : String(extErr);
                                     logger.error(`pgvector extension could not be created: ${msg}. ` +
                                         'Semantic search will be unavailable until the extension is installed by a superuser.');
                                 }
@@ -64,15 +78,20 @@ exports.DatabaseModule = DatabaseModule = __decorate([
                         }
                     }
                     catch (err) {
-                        const msg = err instanceof Error ? err.message : String(err);
+                        const msg = err instanceof Error
+                            ? err.message
+                            : String(err);
                         logger.error(`Database startup check failed: ${msg}`);
+                        throw err;
                     }
                     return pool;
                 },
             },
             database_service_1.DatabaseService,
         ],
-        exports: [database_service_1.DatabaseService],
+        exports: [
+            database_service_1.DatabaseService,
+        ],
     })
 ], DatabaseModule);
 //# sourceMappingURL=database.module.js.map

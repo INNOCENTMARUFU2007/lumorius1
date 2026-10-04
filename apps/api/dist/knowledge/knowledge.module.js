@@ -10,16 +10,26 @@ exports.KnowledgeModule = void 0;
 const common_1 = require("@nestjs/common");
 const knowledge_controller_1 = require("./knowledge.controller");
 const knowledge_service_1 = require("./knowledge.service");
+const database_module_1 = require("../database/database.module");
 const ai_module_1 = require("../ai/ai.module");
 let KnowledgeModule = class KnowledgeModule {
 };
 exports.KnowledgeModule = KnowledgeModule;
 exports.KnowledgeModule = KnowledgeModule = __decorate([
     (0, common_1.Module)({
-        imports: [ai_module_1.AiModule],
-        controllers: [knowledge_controller_1.KnowledgeController],
-        providers: [knowledge_service_1.KnowledgeService],
-        exports: [knowledge_service_1.KnowledgeService],
+        imports: [
+            database_module_1.DatabaseModule,
+            ai_module_1.AiModule,
+        ],
+        controllers: [
+            knowledge_controller_1.KnowledgeController,
+        ],
+        providers: [
+            knowledge_service_1.KnowledgeService,
+        ],
+        exports: [
+            knowledge_service_1.KnowledgeService,
+        ],
     })
 ], KnowledgeModule);
 //# sourceMappingURL=knowledge.module.js.map

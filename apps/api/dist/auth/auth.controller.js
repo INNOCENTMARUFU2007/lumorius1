@@ -90,12 +90,19 @@ let AuthController = class AuthController {
         return this.authService.register(dto);
     }
     async login(dto, req, ip) {
-        return this.authService.login(dto.email, dto.password, dto.mfaCode, ip, req.headers['user-agent']);
+        const clientIp = ip ??
+            req?.ip ??
+            'unknown';
+        const userAgent = req?.headers?.['user-agent'] ?? undefined;
+        return this.authService.login(dto.email, dto.password, dto.mfaCode, clientIp, userAgent);
     }
     async refresh(dto) {
         return this.authService.refreshTokens(dto.refreshToken);
     }
-    async logout(dto) {
+    async refreshTokens(dto) {
+        return this.authService.refreshTokens(dto.refreshToken);
+    }
+    async logout(dto, _user) {
         return this.authService.logout(dto.refreshToken);
     }
     async verifyEmail(dto) {
@@ -106,6 +113,9 @@ let AuthController = class AuthController {
     }
     async forgotPassword(dto, ip) {
         return this.authService.requestPasswordReset(dto.email, ip);
+    }
+    async requestPasswordReset(dto) {
+        return this.authService.requestPasswordReset(dto.email, 'unknown');
     }
     async resetPassword(dto) {
         return this.authService.resetPassword(dto.token, dto.newPassword);
@@ -128,24 +138,41 @@ let AuthController = class AuthController {
     async disableMfa(user, dto) {
         return this.authService.disableMfa(user.sub, dto.code);
     }
-    async getSessions(user) {
+    async getSessions(user, _unused) {
         return this.authService.getSessions(user.sub);
     }
     async revokeAll(user) {
+        return this.authService.revokeAllSessions(user.sub);
+    }
+    async revokeAllSessions(user) {
         return this.authService.revokeAllSessions(user.sub);
     }
     async revokeSession(user, sessionId) {
         return this.authService.revokeSession(user.sub, sessionId);
     }
     async googleAuth() { }
-    async googleCallback(req) { return req.user; }
-    async me(user) { return user; }
+    async googleCallback(req) {
+        return req.user;
+    }
+    async me(user) {
+        return user;
+    }
+    async getProfile(user) {
+        return user;
+    }
 };
 exports.AuthController = AuthController;
 __decorate([
     (0, common_1.Post)('register'),
-    (0, throttler_1.Throttle)({ default: { ttl: 60000, limit: 5 } }),
-    (0, swagger_1.ApiOperation)({ summary: 'Register a new user and organisation' }),
+    (0, throttler_1.Throttle)({
+        default: {
+            ttl: 60000,
+            limit: 5,
+        },
+    }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Register a new user and organisation',
+    }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [register_dto_1.RegisterDto]),
@@ -154,8 +181,15 @@ __decorate([
 __decorate([
     (0, common_1.Post)('login'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, throttler_1.Throttle)({ default: { ttl: 60000, limit: 10 } }),
-    (0, swagger_1.ApiOperation)({ summary: 'Login with email + password (+ optional MFA code)' }),
+    (0, throttler_1.Throttle)({
+        default: {
+            ttl: 60000,
+            limit: 10,
+        },
+    }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Login with email + password (+ optional MFA code)',
+    }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Req)()),
     __param(2, (0, common_1.Ip)()),
@@ -166,8 +200,15 @@ __decorate([
 __decorate([
     (0, common_1.Post)('refresh'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, throttler_1.Throttle)({ default: { ttl: 60000, limit: 30 } }),
-    (0, swagger_1.ApiOperation)({ summary: 'Refresh access token using refresh token' }),
+    (0, throttler_1.Throttle)({
+        default: {
+            ttl: 60000,
+            limit: 30,
+        },
+    }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Refresh access token using refresh token',
+    }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [refresh_token_dto_1.RefreshTokenDto]),
@@ -178,16 +219,20 @@ __decorate([
     (0, common_1.HttpCode)(common_1.HttpStatus.NO_CONTENT),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Logout and revoke refresh token' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Logout and revoke refresh token',
+    }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [refresh_token_dto_1.RefreshTokenDto]),
+    __metadata("design:paramtypes", [refresh_token_dto_1.RefreshTokenDto, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "logout", null);
 __decorate([
     (0, common_1.Post)('verify-email'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, swagger_1.ApiOperation)({ summary: 'Verify email with token from email link' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Verify email with token from email link',
+    }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [VerifyEmailDto]),
@@ -197,8 +242,15 @@ __decorate([
     (0, common_1.Post)('resend-verification'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, throttler_1.Throttle)({ default: { ttl: 300000, limit: 3 } }),
-    (0, swagger_1.ApiOperation)({ summary: 'Resend email verification link' }),
+    (0, throttler_1.Throttle)({
+        default: {
+            ttl: 300000,
+            limit: 3,
+        },
+    }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Resend email verification link',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
@@ -207,8 +259,15 @@ __decorate([
 __decorate([
     (0, common_1.Post)('forgot-password'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, throttler_1.Throttle)({ default: { ttl: 300000, limit: 3 } }),
-    (0, swagger_1.ApiOperation)({ summary: 'Request password reset email' }),
+    (0, throttler_1.Throttle)({
+        default: {
+            ttl: 300000,
+            limit: 3,
+        },
+    }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Request password reset email',
+    }),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Ip)()),
     __metadata("design:type", Function),
@@ -218,8 +277,15 @@ __decorate([
 __decorate([
     (0, common_1.Post)('reset-password'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, throttler_1.Throttle)({ default: { ttl: 60000, limit: 5 } }),
-    (0, swagger_1.ApiOperation)({ summary: 'Reset password using token from email' }),
+    (0, throttler_1.Throttle)({
+        default: {
+            ttl: 60000,
+            limit: 5,
+        },
+    }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Reset password using token from email',
+    }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [ResetPasswordDto]),
@@ -229,7 +295,9 @@ __decorate([
     (0, common_1.Post)('change-password'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Change password (requires current password)' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Change password (requires current password)',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -238,8 +306,15 @@ __decorate([
 ], AuthController.prototype, "changePassword", null);
 __decorate([
     (0, common_1.Post)('magic-link'),
-    (0, throttler_1.Throttle)({ default: { ttl: 300000, limit: 3 } }),
-    (0, swagger_1.ApiOperation)({ summary: 'Send magic login link to email' }),
+    (0, throttler_1.Throttle)({
+        default: {
+            ttl: 300000,
+            limit: 3,
+        },
+    }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Send magic login link to email',
+    }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [magic_link_dto_1.MagicLinkDto]),
@@ -248,7 +323,9 @@ __decorate([
 __decorate([
     (0, common_1.Post)('magic-link/verify'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
-    (0, swagger_1.ApiOperation)({ summary: 'Verify magic link token' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Verify magic link token',
+    }),
     __param(0, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
@@ -258,7 +335,9 @@ __decorate([
     (0, common_1.Post)('mfa/setup'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Generate MFA secret and QR code' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Generate MFA secret and QR code',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
@@ -268,7 +347,9 @@ __decorate([
     (0, common_1.Post)('mfa/enable'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Enable MFA after verifying TOTP code' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Enable MFA after verifying TOTP code',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -279,7 +360,9 @@ __decorate([
     (0, common_1.Post)('mfa/disable'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Disable MFA (requires valid TOTP code)' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Disable MFA (requires valid TOTP code)',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -290,17 +373,21 @@ __decorate([
     (0, common_1.Get)('sessions'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'List all active sessions' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'List all active sessions',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "getSessions", null);
 __decorate([
     (0, common_1.Delete)('sessions/all'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Revoke all sessions (sign out everywhere)' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Revoke all sessions (sign out everywhere)',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
@@ -310,7 +397,9 @@ __decorate([
     (0, common_1.Delete)('sessions/:id'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Revoke a specific session' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Revoke a specific session',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
@@ -320,7 +409,9 @@ __decorate([
 __decorate([
     (0, common_1.Get)('google'),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('google')),
-    (0, swagger_1.ApiOperation)({ summary: 'Initiate Google OAuth' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Initiate Google OAuth',
+    }),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
@@ -328,7 +419,9 @@ __decorate([
 __decorate([
     (0, common_1.Get)('google/callback'),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('google')),
-    (0, swagger_1.ApiOperation)({ summary: 'Google OAuth callback' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Google OAuth callback',
+    }),
     __param(0, (0, common_1.Req)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
@@ -338,7 +431,9 @@ __decorate([
     (0, common_1.Get)('me'),
     (0, swagger_1.ApiBearerAuth)(),
     (0, common_1.UseGuards)((0, passport_1.AuthGuard)('jwt')),
-    (0, swagger_1.ApiOperation)({ summary: 'Get current authenticated user' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Get current authenticated user',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),

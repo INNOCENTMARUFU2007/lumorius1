@@ -18,13 +18,17 @@ const local_strategy_1 = require("./strategies/local.strategy");
 const google_strategy_1 = require("./strategies/google.strategy");
 const users_module_1 = require("../users/users.module");
 const email_module_1 = require("../common/email/email.module");
+const database_module_1 = require("../database/database.module");
 let AuthModule = class AuthModule {
 };
 exports.AuthModule = AuthModule;
 exports.AuthModule = AuthModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            passport_1.PassportModule.register({ defaultStrategy: 'jwt' }),
+            database_module_1.DatabaseModule,
+            passport_1.PassportModule.register({
+                defaultStrategy: 'jwt',
+            }),
             jwt_1.JwtModule.registerAsync({
                 useFactory: (configService) => ({
                     secret: configService.get('jwt.secret'),
@@ -37,9 +41,18 @@ exports.AuthModule = AuthModule = __decorate([
             users_module_1.UsersModule,
             email_module_1.EmailModule,
         ],
-        controllers: [auth_controller_1.AuthController],
-        providers: [auth_service_1.AuthService, jwt_strategy_1.JwtStrategy, local_strategy_1.LocalStrategy, google_strategy_1.GoogleStrategy],
-        exports: [auth_service_1.AuthService],
+        controllers: [
+            auth_controller_1.AuthController,
+        ],
+        providers: [
+            auth_service_1.AuthService,
+            jwt_strategy_1.JwtStrategy,
+            local_strategy_1.LocalStrategy,
+            google_strategy_1.GoogleStrategy,
+        ],
+        exports: [
+            auth_service_1.AuthService,
+        ],
     })
 ], AuthModule);
 //# sourceMappingURL=auth.module.js.map

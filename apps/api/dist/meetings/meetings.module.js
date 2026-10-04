@@ -12,6 +12,7 @@ const bull_1 = require("@nestjs/bull");
 const meetings_controller_1 = require("./meetings.controller");
 const meetings_service_1 = require("./meetings.service");
 const meetings_processor_1 = require("./meetings.processor");
+const database_module_1 = require("../database/database.module");
 const storage_module_1 = require("../storage/storage.module");
 const ai_module_1 = require("../ai/ai.module");
 let MeetingsModule = class MeetingsModule {
@@ -20,13 +21,23 @@ exports.MeetingsModule = MeetingsModule;
 exports.MeetingsModule = MeetingsModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            bull_1.BullModule.registerQueue({ name: 'meetings' }),
+            database_module_1.DatabaseModule,
+            bull_1.BullModule.registerQueue({
+                name: 'meetings',
+            }),
             storage_module_1.StorageModule,
             ai_module_1.AiModule,
         ],
-        controllers: [meetings_controller_1.MeetingsController],
-        providers: [meetings_service_1.MeetingsService, meetings_processor_1.MeetingsProcessor],
-        exports: [meetings_service_1.MeetingsService],
+        controllers: [
+            meetings_controller_1.MeetingsController,
+        ],
+        providers: [
+            meetings_service_1.MeetingsService,
+            meetings_processor_1.MeetingsProcessor,
+        ],
+        exports: [
+            meetings_service_1.MeetingsService,
+        ],
     })
 ], MeetingsModule);
 //# sourceMappingURL=meetings.module.js.map

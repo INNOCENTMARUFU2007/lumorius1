@@ -1,76 +1,158 @@
-import { Module, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Module,
+  Logger,
+} from '@nestjs/common';
+
 import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
+
 import { DatabaseService } from './database.service';
 
 const PG_POOL = 'PG_POOL';
-const logger  = new Logger('DatabaseModule');
+const logger = new Logger('DatabaseModule');
 
 @Module({
   providers: [
     {
       provide: PG_POOL,
+
       inject: [ConfigService],
-      useFactory: async (config: ConfigService): Promise<Pool> => {
+
+      useFactory: async (
+        config: ConfigService,
+      ): Promise<Pool> => {
+        const databaseUrl =
+          config.get<string>('database.url');
+
+        const poolMax =
+          config.get<number>(
+            'database.poolMax',
+            20,
+          );
+
+        const poolMin =
+          config.get<number>(
+            'database.poolMin',
+            2,
+          );
+
+        if (!databaseUrl) {
+          throw new Error(
+            'DATABASE_URL is not configured. Check your .env file.',
+          );
+        }
+
         const pool = new Pool({
-          connectionString: config.get<string>('DATABASE_URL'),
-          max: config.get<number>('DB_POOL_MAX', 20),
+          connectionString: databaseUrl,
+
+          min: poolMin,
+          max: poolMax,
+
           idleTimeoutMillis: 30_000,
           connectionTimeoutMillis: 5_000,
-          ssl: config.get<string>('NODE_ENV') === 'production'
-            ? { rejectUnauthorized: false }
-            : undefined,
+
+          ssl:
+            config.get<string>(
+              'nodeEnv',
+            ) === 'production'
+              ? {
+                  rejectUnauthorized: false,
+                }
+              : undefined,
         });
 
-        // Verify connection + pgvector extension at startup
+        // Verify database connection
         try {
-          const client = await pool.connect();
-          try {
-            // Verify basic connectivity
-            await client.query('SELECT 1');
-            logger.log('Database connection verified');
+          const client =
+            await pool.connect();
 
-            // Ensure pgvector extension is installed (NX-000014)
-            const extResult = await client.query(
-              `SELECT EXISTS(
-                 SELECT 1 FROM pg_extension WHERE extname = 'vector'
-               ) AS installed`,
+          try {
+            await client.query(
+              'SELECT 1',
             );
-            const installed: boolean = extResult.rows[0]?.installed === true;
+
+            logger.log(
+              'Database connection verified',
+            );
+
+            // Verify pgvector
+            const extResult =
+              await client.query(
+                `SELECT EXISTS(
+                   SELECT 1
+                   FROM pg_extension
+                   WHERE extname = 'vector'
+                 ) AS installed`,
+              );
+
+            const installed =
+              extResult.rows[0]?.installed ===
+              true;
 
             if (!installed) {
-              logger.warn('pgvector extension not found — attempting CREATE EXTENSION');
+              logger.warn(
+                'pgvector extension not found — attempting CREATE EXTENSION',
+              );
+
               try {
-                await client.query('CREATE EXTENSION IF NOT EXISTS vector');
-                logger.log('pgvector extension created successfully');
+                await client.query(
+                  'CREATE EXTENSION IF NOT EXISTS vector',
+                );
+
+                logger.log(
+                  'pgvector extension created successfully',
+                );
               } catch (extErr: unknown) {
-                const msg = extErr instanceof Error ? extErr.message : String(extErr);
+                const msg =
+                  extErr instanceof Error
+                    ? extErr.message
+                    : String(extErr);
+
                 logger.error(
                   `pgvector extension could not be created: ${msg}. ` +
-                  'Semantic search will be unavailable until the extension is installed by a superuser.',
+                    'Semantic search will be unavailable until the extension is installed by a superuser.',
                 );
               }
             } else {
-              logger.log('pgvector extension verified ✓');
+              logger.log(
+                'pgvector extension verified ✓',
+              );
             }
 
-            // Verify uuid-ossp for gen_random_uuid()
-            await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
-            logger.log('uuid-ossp extension verified ✓');
+            // Verify UUID support
+            await client.query(
+              'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"',
+            );
+
+            logger.log(
+              'uuid-ossp extension verified ✓',
+            );
           } finally {
             client.release();
           }
         } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.error(`Database startup check failed: ${msg}`);
-          // Do not throw — let health check surface it to load balancer
+          const msg =
+            err instanceof Error
+              ? err.message
+              : String(err);
+
+          logger.error(
+            `Database startup check failed: ${msg}`,
+          );
+
+          // Do not hide configuration errors.
+          throw err;
         }
 
         return pool;
       },
     },
+
     DatabaseService,
   ],
-  exports: [DatabaseService],
+
+  exports: [
+    DatabaseService,
+  ],
 })
 export class DatabaseModule {}

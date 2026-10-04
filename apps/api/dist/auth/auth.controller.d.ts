@@ -40,7 +40,7 @@ export declare class AuthController {
             mfaEnabled: unknown;
         };
     }>;
-    login(dto: LoginDto, req: Request, ip: string): Promise<{
+    login(dto: LoginDto, req?: Request, ip?: string): Promise<{
         accessToken: string;
         refreshToken: string;
         expiresIn: number;
@@ -70,7 +70,21 @@ export declare class AuthController {
             mfaEnabled: unknown;
         };
     }>;
-    logout(dto: RefreshTokenDto): Promise<void>;
+    refreshTokens(dto: RefreshTokenDto): Promise<{
+        accessToken: string;
+        refreshToken: string;
+        expiresIn: number;
+        user: {
+            id: unknown;
+            email: unknown;
+            name: unknown;
+            role: unknown;
+            organizationId: unknown;
+            emailVerified: unknown;
+            mfaEnabled: unknown;
+        };
+    }>;
+    logout(dto: RefreshTokenDto, _user?: JwtPayload): Promise<void>;
     verifyEmail(dto: VerifyEmailDto): Promise<{
         verified: boolean;
     }>;
@@ -78,6 +92,9 @@ export declare class AuthController {
         sent: boolean;
     }>;
     forgotPassword(dto: ResetRequestDto, ip: string): Promise<{
+        sent: boolean;
+    }>;
+    requestPasswordReset(dto: ResetRequestDto): Promise<{
         sent: boolean;
     }>;
     resetPassword(dto: ResetPasswordDto): Promise<{
@@ -116,14 +133,18 @@ export declare class AuthController {
     disableMfa(user: JwtPayload, dto: DisableMfaDto): Promise<{
         disabled: boolean;
     }>;
-    getSessions(user: JwtPayload): Promise<Record<string, unknown>[]>;
+    getSessions(user: JwtPayload, _unused?: unknown): Promise<Record<string, unknown>[]>;
     revokeAll(user: JwtPayload): Promise<{
+        revoked: boolean;
+    }>;
+    revokeAllSessions(user: JwtPayload): Promise<{
         revoked: boolean;
     }>;
     revokeSession(user: JwtPayload, sessionId: string): Promise<void>;
     googleAuth(): Promise<void>;
     googleCallback(req: Request): Promise<Express.User>;
     me(user: JwtPayload): Promise<JwtPayload>;
+    getProfile(user: JwtPayload): Promise<JwtPayload>;
 }
 export {};
 //# sourceMappingURL=auth.controller.d.ts.map

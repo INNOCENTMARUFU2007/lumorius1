@@ -34,7 +34,7 @@ export declare class FounderOsController {
     dashboard(user: JwtPayload): Promise<{
         quarter: string;
         year: number;
-        healthScore: any;
+        healthScore: Record<string, unknown>;
         okrs: {
             objectives: Record<string, unknown>[];
             quarter: string;

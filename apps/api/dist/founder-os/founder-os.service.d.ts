@@ -45,7 +45,7 @@ export declare class FounderOsService {
     getDashboard(organizationId: string, userId: string): Promise<{
         quarter: string;
         year: number;
-        healthScore: any;
+        healthScore: Record<string, unknown>;
         okrs: {
             objectives: Record<string, unknown>[];
             quarter: string;

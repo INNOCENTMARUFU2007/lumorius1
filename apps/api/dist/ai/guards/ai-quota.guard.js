@@ -32,13 +32,14 @@ let AiQuotaGuard = AiQuotaGuard_1 = class AiQuotaGuard {
     async canActivate(context) {
         const req = context.switchToHttp().getRequest();
         const user = req.user;
-        if (!user?.organizationId)
+        if (!user?.organizationId) {
             return true;
-        await this.checkBurstLimit(user.organizationId);
+        }
+        await this.checkBurstLimit(user.organizationId, context);
         await this.checkMonthlyQuota(user.organizationId);
         return true;
     }
-    async checkBurstLimit(orgId) {
+    async checkBurstLimit(orgId, context) {
         const key = `ai:burst:${orgId}`;
         const count = await this.redis.incr(key);
         if (count === 1) {
@@ -46,21 +47,24 @@ let AiQuotaGuard = AiQuotaGuard_1 = class AiQuotaGuard {
         }
         if (count > this.BURST_LIMIT) {
             const ttl = Math.max(await this.redis.ttl(key), 1);
-            const res = { statusCode: 429, message: `AI rate limit — max ${this.BURST_LIMIT} requests/min. Retry after ${ttl}s.`, retryAfter: ttl };
+            const res = {
+                statusCode: 429,
+                message: `AI rate limit — max ${this.BURST_LIMIT} requests/min. Retry after ${ttl}s.`,
+                retryAfter: ttl,
+            };
             const exc = new common_1.HttpException(res, common_1.HttpStatus.TOO_MANY_REQUESTS);
-            canActivate(context, common_1.ExecutionContext);
-            {
-                /common;
-            }
-            const http = context.switchToHttp().getResponse();
+            const http = context
+                .switchToHttp()
+                .getResponse();
             http.setHeader?.('Retry-After', String(ttl));
             throw exc;
         }
     }
     async checkMonthlyQuota(orgId) {
         const limit = await this.getPlanLimit(orgId);
-        if (limit === 0)
+        if (limit === 0) {
             return;
+        }
         const key = this.monthlyKey(orgId);
         const used = await this.redis.incr(key);
         if (used === 1) {
@@ -80,14 +84,15 @@ let AiQuotaGuard = AiQuotaGuard_1 = class AiQuotaGuard {
     async getPlanLimit(orgId) {
         const cacheKey = `ai:plan:${orgId}`;
         const cached = await this.redis.get(cacheKey);
-        if (cached !== null)
+        if (cached !== null) {
             return parseInt(cached, 10);
+        }
         const res = await this.db.query(`SELECT bp.ai_requests_per_month
-       FROM   subscriptions   s
-       JOIN   billing_plans   bp ON bp.id = s.plan_id
-       WHERE  s.organization_id = $1
-         AND  s.status = 'active'
-       LIMIT  1`, [orgId]);
+       FROM subscriptions s
+       JOIN billing_plans bp ON bp.id = s.plan_id
+       WHERE s.organization_id = $1
+         AND s.status = 'active'
+       LIMIT 1`, [orgId]);
         const limit = res.rows[0]?.ai_requests_per_month ?? 100;
         await this.redis.set(cacheKey, String(limit), 'EX', 300);
         return limit;

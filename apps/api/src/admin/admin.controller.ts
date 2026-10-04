@@ -1,8 +1,23 @@
 import {
-  Controller, Get, Post, Patch, Delete,
-  Param, Query, Body, UseGuards, HttpCode, HttpStatus,
+  Controller,
+  Get,
+  Patch,
+  Delete,
+  Param,
+  Query,
+  Body,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiQuery,
+} from '@nestjs/swagger';
+
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -12,88 +27,154 @@ import { AdminService } from './admin.service';
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin', 'super_admin')
+@Roles('admin')
 @Controller({ path: 'admin', version: '1' })
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
+  // ── Platform Stats ───────────────────────────────────────────
+
   @Get('stats')
-  @ApiOperation({ summary: 'Platform-wide stats (MRR, users, orgs)' })
+  @ApiOperation({
+    summary: 'Platform-wide stats (MRR, users, orgs)',
+  })
   getStats() {
     return this.adminService.getPlatformStats();
   }
 
-  // ── Users ─────────────────────────────────────────────────────
+  // ── Users ────────────────────────────────────────────────────
+
   @Get('users')
-  @ApiOperation({ summary: 'List all users (paginated)' })
-  @ApiQuery({ name: 'page', required: false })
-  @ApiQuery({ name: 'limit', required: false })
-  @ApiQuery({ name: 'search', required: false })
+  @ApiOperation({
+    summary: 'List all users (paginated)',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+  })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+  })
   listUsers(
     @Query('page') page = '1',
     @Query('limit') limit = '25',
     @Query('search') search?: string,
   ) {
-    return this.adminService.listUsers(+page, +limit, search);
+    return this.adminService.listUsers(
+      Number(page),
+      Number(limit),
+      search,
+    );
   }
 
   @Get('users/:id')
-  @ApiOperation({ summary: 'Get user detail' })
+  @ApiOperation({
+    summary: 'Get user detail',
+  })
   getUserById(@Param('id') id: string) {
     return this.adminService.getUserById(id);
   }
 
   @Patch('users/:id/suspend')
-  @ApiOperation({ summary: 'Suspend user account' })
+  @ApiOperation({
+    summary: 'Suspend user account',
+  })
   @HttpCode(HttpStatus.OK)
-  suspendUser(@Param('id') id: string, @CurrentUser() admin: { id: string }) {
+  suspendUser(
+    @Param('id') id: string,
+    @CurrentUser() admin: { id: string },
+  ) {
     return this.adminService.suspendUser(id, admin.id);
   }
 
   @Patch('users/:id/reinstate')
-  @ApiOperation({ summary: 'Reinstate suspended user' })
+  @ApiOperation({
+    summary: 'Reinstate suspended user',
+  })
   @HttpCode(HttpStatus.OK)
-  reinstateUser(@Param('id') id: string, @CurrentUser() admin: { id: string }) {
+  reinstateUser(
+    @Param('id') id: string,
+    @CurrentUser() admin: { id: string },
+  ) {
     return this.adminService.reinstateUser(id, admin.id);
   }
 
   @Delete('users/:id')
-  @ApiOperation({ summary: 'Permanently delete user' })
+  @ApiOperation({
+    summary: 'Permanently delete user',
+  })
   @HttpCode(HttpStatus.NO_CONTENT)
-  deleteUser(@Param('id') id: string, @CurrentUser() admin: { id: string }) {
+  deleteUser(
+    @Param('id') id: string,
+    @CurrentUser() admin: { id: string },
+  ) {
     return this.adminService.deleteUser(id, admin.id);
   }
 
-  // ── Organisations ─────────────────────────────────────────────
+  // ── Organisations ────────────────────────────────────────────
+
   @Get('organizations')
-  @ApiOperation({ summary: 'List all organisations' })
-  @ApiQuery({ name: 'page', required: false })
-  @ApiQuery({ name: 'search', required: false })
+  @ApiOperation({
+    summary: 'List all organisations',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+  })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+  })
   listOrgs(
     @Query('page') page = '1',
     @Query('limit') limit = '25',
     @Query('search') search?: string,
   ) {
-    return this.adminService.listOrgs(+page, +limit, search);
+    return this.adminService.listOrgs(
+      Number(page),
+      Number(limit),
+      search,
+    );
   }
 
   @Patch('organizations/:id/plan')
-  @ApiOperation({ summary: 'Override an org plan' })
+  @ApiOperation({
+    summary: 'Override an org plan',
+  })
   changePlan(
     @Param('id') id: string,
     @Body() body: { planId: string },
     @CurrentUser() admin: { id: string },
   ) {
-    return this.adminService.changePlan(id, body.planId, admin.id);
+    return this.adminService.changePlan(
+      id,
+      body.planId,
+      admin.id,
+    );
   }
 
-  // ── Audit logs ────────────────────────────────────────────────
+  // ── Audit Logs ───────────────────────────────────────────────
+
   @Get('audit-logs')
-  @ApiOperation({ summary: 'Platform-wide audit log' })
+  @ApiOperation({
+    summary: 'Platform-wide audit log',
+  })
   getAuditLogs(
     @Query('page') page = '1',
     @Query('limit') limit = '50',
   ) {
-    return this.adminService.getAuditLogs(+page, +limit);
+    return this.adminService.getAuditLogs(
+      Number(page),
+      Number(limit),
+    );
   }
 }

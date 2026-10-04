@@ -1,5 +1,11 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
+
 import { v4 as uuidv4 } from 'uuid';
+
 import { DatabaseService } from '../database/database.service';
 import { EmailService } from '../common/email/email.service';
 import { ConfigService } from '@nestjs/config';
@@ -12,200 +18,537 @@ export class OrganizationsService {
     private readonly configService: ConfigService,
   ) {}
 
+  // ── Organization ─────────────────────────────────────────────
+
   async findById(id: string) {
     const res = await this.db.query(
-      `SELECT o.*, bp.name as plan_name, bp.max_users, bp.storage_gb, bp.ai_requests_per_month
+      `SELECT
+         o.*,
+         bp.name as plan_name,
+         bp.max_users,
+         bp.storage_gb,
+         bp.ai_requests_per_month
        FROM organizations o
        JOIN billing_plans bp ON o.plan_id = bp.id
        WHERE o.id = $1`,
       [id],
     );
-    if (!res.rows[0]) throw new NotFoundException('Organization not found');
+
+    if (!res.rows[0]) {
+      throw new NotFoundException(
+        'Organization not found',
+      );
+    }
+
     return res.rows[0];
   }
 
-  async update(id: string, dto: { name?: string; settings?: Record<string, unknown> }) {
+  async update(
+    id: string,
+    dto: {
+      name?: string;
+      settings?: Record<string, unknown>;
+    },
+  ) {
     const updates: string[] = [];
     const values: unknown[] = [];
+
     let idx = 1;
-    if (dto.name) { updates.push(`name = $${idx++}`); values.push(dto.name); }
-    if (dto.settings) { updates.push(`settings = $${idx++}`); values.push(JSON.stringify(dto.settings)); }
-    if (updates.length === 0) return this.findById(id);
+
+    if (dto.name !== undefined) {
+      updates.push(`name = $${idx++}`);
+      values.push(dto.name);
+    }
+
+    if (dto.settings !== undefined) {
+      updates.push(`settings = $${idx++}`);
+      values.push(
+        JSON.stringify(dto.settings),
+      );
+    }
+
+    if (updates.length === 0) {
+      return this.findById(id);
+    }
+
     values.push(id);
-    await this.db.query(`UPDATE organizations SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${idx}`, values);
+
+    await this.db.query(
+      `UPDATE organizations
+       SET ${updates.join(', ')},
+           updated_at = NOW()
+       WHERE id = $${idx}`,
+      values,
+    );
+
     return this.findById(id);
   }
 
-  async getTeams(organizationId: string) {
+  // ── Teams ───────────────────────────────────────────────────
+
+  async getTeams(
+    organizationId: string,
+  ) {
     const res = await this.db.query(
-      `SELECT t.*, COUNT(tm.user_id) as member_count, d.name as department_name
+      `SELECT
+         t.*,
+         COUNT(tm.user_id) as member_count,
+         d.name as department_name
        FROM teams t
-       LEFT JOIN team_members tm ON t.id = tm.team_id
-       LEFT JOIN departments d ON t.department_id = d.id
+       LEFT JOIN team_members tm
+         ON t.id = tm.team_id
+       LEFT JOIN departments d
+         ON t.department_id = d.id
        WHERE t.organization_id = $1
        GROUP BY t.id, d.name
        ORDER BY t.created_at DESC`,
       [organizationId],
     );
+
     return res.rows;
   }
 
-  async createTeam(organizationId: string, userId: string, dto: {
-    name: string; description?: string; departmentId?: string;
-  }) {
+  async createTeam(
+    organizationId: string,
+    userId: string,
+    dto: {
+      name: string;
+      description?: string;
+      departmentId?: string;
+    },
+  ) {
     const id = uuidv4();
+
     await this.db.query(
-      `INSERT INTO teams (id, name, description, organization_id, department_id, created_by_id)
+      `INSERT INTO teams
+         (
+           id,
+           name,
+           description,
+           organization_id,
+           department_id,
+           created_by_id
+         )
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [id, dto.name, dto.description ?? null, organizationId, dto.departmentId ?? null, userId],
+      [
+        id,
+        dto.name,
+        dto.description ?? null,
+        organizationId,
+        dto.departmentId ?? null,
+        userId,
+      ],
     );
+
     await this.db.query(
-      `INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'owner')`,
+      `INSERT INTO team_members
+         (team_id, user_id, role)
+       VALUES ($1,$2,'owner')`,
       [id, userId],
     );
-    return this.findTeamById(id, organizationId);
+
+    return this.findTeamById(
+      id,
+      organizationId,
+    );
   }
 
-  async findTeamById(id: string, organizationId: string) {
+  async findTeamById(
+    id: string,
+    organizationId: string,
+  ) {
     const res = await this.db.query(
-      `SELECT t.*, COUNT(tm.user_id) as member_count
+      `SELECT
+         t.*,
+         COUNT(tm.user_id) as member_count
        FROM teams t
-       LEFT JOIN team_members tm ON t.id = tm.team_id
-       WHERE t.id = $1 AND t.organization_id = $2
+       LEFT JOIN team_members tm
+         ON t.id = tm.team_id
+       WHERE t.id = $1
+         AND t.organization_id = $2
        GROUP BY t.id`,
       [id, organizationId],
     );
-    if (!res.rows[0]) throw new NotFoundException('Team not found');
+
+    if (!res.rows[0]) {
+      throw new NotFoundException(
+        'Team not found',
+      );
+    }
+
     return res.rows[0];
   }
 
-  async addTeamMember(teamId: string, organizationId: string, userId: string, role = 'member') {
-    await this.findTeamById(teamId, organizationId);
-    await this.db.query(
-      `INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,$3)
-       ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-      [teamId, userId, role],
+  async addTeamMember(
+    teamId: string,
+    organizationId: string,
+    userId: string,
+    role = 'member',
+  ) {
+    await this.findTeamById(
+      teamId,
+      organizationId,
     );
-    return { added: true };
+
+    await this.db.query(
+      `INSERT INTO team_members
+         (team_id, user_id, role)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (team_id, user_id)
+       DO UPDATE SET
+         role = EXCLUDED.role`,
+      [
+        teamId,
+        userId,
+        role,
+      ],
+    );
+
+    return {
+      added: true,
+    };
   }
 
-  async getDepartments(organizationId: string) {
+  // ── Departments ─────────────────────────────────────────────
+
+  async getDepartments(
+    organizationId: string,
+  ) {
     const res = await this.db.query(
-      `SELECT d.*, u.name as head_name, COUNT(t.id) as team_count
+      `SELECT
+         d.*,
+         u.name as head_name,
+         COUNT(t.id) as team_count
        FROM departments d
-       LEFT JOIN users u ON d.head_user_id = u.id
-       LEFT JOIN teams t ON t.department_id = d.id
+       LEFT JOIN users u
+         ON d.head_user_id = u.id
+       LEFT JOIN teams t
+         ON t.department_id = d.id
        WHERE d.organization_id = $1
        GROUP BY d.id, u.name
        ORDER BY d.name`,
       [organizationId],
     );
+
     return res.rows;
   }
 
-  async createDepartment(organizationId: string, dto: {
-    name: string; description?: string; headUserId?: string;
-  }) {
+  async createDepartment(
+    organizationId: string,
+    dto: {
+      name: string;
+      description?: string;
+      headUserId?: string;
+    },
+  ) {
     const id = uuidv4();
+
     await this.db.query(
-      `INSERT INTO departments (id, name, description, organization_id, head_user_id)
+      `INSERT INTO departments
+         (
+           id,
+           name,
+           description,
+           organization_id,
+           head_user_id
+         )
        VALUES ($1,$2,$3,$4,$5)`,
-      [id, dto.name, dto.description ?? null, organizationId, dto.headUserId ?? null],
+      [
+        id,
+        dto.name,
+        dto.description ?? null,
+        organizationId,
+        dto.headUserId ?? null,
+      ],
     );
-    return this.db.findOne('departments', { id });
+
+    return this.db.findOne(
+      'departments',
+      { id },
+    );
   }
 
-  async invite(organizationId: string, invitedById: string, dto: {
-    email: string; role: string; teamId?: string;
-  }) {
-    const existing = await this.db.findOne('users', { email: dto.email });
+  // ── Invitations ─────────────────────────────────────────────
+
+  async invite(
+    organizationId: string,
+    invitedById: string,
+    dto: {
+      email: string;
+      role: string;
+      teamId?: string;
+    },
+  ) {
+    const existing =
+      await this.db.findOne(
+        'users',
+        { email: dto.email },
+      );
+
     if (existing) {
-      const member = existing as Record<string, unknown>;
-      if (member.organization_id === organizationId) {
-        throw new ConflictException('User is already a member of this organization');
+      const member =
+        existing as Record<
+          string,
+          unknown
+        >;
+
+      if (
+        member.organization_id ===
+        organizationId
+      ) {
+        throw new ConflictException(
+          'User is already a member of this organization',
+        );
       }
     }
 
-    const existingInvite = await this.db.query(
-      `SELECT id FROM invitations WHERE email = $1 AND organization_id = $2
-       AND accepted_at IS NULL AND expires_at > NOW()`,
-      [dto.email, organizationId],
-    );
+    const existingInvite =
+      await this.db.query(
+        `SELECT id
+         FROM invitations
+         WHERE email = $1
+           AND organization_id = $2
+           AND accepted_at IS NULL
+           AND expires_at > NOW()`,
+        [
+          dto.email,
+          organizationId,
+        ],
+      );
+
     if (existingInvite.rows.length > 0) {
-      throw new ConflictException('An active invitation already exists for this email');
+      throw new ConflictException(
+        'An active invitation already exists for this email',
+      );
     }
 
     const token = uuidv4();
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+    const expiresAt =
+      new Date(
+        Date.now() +
+          48 * 60 * 60 * 1000,
+      );
+
     await this.db.query(
-      `INSERT INTO invitations (id, email, role, organization_id, invited_by_id, team_id, token, expires_at)
+      `INSERT INTO invitations
+         (
+           id,
+           email,
+           role,
+           organization_id,
+           invited_by_id,
+           team_id,
+           token,
+           expires_at
+         )
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [uuidv4(), dto.email, dto.role, organizationId, invitedById, dto.teamId ?? null, token, expiresAt],
+      [
+        uuidv4(),
+        dto.email,
+        dto.role,
+        organizationId,
+        invitedById,
+        dto.teamId ?? null,
+        token,
+        expiresAt,
+      ],
     );
 
-    const org = await this.findById(organizationId);
-    const inviter = await this.db.findOne<Record<string, unknown>>('users', { id: invitedById });
-    const appUrl = this.configService.get<string>('appUrl');
+    const org =
+      await this.findById(
+        organizationId,
+      );
 
-    await this.emailService.sendInvitation(
+    const inviter =
+      await this.db.findOne<
+        Record<string, unknown>
+      >(
+        'users',
+        { id: invitedById },
+      );
+
+    const organizationName =
+      (
+        org as Record<
+          string,
+          unknown
+        >
+      ).name as string;
+
+    const inviterName =
+      (inviter?.name ??
+        'Someone') as string;
+
+    /*
+     * EmailService exposes sendTeamInvitation(),
+     * not sendInvitation().
+     *
+     * Its expected arguments are:
+     * email, inviterName, orgName, token
+     */
+    await this.emailService.sendTeamInvitation(
       dto.email,
-      (org as Record<string, unknown>).name as string,
-      (inviter?.name ?? 'Someone') as string,
-      `${appUrl}/accept-invite?token=${token}`,
+      inviterName,
+      organizationName,
+      token,
     );
 
-    return { sent: true, email: dto.email };
+    return {
+      sent: true,
+      email: dto.email,
+    };
   }
 
-  async acceptInvitation(token: string, userId: string) {
-    const invite = await this.db.findOne<Record<string, unknown>>('invitations', { token });
-    if (!invite || invite.accepted_at) throw new NotFoundException('Invitation not found or already used');
-    if (new Date(invite.expires_at as string) < new Date()) throw new NotFoundException('Invitation expired');
+  // ── Accept Invitation ───────────────────────────────────────
 
-    await this.db.transaction(async (client) => {
-      await client.query(
-        'UPDATE users SET organization_id = $1, role = $2 WHERE id = $3',
-        [invite.organization_id, invite.role, userId],
+  async acceptInvitation(
+    token: string,
+    userId: string,
+  ) {
+    const invite =
+      await this.db.findOne<
+        Record<string, unknown>
+      >(
+        'invitations',
+        { token },
       );
-      await client.query(
-        'UPDATE invitations SET accepted_at = NOW() WHERE id = $1',
-        [invite.id],
+
+    if (
+      !invite ||
+      invite.accepted_at
+    ) {
+      throw new NotFoundException(
+        'Invitation not found or already used',
       );
-      if (invite.team_id) {
+    }
+
+    if (
+      new Date(
+        invite.expires_at as string,
+      ) < new Date()
+    ) {
+      throw new NotFoundException(
+        'Invitation expired',
+      );
+    }
+
+    await this.db.transaction(
+      async (client) => {
         await client.query(
-          `INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'member')
-           ON CONFLICT (team_id, user_id) DO NOTHING`,
-          [invite.team_id, userId],
+          `UPDATE users
+           SET organization_id = $1,
+               role = $2
+           WHERE id = $3`,
+          [
+            invite.organization_id,
+            invite.role,
+            userId,
+          ],
         );
-      }
-    });
 
-    return { accepted: true };
+        await client.query(
+          `UPDATE invitations
+           SET accepted_at = NOW()
+           WHERE id = $1`,
+          [invite.id],
+        );
+
+        if (invite.team_id) {
+          await client.query(
+            `INSERT INTO team_members
+               (team_id, user_id, role)
+             VALUES ($1,$2,'member')
+             ON CONFLICT (team_id, user_id)
+             DO NOTHING`,
+            [
+              invite.team_id,
+              userId,
+            ],
+          );
+        }
+      },
+    );
+
+    return {
+      accepted: true,
+    };
   }
 
-  async getUsage(organizationId: string) {
-    const [orgRes, userRes] = await Promise.all([
+  // ── Usage ────────────────────────────────────────────────────
+
+  async getUsage(
+    organizationId: string,
+  ) {
+    const [
+      orgRes,
+      userRes,
+    ] = await Promise.all([
       this.db.query(
-        `SELECT o.storage_used_bytes, o.ai_requests_used, bp.storage_gb, bp.ai_requests_per_month, bp.max_users
-         FROM organizations o JOIN billing_plans bp ON o.plan_id = bp.id WHERE o.id = $1`,
+        `SELECT
+           o.storage_used_bytes,
+           o.ai_requests_used,
+           bp.storage_gb,
+           bp.ai_requests_per_month,
+           bp.max_users
+         FROM organizations o
+         JOIN billing_plans bp
+           ON o.plan_id = bp.id
+         WHERE o.id = $1`,
         [organizationId],
       ),
-      this.db.query<{ count: string }>(
-        'SELECT COUNT(*) FROM users WHERE organization_id = $1 AND is_active = TRUE',
+
+      this.db.query<{
+        count: string;
+      }>(
+        `SELECT COUNT(*)
+         FROM users
+         WHERE organization_id = $1
+           AND is_active = TRUE`,
         [organizationId],
       ),
     ]);
 
-    const org = orgRes.rows[0] as Record<string, unknown>;
-    const userCount = parseInt(userRes.rows[0]?.count ?? '0', 10);
+    if (!orgRes.rows[0]) {
+      throw new NotFoundException(
+        'Organization not found',
+      );
+    }
+
+    const org =
+      orgRes.rows[0] as Record<
+        string,
+        unknown
+      >;
+
+    const userCount =
+      parseInt(
+        userRes.rows[0]?.count ??
+          '0',
+        10,
+      );
 
     return {
-      users: { used: userCount, limit: org.max_users },
+      users: {
+        used: userCount,
+        limit: org.max_users,
+      },
+
       storage: {
-        usedGb: Number(org.storage_used_bytes) / (1024 ** 3),
+        usedGb:
+          Number(
+            org.storage_used_bytes,
+          ) /
+          1024 ** 3,
         limitGb: org.storage_gb,
       },
-      aiRequests: { used: org.ai_requests_used, limit: org.ai_requests_per_month },
+
+      aiRequests: {
+        used:
+          org.ai_requests_used,
+        limit:
+          org.ai_requests_per_month,
+      },
     };
   }
 }

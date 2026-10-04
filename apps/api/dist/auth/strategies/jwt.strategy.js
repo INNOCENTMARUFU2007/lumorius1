@@ -17,10 +17,17 @@ const config_1 = require("@nestjs/config");
 const database_service_1 = require("../../database/database.service");
 let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(passport_jwt_1.Strategy) {
     constructor(configService, db) {
+        const secret = configService.get('jwt.secret') ??
+            configService.get('JWT_SECRET') ??
+            process.env.JWT_SECRET;
+        if (!secret) {
+            throw new Error('JWT_SECRET is not configured. ' +
+                'Set JWT_SECRET in the Lumorius .env file.');
+        }
         super({
             jwtFromRequest: passport_jwt_1.ExtractJwt.fromAuthHeaderAsBearerToken(),
             ignoreExpiration: false,
-            secretOrKey: configService.get('jwt.secret'),
+            secretOrKey: secret,
         });
         this.configService = configService;
         this.db = db;
@@ -30,8 +37,9 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
             id: payload.sub,
             is_active: true,
         });
-        if (!user)
+        if (!user) {
             throw new common_1.UnauthorizedException('User not found or inactive');
+        }
         return payload;
     }
 };

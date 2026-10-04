@@ -43,7 +43,7 @@ const swagger_1 = require("@nestjs/swagger");
 const config_1 = require("@nestjs/config");
 const Sentry = __importStar(require("@sentry/node"));
 const helmet_1 = __importDefault(require("helmet"));
-const compression = __importStar(require("compression"));
+const compression_1 = __importDefault(require("compression"));
 const app_module_1 = require("./app.module");
 const http_exception_filter_1 = require("./common/filters/http-exception.filter");
 const logging_interceptor_1 = require("./common/interceptors/logging.interceptor");
@@ -63,21 +63,36 @@ async function bootstrap() {
         Sentry.init({
             dsn: sentryDsn,
             environment: nodeEnv,
-            tracesSampleRate: nodeEnv === 'production' ? 0.1 : 1.0,
+            tracesSampleRate: nodeEnv === 'production'
+                ? 0.1
+                : 1.0,
         });
         logger.log('Sentry error tracking enabled');
     }
-    app.use(compression());
+    app.use((0, compression_1.default)());
     app.use((0, helmet_1.default)({
         crossOriginEmbedderPolicy: false,
         contentSecurityPolicy: {
             directives: {
                 defaultSrc: ["'self'"],
                 scriptSrc: ["'self'"],
-                styleSrc: ["'self'", "'unsafe-inline'"],
-                imgSrc: ["'self'", 'data:', 'https:'],
-                fontSrc: ["'self'", 'data:'],
-                connectSrc: ["'self'", 'https:'],
+                styleSrc: [
+                    "'self'",
+                    "'unsafe-inline'",
+                ],
+                imgSrc: [
+                    "'self'",
+                    'data:',
+                    'https:',
+                ],
+                fontSrc: [
+                    "'self'",
+                    'data:',
+                ],
+                connectSrc: [
+                    "'self'",
+                    'https:',
+                ],
                 frameAncestors: ["'none'"],
             },
         },
@@ -87,20 +102,40 @@ async function bootstrap() {
             preload: true,
         },
     }));
-    const allowedOrigins = [appUrl, 'http://localhost:3000', 'http://localhost:3001'];
+    const allowedOrigins = [
+        appUrl,
+        'http://localhost:3000',
+        'http://localhost:3001',
+    ];
     app.enableCors({
         origin: (origin, callback) => {
-            if (!origin || allowedOrigins.includes(origin)) {
+            if (!origin ||
+                allowedOrigins.includes(origin)) {
                 callback(null, true);
+                return;
             }
-            else {
-                callback(new Error('Not allowed by CORS'));
-            }
+            callback(new Error('Not allowed by CORS'));
         },
         credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Organization-ID', 'X-API-Key'],
-        exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+        methods: [
+            'GET',
+            'POST',
+            'PUT',
+            'PATCH',
+            'DELETE',
+            'OPTIONS',
+        ],
+        allowedHeaders: [
+            'Content-Type',
+            'Authorization',
+            'X-Organization-ID',
+            'X-API-Key',
+        ],
+        exposedHeaders: [
+            'X-RateLimit-Limit',
+            'X-RateLimit-Remaining',
+            'X-RateLimit-Reset',
+        ],
     });
     app.setGlobalPrefix('api');
     app.enableVersioning({
@@ -111,7 +146,9 @@ async function bootstrap() {
         whitelist: true,
         forbidNonWhitelisted: true,
         transform: true,
-        transformOptions: { enableImplicitConversion: true },
+        transformOptions: {
+            enableImplicitConversion: true,
+        },
         stopAtFirstError: false,
     }));
     app.useGlobalFilters(new http_exception_filter_1.HttpExceptionFilter());
@@ -125,8 +162,16 @@ async function bootstrap() {
             .setVersion('1.0.0')
             .setContact('INMARTECH PVT LTD', 'https://lumorius.com', 'support@lumorius.com')
             .setLicense('Proprietary', '')
-            .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'access-token')
-            .addApiKey({ type: 'apiKey', in: 'header', name: 'X-API-Key' }, 'api-key')
+            .addBearerAuth({
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+        }, 'access-token')
+            .addApiKey({
+            type: 'apiKey',
+            in: 'header',
+            name: 'X-API-Key',
+        }, 'api-key')
             .addServer(appUrl, 'Production')
             .addServer('http://localhost:3001', 'Local Development')
             .addTag('auth', 'Authentication, sessions & MFA')
@@ -155,11 +200,15 @@ async function bootstrap() {
                 defaultModelsExpandDepth: 2,
             },
         });
-        logger.log(`📖 Swagger docs: /api/docs`);
+        logger.log('📖 Swagger docs: /api/docs');
     }
     await app.listen(port, '0.0.0.0');
     logger.log(`🚀 Lumorius API running on port ${port} [${nodeEnv}]`);
-    const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+    const signals = [
+        'SIGTERM',
+        'SIGINT',
+        'SIGHUP',
+    ];
     signals.forEach((signal) => {
         process.on(signal, async () => {
             logger.warn(`Received ${signal} — shutting down gracefully…`);
@@ -170,13 +219,15 @@ async function bootstrap() {
     });
     process.on('unhandledRejection', (reason) => {
         logger.error('Unhandled promise rejection', reason);
-        if (sentryDsn)
+        if (sentryDsn) {
             Sentry.captureException(reason);
+        }
     });
     process.on('uncaughtException', (err) => {
         logger.error('Uncaught exception', err);
-        if (sentryDsn)
+        if (sentryDsn) {
             Sentry.captureException(err);
+        }
         process.exit(1);
     });
 }

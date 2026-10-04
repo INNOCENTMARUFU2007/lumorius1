@@ -1,5 +1,15 @@
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from '../database/database.service';
+type BillingInterval = 'monthly' | 'annual';
+interface CheckoutSessionInput {
+    organizationId?: string;
+    orgId?: string;
+    planId: string;
+    interval?: BillingInterval;
+    successUrl?: string;
+    cancelUrl?: string;
+    userId?: string;
+}
 export declare class BillingService {
     private readonly db;
     private readonly configService;
@@ -8,11 +18,14 @@ export declare class BillingService {
     constructor(db: DatabaseService, configService: ConfigService);
     getPlans(): Promise<Record<string, unknown>[]>;
     getSubscription(organizationId: string): Promise<Record<string, unknown>>;
-    createCheckoutSession(organizationId: string, planId: string, interval: 'monthly' | 'annual', successUrl: string, cancelUrl: string): Promise<{
+    createCheckoutSession(organizationIdOrInput: string | CheckoutSessionInput, planId?: string, interval?: BillingInterval, successUrl?: string, cancelUrl?: string): Promise<{
         url: string;
         sessionId: string;
     }>;
     createPortalSession(organizationId: string, returnUrl: string): Promise<{
+        url: string;
+    }>;
+    createBillingPortalSession(organizationId: string, returnUrl?: string): Promise<{
         url: string;
     }>;
     handleWebhook(payload: Buffer, signature: string): Promise<{
@@ -23,5 +36,7 @@ export declare class BillingService {
     private handleSubscriptionChange;
     private upsertSubscription;
     private handleInvoicePaid;
+    private getFrontendUrl;
 }
+export {};
 //# sourceMappingURL=billing.service.d.ts.map

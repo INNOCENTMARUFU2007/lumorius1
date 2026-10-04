@@ -11,15 +11,27 @@ const common_1 = require("@nestjs/common");
 const bull_1 = require("@nestjs/bull");
 const workflows_controller_1 = require("./workflows.controller");
 const workflows_service_1 = require("./workflows.service");
+const database_module_1 = require("../database/database.module");
 let WorkflowsModule = class WorkflowsModule {
 };
 exports.WorkflowsModule = WorkflowsModule;
 exports.WorkflowsModule = WorkflowsModule = __decorate([
     (0, common_1.Module)({
-        imports: [bull_1.BullModule.registerQueue({ name: 'workflows' })],
-        controllers: [workflows_controller_1.WorkflowsController],
-        providers: [workflows_service_1.WorkflowsService],
-        exports: [workflows_service_1.WorkflowsService],
+        imports: [
+            database_module_1.DatabaseModule,
+            bull_1.BullModule.registerQueue({
+                name: 'workflows',
+            }),
+        ],
+        controllers: [
+            workflows_controller_1.WorkflowsController,
+        ],
+        providers: [
+            workflows_service_1.WorkflowsService,
+        ],
+        exports: [
+            workflows_service_1.WorkflowsService,
+        ],
     })
 ], WorkflowsModule);
 //# sourceMappingURL=workflows.module.js.map
