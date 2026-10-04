@@ -5,24 +5,41 @@ const PUBLIC_PATHS = [
   '/login',
   '/register',
   '/forgot-password',
+  '/reset-password',
+  '/verify-email',
   '/api/v1/auth',
   '/_next',
   '/favicon.ico',
+  '/logo.svg',
+  '/logo-wordmark.svg',
+  '/logo-horizontal.svg',
+  '/logo-stacked.svg',
+  '/android-icon-192.png',
+  '/android-icon-512.png',
+  '/apple-touch-icon.png',
+  '/favicon.svg',
 ];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
-  if (isPublic) return NextResponse.next();
+  // Allow public routes and static assets through.
+  const isPublic = PUBLIC_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  );
 
-  // Tokens are stored in localStorage (client-side); auth.ts also syncs the
-  // access token into the `lumorius_access` cookie so this middleware can read it.
+  if (isPublic) {
+    return NextResponse.next();
+  }
+
+  // Authentication token is stored in a cookie so middleware
+  // can protect server-rendered routes.
   const token = request.cookies.get('lumorius_access')?.value;
 
   if (!token && pathname !== '/login') {
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('redirect', pathname);
+
     return NextResponse.redirect(loginUrl);
   }
 
@@ -30,5 +47,11 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: [
+    /*
+     * Run middleware on application routes but exclude
+     * Next.js internals and common static files.
+     */
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+  ],
 };

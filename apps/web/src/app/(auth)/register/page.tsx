@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
@@ -39,15 +38,11 @@ export default function RegisterPage() {
       [k]: v,
     }));
 
-  const handleSubmit = async (
-    e: React.FormEvent,
-  ) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!agree) {
-      setError(
-        'Please accept the terms of service',
-      );
+      setError('Please accept the terms of service');
       return;
     }
 
@@ -55,10 +50,7 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const res = await api.post(
-        '/auth/register',
-        form,
-      );
+      const res = await api.post('/auth/register', form);
 
       const data = res.data.data;
 
@@ -69,15 +61,13 @@ export default function RegisterPage() {
 
       router.push('/dashboard');
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.message;
+      const msg = err?.response?.data?.message;
 
       if (Array.isArray(msg)) {
         setError(msg[0]);
       } else {
         setError(
-          msg ??
-            'Registration failed. Please try again.',
+          msg ?? 'Registration failed. Please try again.',
         );
       }
     } finally {
@@ -91,50 +81,30 @@ export default function RegisterPage() {
     /\d/.test(form.password);
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4 py-12">
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4 py-8 sm:py-10">
       <motion.div
-        initial={{
-          opacity: 0,
-          y: 20,
-        }}
-        animate={{
-          opacity: 1,
-          y: 0,
-        }}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45 }}
         className="w-full max-w-md"
       >
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-3 mb-3">
-            {/* Lumorius Symbol */}
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center overflow-hidden bg-gray-900 shadow-lg shadow-violet-500/20">
-              <Image
-                src="/logo.svg"
-                alt="Lumorius"
-                width={40}
-                height={40}
-                className="w-full h-full object-contain"
-                priority
-              />
-            </div>
+        {/* BRANDING */}
+<div className="text-center mb-6">
+  <div className="flex justify-center mb-4 translate-x-14">
+    <img
+      src="/logo-horizontal.svg"
+      alt="Lumorius AI"
+      className="w-[340px] sm:w-[370px] h-auto max-w-[92%] object-contain"
+    />
+  </div>
 
-            {/* Lumorius Wordmark */}
-            <Image
-              src="/logo-wordmark.svg"
-              alt="Lumorius AI"
-              width={180}
-              height={50}
-              className="h-auto max-w-[180px] object-contain"
-              priority
-            />
-          </div>
+  <p className="text-gray-500 text-sm">
+    AI Operating System · INMARTECH PVT LTD
+  </p>
+</div>
 
-          <p className="text-gray-500 text-sm">
-            AI Operating System · INMARTECH PVT LTD
-          </p>
-        </div>
-
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+        {/* REGISTRATION CARD */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-7 sm:p-8 shadow-2xl shadow-black/20">
           <h1 className="text-2xl font-bold text-white mb-1">
             Create your account
           </h1>
@@ -153,7 +123,7 @@ export default function RegisterPage() {
             onSubmit={handleSubmit}
             className="space-y-4"
           >
-            {/* Name */}
+            {/* NAME */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-400 mb-1.5">
@@ -201,7 +171,7 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {/* Email */}
+            {/* EMAIL */}
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1.5">
                 Work email *
@@ -227,7 +197,7 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {/* Password */}
+            {/* PASSWORD */}
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1.5">
                 Password *
@@ -237,11 +207,7 @@ export default function RegisterPage() {
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
 
                 <input
-                  type={
-                    showPwd
-                      ? 'text'
-                      : 'password'
-                  }
+                  type={showPwd ? 'text' : 'password'}
                   required
                   value={form.password}
                   onChange={(e) =>
@@ -295,7 +261,7 @@ export default function RegisterPage() {
               )}
             </div>
 
-            {/* Organisation */}
+            {/* ORGANISATION */}
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1.5">
                 Organisation name *
@@ -307,9 +273,7 @@ export default function RegisterPage() {
                 <input
                   type="text"
                   required
-                  value={
-                    form.organizationName
-                  }
+                  value={form.organizationName}
                   onChange={(e) =>
                     update(
                       'organizationName',
@@ -323,7 +287,7 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {/* Terms */}
+            {/* TERMS */}
             <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -352,12 +316,10 @@ export default function RegisterPage() {
               </span>
             </label>
 
-            {/* Submit */}
+            {/* SUBMIT */}
             <button
               type="submit"
-              disabled={
-                loading || !agree
-              }
+              disabled={loading || !agree}
               className="w-full py-3 bg-gradient-to-r from-violet-600 to-indigo-600 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-semibold text-sm transition flex items-center justify-center shadow-lg shadow-violet-500/25"
             >
               {loading ? (
@@ -368,6 +330,7 @@ export default function RegisterPage() {
             </button>
           </form>
 
+          {/* LOGIN LINK */}
           <p className="text-center text-sm text-gray-500 mt-5">
             Already have an account?{' '}
 

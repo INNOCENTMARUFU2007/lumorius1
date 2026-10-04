@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, Shield } from 'lucide-react';
@@ -12,6 +11,7 @@ import { toast } from 'sonner';
 
 export default function LoginPage() {
   const router = useRouter();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
@@ -22,6 +22,7 @@ export default function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+
     setError('');
     setLoading(true);
 
@@ -40,10 +41,7 @@ export default function LoginPage() {
         return;
       }
 
-      setTokens(
-        data.accessToken,
-        data.refreshToken,
-      );
+      setTokens(data.accessToken, data.refreshToken);
 
       router.push('/dashboard');
     } catch (err: any) {
@@ -53,8 +51,7 @@ export default function LoginPage() {
         setError(msg[0]);
       } else {
         setError(
-          msg ??
-            'Sign in failed. Please check your credentials.',
+          msg ?? 'Sign in failed. Please check your credentials.'
         );
       }
     } finally {
@@ -65,63 +62,58 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-gray-950 flex">
 
-      {/* Left — brand panel */}
-      <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-violet-900/50 to-indigo-900/30 border-r border-gray-800 flex-col items-center justify-center p-12">
-        <div className="max-w-xs text-center">
+     {/* Left — brand panel */}
+<div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-violet-900/50 to-indigo-900/30 border-r border-gray-800 items-center justify-center px-12 py-12">
+  <div className="w-full flex flex-col items-center">
 
-          {/* Lumorius Logo */}
-          <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 overflow-hidden bg-gray-900/50 shadow-2xl shadow-violet-500/30">
-            <Image
-              src="/logo.svg"
-              alt="Lumorius AI"
-              width={80}
-              height={80}
-              className="w-full h-full object-contain"
-              priority
-            />
-          </div>
+    {/* LOGO + INFORMATION MASTER COLUMN */}
+    <div className="w-[430px] max-w-full flex flex-col items-center">
 
-          {/* Lumorius Wordmark */}
-          <div className="flex justify-center mb-4">
-            <Image
-              src="/logo-wordmark.svg"
-              alt="Lumorius AI"
-              width={220}
-              height={60}
-              className="h-auto max-w-[220px] object-contain"
-              priority
-            />
-          </div>
-
-          <p className="text-gray-400 text-sm leading-relaxed mb-8">
-            The AI Operating System for modern businesses.
-            10 modules. One unified platform.
-          </p>
-
-          <div className="space-y-3 text-left">
-            {[
-              'Company Brain — instant AI answers from your docs',
-              'Meeting Intelligence — transcription & insights',
-              'Founder OS — KPIs, OKRs, health scoring',
-              'AI Strategy Advisor — GPT-4o / Claude / Gemini',
-            ].map((f) => (
-              <div
-                key={f}
-                className="flex items-start gap-2.5 text-sm text-gray-400"
-              >
-                <div className="w-1.5 h-1.5 rounded-full bg-violet-400 mt-1.5 shrink-0" />
-                {f}
-              </div>
-            ))}
-          </div>
-
-          <p className="text-xs text-gray-600 mt-10">
-            INMARTECH PVT LTD · All rights reserved
-          </p>
-        </div>
+    {/* Official Lumorius Logo */}
+<div className="w-full flex justify-center items-center mb-14 translate-x-8">
+  <img
+    src="/logo-horizontal.svg"
+    alt="Lumorius AI"
+    className="w-[420px] max-w-full h-auto object-contain block"
+  />
+</div>
+      {/* Brand description */}
+      <div className="w-full text-center mb-10">
+        <p className="text-gray-400 text-sm leading-7">
+          The AI Operating System for modern businesses.
+          <br />
+          10 modules. One unified platform.
+        </p>
       </div>
 
-      {/* Right — login form */}
+      {/* Feature information */}
+      <div className="w-[390px] max-w-full mx-auto space-y-4 text-left">
+        {[
+          'Company Brain — instant AI answers from your docs',
+          'Meeting Intelligence — transcription & insights',
+          'Founder OS — KPIs, OKRs, health scoring',
+          'AI Strategy Advisor — GPT-4o / Claude / Gemini',
+        ].map((f) => (
+          <div
+            key={f}
+            className="flex items-start gap-3 text-sm text-gray-400 leading-6"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 mt-[9px] shrink-0" />
+            <span>{f}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Copyright */}
+      <p className="text-xs text-gray-600 mt-14 text-center">
+        INMARTECH PVT LTD · All rights reserved
+      </p>
+
+    </div>
+  </div>
+</div>
+
+      {/* RIGHT — LOGIN FORM */}
       <div className="flex-1 flex items-center justify-center px-4 py-12">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -129,35 +121,18 @@ export default function LoginPage() {
           className="w-full max-w-md"
         >
 
-          {/* Mobile Brand */}
+          {/* MOBILE BRAND */}
           <div className="lg:hidden text-center mb-8">
-            <div className="inline-flex items-center gap-2.5">
-
-              {/* Mobile Logo */}
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center overflow-hidden bg-gray-900">
-                <Image
-                  src="/logo.svg"
-                  alt="Lumorius AI"
-                  width={40}
-                  height={40}
-                  className="w-full h-full object-contain"
-                  priority
-                />
-              </div>
-
-              {/* Mobile Wordmark */}
-              <Image
-                src="/logo-wordmark.svg"
+            <div className="flex justify-center">
+              <img
+                src="/logo-horizontal.svg"
                 alt="Lumorius AI"
-                width={180}
-                height={50}
-                className="h-auto max-w-[180px] object-contain"
-                priority
+                className="w-[210px] sm:w-[230px] h-auto max-w-full object-contain"
               />
-
             </div>
           </div>
 
+          {/* LOGIN CARD */}
           <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
 
             <h1 className="text-2xl font-bold text-white mb-1">
@@ -178,13 +153,11 @@ export default function LoginPage() {
               </div>
             )}
 
-            <form
-              onSubmit={handleLogin}
-              className="space-y-4"
-            >
+            <form onSubmit={handleLogin} className="space-y-4">
+
               {!mfaRequired ? (
                 <>
-                  {/* Email */}
+                  {/* EMAIL */}
                   <div>
                     <label className="block text-xs font-medium text-gray-400 mb-1.5">
                       Email
@@ -197,9 +170,7 @@ export default function LoginPage() {
                         type="email"
                         required
                         value={email}
-                        onChange={(e) =>
-                          setEmail(e.target.value)
-                        }
+                        onChange={(e) => setEmail(e.target.value)}
                         placeholder="you@company.com"
                         autoComplete="email"
                         className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-violet-500 transition placeholder-gray-600"
@@ -207,7 +178,7 @@ export default function LoginPage() {
                     </div>
                   </div>
 
-                  {/* Password */}
+                  {/* PASSWORD */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-medium text-gray-400">
@@ -226,18 +197,10 @@ export default function LoginPage() {
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
 
                       <input
-                        type={
-                          showPwd
-                            ? 'text'
-                            : 'password'
-                        }
+                        type={showPwd ? 'text' : 'password'}
                         required
                         value={password}
-                        onChange={(e) =>
-                          setPassword(
-                            e.target.value,
-                          )
-                        }
+                        onChange={(e) => setPassword(e.target.value)}
                         placeholder="Your password"
                         autoComplete="current-password"
                         className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl pl-10 pr-10 py-3 text-sm focus:outline-none focus:border-violet-500 transition placeholder-gray-600"
@@ -245,9 +208,7 @@ export default function LoginPage() {
 
                       <button
                         type="button"
-                        onClick={() =>
-                          setShowPwd(!showPwd)
-                        }
+                        onClick={() => setShowPwd(!showPwd)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition"
                       >
                         {showPwd ? (
@@ -277,7 +238,7 @@ export default function LoginPage() {
                         setMfaCode(
                           e.target.value
                             .replace(/\D/g, '')
-                            .slice(0, 6),
+                            .slice(0, 6)
                         )
                       }
                       placeholder="000000"
@@ -287,7 +248,7 @@ export default function LoginPage() {
                 </div>
               )}
 
-              {/* Submit */}
+              {/* SUBMIT */}
               <button
                 type="submit"
                 disabled={loading}
@@ -305,7 +266,7 @@ export default function LoginPage() {
 
             {!mfaRequired && (
               <>
-                {/* Divider */}
+                {/* DIVIDER */}
                 <div className="relative my-5">
                   <div className="absolute inset-0 flex items-center">
                     <div className="w-full border-t border-gray-800" />
@@ -318,29 +279,26 @@ export default function LoginPage() {
                   </div>
                 </div>
 
-                {/* Magic Link */}
+                {/* MAGIC LINK */}
                 <button
+                  type="button"
                   onClick={() => {
                     if (!email) {
-                      toast.error(
-                        'Enter your email first',
-                      );
+                      toast.error('Enter your email first');
                       return;
                     }
 
                     api
-                      .post('/auth/magic-link', {
-                        email,
-                      })
+                      .post('/auth/magic-link', { email })
                       .then(() =>
                         toast.success(
-                          `Magic link sent to ${email}`,
-                        ),
+                          `Magic link sent to ${email}`
+                        )
                       )
                       .catch(() =>
                         toast.error(
-                          'Failed to send magic link',
-                        ),
+                          'Failed to send magic link'
+                        )
                       );
                   }}
                   className="w-full py-3 border border-gray-700 hover:bg-gray-800 text-gray-300 rounded-xl font-medium text-sm transition"
@@ -348,7 +306,7 @@ export default function LoginPage() {
                   Send magic link instead
                 </button>
 
-                {/* Register */}
+                {/* REGISTER */}
                 <p className="text-center text-sm text-gray-500 mt-5">
                   Don't have an account?{' '}
 

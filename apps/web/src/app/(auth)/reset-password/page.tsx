@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Image from 'next/image';
 import { motion } from 'framer-motion';
 import {
   Lock,
@@ -42,9 +41,7 @@ function PasswordStrength({
     },
   ];
 
-  const score = checks.filter(
-    (c) => c.pass,
-  ).length;
+  const score = checks.filter((c) => c.pass).length;
 
   const colors = [
     'bg-red-500',
@@ -97,66 +94,57 @@ export default function ResetPasswordPage() {
   const router = useRouter();
   const token = params.get('token');
 
-  const [password, setPassword] =
-    useState('');
-  const [confirm, setConfirm] =
-    useState('');
-  const [showPwd, setShowPwd] =
-    useState(false);
-  const [loading, setLoading] =
-    useState(false);
-  const [error, setError] =
-    useState('');
-  const [success, setSuccess] =
-    useState(false);
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
 
   if (!token) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-        <div className="text-center">
-          {/* Logo */}
-          <div className="flex justify-center mb-6">
-            <Image
-              src="/logo.svg"
-              alt="Lumorius"
-              width={64}
-              height={64}
-              className="w-16 h-16 object-contain"
-              priority
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md text-center"
+        >
+          {/* Official Lumorius Logo */}
+          <div className="flex justify-center mb-8">
+            <img
+              src="/logo-horizontal.svg"
+              alt="Lumorius AI"
+              className="w-[280px] sm:w-[320px] h-auto max-w-[90%] object-contain"
             />
           </div>
 
-          <p className="text-gray-400">
-            Invalid reset link.
-          </p>
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+            <p className="text-gray-400 mb-4">
+              Invalid reset link.
+            </p>
 
-          <Link
-            href="/forgot-password"
-            className="text-violet-400 text-sm mt-2 inline-block"
-          >
-            Request a new one →
-          </Link>
-        </div>
+            <Link
+              href="/forgot-password"
+              className="text-violet-400 text-sm hover:text-violet-300 transition"
+            >
+              Request a new one →
+            </Link>
+          </div>
+        </motion.div>
       </div>
     );
   }
 
-  const handleSubmit = async (
-    e: React.FormEvent,
-  ) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (password !== confirm) {
-      setError(
-        'Passwords do not match',
-      );
+      setError('Passwords do not match');
       return;
     }
 
     if (password.length < 8) {
-      setError(
-        'Password must be at least 8 characters',
-      );
+      setError('Password must be at least 8 characters');
       return;
     }
 
@@ -164,20 +152,14 @@ export default function ResetPasswordPage() {
     setLoading(true);
 
     try {
-      await api.post(
-        '/auth/reset-password',
-        {
-          token,
-          newPassword: password,
-        },
-      );
+      await api.post('/auth/reset-password', {
+        token,
+        newPassword: password,
+      });
 
       setSuccess(true);
 
-      setTimeout(
-        () => router.push('/login'),
-        3000,
-      );
+      setTimeout(() => router.push('/login'), 3000);
     } catch (err: any) {
       setError(
         err?.response?.data?.message ??
@@ -189,7 +171,7 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4 py-8 sm:py-10">
       <motion.div
         initial={{
           opacity: 0,
@@ -199,36 +181,26 @@ export default function ResetPasswordPage() {
           opacity: 1,
           y: 0,
         }}
+        transition={{ duration: 0.45 }}
         className="w-full max-w-md"
       >
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-3">
-            {/* Lumorius Symbol */}
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center overflow-hidden bg-gray-900">
-              <Image
-                src="/logo.svg"
-                alt="Lumorius"
-                width={40}
-                height={40}
-                className="w-full h-full object-contain"
-                priority
-              />
-            </div>
-
-            {/* Lumorius Wordmark */}
-            <Image
-              src="/logo-wordmark.svg"
-              alt="Lumorius"
-              width={180}
-              height={50}
-              className="h-auto max-w-[180px] object-contain"
-              priority
+        {/* Official Lumorius Branding */}
+        <div className="text-center mb-6">
+          <div className="flex justify-center mb-4">
+            <img
+              src="/logo-horizontal.svg"
+              alt="Lumorius AI"
+              className="w-[300px] sm:w-[340px] h-auto max-w-[92%] object-contain"
             />
           </div>
+
+          <p className="text-gray-500 text-sm">
+            AI Operating System · INMARTECH PVT LTD
+          </p>
         </div>
 
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+        {/* RESET PASSWORD CARD */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-7 sm:p-8 shadow-2xl shadow-black/20">
           {success ? (
             <div className="text-center">
               <motion.div
@@ -291,17 +263,11 @@ export default function ResetPasswordPage() {
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
 
                     <input
-                      type={
-                        showPwd
-                          ? 'text'
-                          : 'password'
-                      }
+                      type={showPwd ? 'text' : 'password'}
                       required
                       value={password}
                       onChange={(e) =>
-                        setPassword(
-                          e.target.value,
-                        )
+                        setPassword(e.target.value)
                       }
                       placeholder="Min. 8 characters"
                       autoComplete="new-password"
@@ -311,9 +277,7 @@ export default function ResetPasswordPage() {
                     <button
                       type="button"
                       onClick={() =>
-                        setShowPwd(
-                          !showPwd,
-                        )
+                        setShowPwd(!showPwd)
                       }
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition"
                     >
@@ -346,9 +310,7 @@ export default function ResetPasswordPage() {
                       required
                       value={confirm}
                       onChange={(e) =>
-                        setConfirm(
-                          e.target.value,
-                        )
+                        setConfirm(e.target.value)
                       }
                       placeholder="Repeat password"
                       autoComplete="new-password"
@@ -356,13 +318,11 @@ export default function ResetPasswordPage() {
                     />
                   </div>
 
-                  {confirm &&
-                    password !==
-                      confirm && (
-                      <p className="text-xs text-red-400 mt-1">
-                        Passwords do not match
-                      </p>
-                    )}
+                  {confirm && password !== confirm && (
+                    <p className="text-xs text-red-400 mt-1">
+                      Passwords do not match
+                    </p>
+                  )}
                 </div>
 
                 {/* Submit */}
