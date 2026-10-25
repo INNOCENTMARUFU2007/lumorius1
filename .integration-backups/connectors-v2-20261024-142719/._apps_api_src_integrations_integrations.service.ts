@@ -1,0 +1,363 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createCipheriv, createHash, randomBytes } from 'crypto';
+import { DatabaseService } from '../database/database.service';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
+
+type OAuthVendor = 'google' | 'microsoft';
+type IntegrationStatus = 'connected' | 'not_connected' | 'setup_required' | 'coming_soon' | 'managed';
+interface ConnectorDefinition {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  emoji: string;
+  vendor?: OAuthVendor;
+  scopes?: string[];
+  platformOnly?: boolean;
+}
+export interface IntegrationListItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  emoji: string;
+  vendor?: OAuthVendor;
+  scopes?: string[];
+  status: IntegrationStatus;
+  statusText: string;
+  accountEmail: string | null;
+  lastSyncedAt: Date | string | null;
+  canManage: boolean;
+  canConnect: boolean;
+  canDisconnect: boolean;
+  platformOnly?: boolean;
+}
+
+export interface IntegrationListItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  emoji: string;
+  vendor?: OAuthVendor;
+  scopes?: string[];
+  status: IntegrationStatus;
+  statusText: string;
+  accountEmail: string | null;
+  lastSyncedAt: Date | string | null;
+  canManage: boolean;
+  canConnect: boolean;
+  canDisconnect: boolean;
+  platformOnly?: boolean;
+}
+
+interface StoredConnection {
+  provider: string;
+  status: string;
+  account_email: string | null;
+  last_synced_at: Date | string | null;
+}
+interface OAuthStateRow {
+  organization_id: string;
+  user_id: string;
+}
+
+const CONNECTORS: ConnectorDefinition[] = [
+  {
+    id: 'google-drive', name: 'Google Drive', category: 'Storage', emoji: 'ðŸ“', vendor: 'google',
+    scopes: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.readonly'],
+    description: 'Authorize read-only access to Drive. Account connection works after OAuth setup; indexing/sync still needs its connector worker.',
+  },
+  {
+    id: 'gmail', name: 'Gmail', category: 'Email', emoji: 'âœ‰ï¸', vendor: 'google',
+    scopes: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/gmail.readonly'],
+    description: 'Authorize read-only mailbox access. This saves the connection securely; mailbox import/sync is a separate step.',
+  },
+  {
+    id: 'onedrive', name: 'Microsoft OneDrive', category: 'Storage', emoji: 'â˜ï¸', vendor: 'microsoft',
+    scopes: ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Files.Read.All'],
+    description: 'Authorize Microsoft file access. Account connection works after OAuth setup; indexing/sync still needs its connector worker.',
+  },
+  {
+    id: 'outlook-mail', name: 'Outlook / Microsoft 365 Email', category: 'Email', emoji: 'ðŸ“¨', vendor: 'microsoft',
+    scopes: ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Mail.Read'],
+    description: 'Authorize read-only Microsoft 365 mail access. This saves the connection securely; mailbox import/sync is a separate step.',
+  },
+  { id: 'slack', name: 'Slack', category: 'Communication', emoji: 'ðŸ’¬', description: 'Slack channel sync is not enabled yet.' },
+  { id: 'notion', name: 'Notion', category: 'Knowledge', emoji: 'ðŸ“', description: 'Notion sync is not enabled yet.' },
+  { id: 'github', name: 'GitHub', category: 'Development', emoji: 'ðŸ™', description: 'GitHub repositories and pull-request sync are not enabled yet.' },
+  { id: 'jira', name: 'Jira', category: 'Project Management', emoji: 'ðŸ“‹', description: 'Jira sync is not enabled yet.' },
+  { id: 'google-meet', name: 'Google Meet', category: 'Meetings', emoji: 'ðŸ“¹', description: 'Google Meet import is not enabled yet.' },
+  { id: 'zoom', name: 'Zoom', category: 'Meetings', emoji: 'ðŸŽ¥', description: 'Zoom import is not enabled yet.' },
+  { id: 'hubspot', name: 'HubSpot', category: 'CRM', emoji: 'ðŸ§¡', description: 'HubSpot sync is not enabled yet.' },
+  { id: 'salesforce', name: 'Salesforce', category: 'CRM', emoji: 'â˜ï¸', description: 'Salesforce sync is not enabled yet.' },
+  { id: 'linear', name: 'Linear', category: 'Project Management', emoji: 'ðŸ“', description: 'Linear sync is not enabled yet.' },
+  { id: 'dropbox', name: 'Dropbox', category: 'Storage', emoji: 'ðŸ“¦', description: 'Dropbox sync is not enabled yet.' },
+  { id: 'zapier', name: 'Zapier', category: 'Automation', emoji: 'âš¡', description: 'Zapier actions are not enabled yet.' },
+  { id: 'make', name: 'Make', category: 'Automation', emoji: 'ðŸ”„', description: 'Make scenarios are not enabled yet.' },
+  { id: 'intercom', name: 'Intercom', category: 'Support', emoji: 'ðŸ’­', description: 'Intercom sync is not enabled yet.' },
+  { id: 'pagerduty', name: 'PagerDuty', category: 'Monitoring', emoji: 'ðŸš¨', description: 'PagerDuty alerts are not enabled yet.' },
+  { id: 'datadog', name: 'Datadog', category: 'Monitoring', emoji: 'ðŸ“Š', description: 'Datadog ingestion is not enabled yet.' },
+];
+
+@Injectable()
+export class IntegrationsService {
+  private readonly logger = new Logger(IntegrationsService.name);
+
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly config: ConfigService,
+  ) {}
+
+  async listForUser(user: JwtPayload) {
+    const connectionResult = await this.db.query<StoredConnection>(
+      `SELECT provider, status, account_email, last_synced_at
+       FROM integration_connections WHERE organization_id = $1`,
+      [user.organizationId],
+    );
+    const connections = new Map(connectionResult.rows.map((row) => [row.provider, row]));
+    const canManage = ['owner', 'admin'].includes(String(user.role || '').toLowerCase());
+
+    const result: IntegrationListItem[] = CONNECTORS.map((connector) => {
+      const saved = connections.get(connector.id);
+      const ready = connector.vendor ? this.oauthConfigured(connector.vendor) : false;
+      let status: IntegrationStatus;
+      let statusText: string;
+      if (saved?.status === 'connected') {
+        status = 'connected';
+        statusText = 'Account authorised; content sync is not enabled yet.';
+      } else if (connector.vendor && ready) {
+        status = 'not_connected';
+        statusText = canManage ? 'Ready to connect' : 'An organisation owner or admin must connect this account.';
+      } else if (connector.vendor) {
+        status = 'setup_required';
+        statusText = 'Configure provider OAuth credentials and INTEGRATION_ENCRYPTION_KEY on the API server.';
+      } else {
+        status = 'coming_soon';
+        statusText = 'This connector is listed for planning but is not implemented yet.';
+      }
+      return {
+        ...connector,
+        status,
+        statusText,
+        accountEmail: saved?.account_email ?? null,
+        lastSyncedAt: saved?.last_synced_at ?? null,
+        canManage,
+        canConnect: Boolean(connector.vendor && ready && canManage && !saved),
+        canDisconnect: Boolean(saved && canManage),
+      };
+    });
+
+    // Stripe here means Lumorius's own subscription billing configuration, not a customer connector.
+    // It is visible only to an owner/admin in the explicitly configured Lumorius platform organisation.
+    const platformOrgId = String(process.env.LUMORIUS_PLATFORM_ORGANIZATION_ID || '').trim();
+    if (platformOrgId && user.organizationId === platformOrgId && canManage) {
+      const stripeConfigured = Boolean(this.config.get<string>('stripe.secretKey'));
+      result.push({
+        id: 'stripe',
+        name: 'Stripe â€” Lumorius Platform Billing',
+        category: 'Platform',
+        description: 'Platform-level subscription payments are managed by the Lumorius API environment. This card is not a tenant Stripe connector.',
+        emoji: 'ðŸ’³',
+        status: stripeConfigured ? 'managed' as IntegrationStatus : 'setup_required' as IntegrationStatus,
+        statusText: stripeConfigured ? 'Managed by Lumorius platform billing; cannot be disconnected here.' : 'Configure STRIPE_SECRET_KEY on the Lumorius API server.',
+        accountEmail: null,
+        lastSyncedAt: null,
+        canManage: true,
+        canConnect: false,
+        canDisconnect: false,
+        platformOnly: true,
+      });
+    }
+    return result;
+  }
+
+  async beginConnect(user: JwtPayload, provider: string) {
+    this.assertCanManage(user.role);
+    const connector = this.getOAuthConnector(provider);
+    if (!this.oauthConfigured(connector.vendor!)) {
+      throw new ServiceUnavailableException('This connector requires OAuth client credentials and INTEGRATION_ENCRYPTION_KEY in the API environment.');
+    }
+    const { clientId } = this.getOAuthClient(connector.vendor!);
+    const redirectUri = this.callbackUri(provider);
+    const state = randomBytes(32).toString('base64url');
+    await this.db.query('DELETE FROM integration_oauth_states WHERE expires_at <= NOW()');
+    await this.db.query(
+      `INSERT INTO integration_oauth_states (state_hash, provider, organization_id, user_id, expires_at)
+       VALUES ($1, $2, $3, $4, NOW() + INTERVAL '10 minutes')`,
+      [this.hashState(state), provider, user.organizationId, user.sub],
+    );
+
+    const authorizeEndpoint = connector.vendor === 'google'
+      ? 'https://accounts.google.com/o/oauth2/v2/auth'
+      : 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
+    const url = new URL(authorizeEndpoint);
+    url.searchParams.set('client_id', clientId);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('scope', (connector.scopes ?? []).join(' '));
+    url.searchParams.set('state', state);
+    if (connector.vendor === 'google') {
+      url.searchParams.set('access_type', 'offline');
+      url.searchParams.set('prompt', 'consent');
+      url.searchParams.set('include_granted_scopes', 'true');
+    } else {
+      url.searchParams.set('response_mode', 'query');
+    }
+    return { authUrl: url.toString() };
+  }
+
+  async disconnect(user: JwtPayload, provider: string) {
+    this.assertCanManage(user.role);
+    if (provider === 'stripe' || provider === 'google-meet' || provider === 'email-notifications') {
+      throw new BadRequestException('This is not a removable organisation-level connection.');
+    }
+    if (!CONNECTORS.some((item) => item.id === provider && item.vendor)) {
+      throw new BadRequestException('This connector is not currently supported for connect/disconnect.');
+    }
+    const deleted = await this.db.query(
+      `DELETE FROM integration_connections
+       WHERE organization_id = $1 AND provider = $2
+       RETURNING id`,
+      [user.organizationId, provider],
+    );
+    return { disconnected: deleted.rowCount === 1, provider };
+  }
+
+  async completeOAuth(provider: string, code: string | undefined, state: string | undefined, providerError?: string) {
+    if (!state) throw new BadRequestException('OAuth state is missing.');
+    const connector = this.getOAuthConnector(provider);
+    const stateResult = await this.db.query<OAuthStateRow>(
+      `DELETE FROM integration_oauth_states
+       WHERE state_hash = $1 AND provider = $2 AND expires_at > NOW()
+       RETURNING organization_id, user_id`,
+      [this.hashState(state), provider],
+    );
+    const savedState = stateResult.rows[0];
+    if (!savedState) throw new BadRequestException('OAuth state is invalid or expired. Restart the connection flow.');
+    if (providerError) throw new BadRequestException('The provider did not approve the connection.');
+    if (!code) throw new BadRequestException('OAuth authorisation code is missing.');
+
+    const client = this.getOAuthClient(connector.vendor!);
+    const redirectUri = this.callbackUri(provider);
+    const tokenEndpoint = connector.vendor === 'google'
+      ? 'https://oauth2.googleapis.com/token'
+      : 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+    const tokenBody = new URLSearchParams({
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri,
+    });
+    if (connector.vendor === 'microsoft') {
+      tokenBody.set('scope', (connector.scopes ?? []).join(' '));
+    }
+    const tokenResponse = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenBody.toString(),
+    });
+    const tokenPayload = await tokenResponse.json() as Record<string, unknown>;
+    if (!tokenResponse.ok || typeof tokenPayload.access_token !== 'string') {
+      this.logger.warn(`OAuth token exchange failed for ${provider} (HTTP ${tokenResponse.status}).`);
+      throw new ServiceUnavailableException('The provider token exchange failed. Check OAuth credentials and redirect URI.');
+    }
+
+    const profileUrl = connector.vendor === 'google'
+      ? 'https://www.googleapis.com/oauth2/v2/userinfo'
+      : 'https://graph.microsoft.com/v1.0/me?$select=displayName,mail,userPrincipalName';
+    const profileResponse = await fetch(profileUrl, {
+      headers: { Authorization: `Bearer ${String(tokenPayload.access_token)}` },
+    });
+    if (!profileResponse.ok) {
+      this.logger.warn(`OAuth profile lookup failed for ${provider} (HTTP ${profileResponse.status}).`);
+      throw new ServiceUnavailableException('The provider account could not be verified. Try connecting again.');
+    }
+    const profile = await profileResponse.json() as Record<string, unknown>;
+    const email = String(profile.email || profile.mail || profile.userPrincipalName || '').trim() || null;
+    const encryptedCredentials = this.encrypt(JSON.stringify(tokenPayload));
+    const scopes = typeof tokenPayload.scope === 'string'
+      ? String(tokenPayload.scope).split(/\s+/).filter(Boolean)
+      : (connector.scopes ?? []);
+
+    await this.db.query(
+      `INSERT INTO integration_connections
+         (organization_id, provider, status, account_email, encrypted_credentials, scopes, connected_by_user_id, updated_at)
+       VALUES ($1, $2, 'connected', $3, $4, $5, $6, NOW())
+       ON CONFLICT (organization_id, provider) DO UPDATE SET
+         status = 'connected', account_email = EXCLUDED.account_email,
+         encrypted_credentials = EXCLUDED.encrypted_credentials, scopes = EXCLUDED.scopes,
+         connected_by_user_id = EXCLUDED.connected_by_user_id, last_error = NULL, updated_at = NOW()`,
+      [savedState.organization_id, provider, email, encryptedCredentials, scopes, savedState.user_id],
+    );
+    return this.resultRedirect(provider, 'connected');
+  }
+
+  resultRedirect(provider: string, status: 'connected' | 'error') {
+    const appUrl = this.config.get<string>('appUrl', 'http://localhost:3000');
+    const url = new URL('/integrations', appUrl);
+    url.searchParams.set('integrationStatus', status);
+    url.searchParams.set('provider', /^[a-z-]+$/.test(provider) ? provider : 'unknown');
+    return url.toString();
+  }
+
+  private assertCanManage(role: string) {
+    if (!['owner', 'admin'].includes(String(role || '').toLowerCase())) {
+      throw new ForbiddenException('Only an organisation owner or admin can manage integrations.');
+    }
+  }
+
+  private getOAuthConnector(provider: string): ConnectorDefinition & { vendor: OAuthVendor } {
+    const connector = CONNECTORS.find((item) => item.id === provider && item.vendor);
+    if (!connector || !connector.vendor) {
+      throw new BadRequestException('This integration does not have a working OAuth connector yet.');
+    }
+    return connector as ConnectorDefinition & { vendor: OAuthVendor };
+  }
+
+  private getOAuthClient(vendor: OAuthVendor) {
+    const clientId = vendor === 'google'
+      ? this.config.get<string>('oauth.google.clientId', '')
+      : this.config.get<string>('oauth.microsoft.clientId', '');
+    const clientSecret = vendor === 'google'
+      ? this.config.get<string>('oauth.google.clientSecret', '')
+      : this.config.get<string>('oauth.microsoft.clientSecret', '');
+    return { clientId: clientId.trim(), clientSecret: clientSecret.trim() };
+  }
+
+  private oauthConfigured(vendor: OAuthVendor) {
+    const client = this.getOAuthClient(vendor);
+    const key = process.env.INTEGRATION_ENCRYPTION_KEY || '';
+    return Boolean(client.clientId && client.clientSecret && /^[a-fA-F0-9]{64}$/.test(key));
+  }
+
+  private callbackUri(provider: string) {
+    const base = String(process.env.INTEGRATIONS_API_BASE_URL || 'http://localhost:3001/api/v1').replace(/\/+$/, '');
+    return `${base}/integrations/${provider}/callback`;
+  }
+
+  private hashState(state: string) {
+    return createHash('sha256').update(state).digest('hex');
+  }
+
+  private encrypt(plainText: string) {
+    const keyHex = process.env.INTEGRATION_ENCRYPTION_KEY || '';
+    if (!/^[a-fA-F0-9]{64}$/.test(keyHex)) {
+      throw new ServiceUnavailableException('INTEGRATION_ENCRYPTION_KEY must be a 64-character hex key on the API server.');
+    }
+    const key = Buffer.from(keyHex, 'hex');
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`;
+  }
+}

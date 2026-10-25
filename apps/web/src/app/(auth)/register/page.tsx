@@ -14,7 +14,7 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import api from '@/lib/api';
-import { setTokens } from '@/lib/auth';
+import { setTokens, getAuthDestination } from '@/lib/auth';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -46,28 +46,45 @@ export default function RegisterPage() {
       return;
     }
 
+    const name = `${form.firstName.trim()} ${form.lastName.trim()}`.trim();
+
+    if (name.length < 2) {
+      setError('Please enter your name.');
+      return;
+    }
+
     setError('');
     setLoading(true);
 
     try {
-      const res = await api.post('/auth/register', form);
+      const res = await api.post('/auth/register', {
+        name,
+        email: form.email.trim(),
+        password: form.password,
+        organizationName: form.organizationName.trim() || undefined,
+      });
 
-      const data = res.data.data;
+      const data = res.data?.data;
 
-      setTokens(
-        data.accessToken,
-        data.refreshToken,
-      );
+      if (!data?.accessToken || !data?.refreshToken) {
+        throw new Error(
+          'Registration succeeded or returned an unexpected response, but authentication tokens were missing. Please check the API response.'
+        );
+      }
 
-      router.push('/dashboard');
+      setTokens(data.accessToken, data.refreshToken);
+
+      router.replace(getAuthDestination(data.user));
     } catch (err: any) {
       const msg = err?.response?.data?.message;
 
       if (Array.isArray(msg)) {
-        setError(msg[0]);
+        setError(msg.join(', '));
       } else {
         setError(
-          msg ?? 'Registration failed. Please try again.',
+          msg ??
+            err?.message ??
+            'Registration failed. Please check your connection and try again.'
         );
       }
     } finally {
@@ -89,19 +106,19 @@ export default function RegisterPage() {
         className="w-full max-w-md"
       >
         {/* BRANDING */}
-<div className="text-center mb-6">
-  <div className="flex justify-center mb-4 translate-x-14">
-    <img
-      src="/logo-horizontal.svg"
-      alt="Lumorius AI"
-      className="w-[340px] sm:w-[370px] h-auto max-w-[92%] object-contain"
-    />
-  </div>
+        <div className="text-center mb-6">
+          <div className="flex justify-center mb-4 translate-x-14">
+            <img
+              src="/logo-horizontal.svg"
+              alt="Lumorius AI"
+              className="w-[340px] sm:w-[370px] h-auto max-w-[92%] object-contain"
+            />
+          </div>
 
-  <p className="text-gray-500 text-sm">
-    AI Operating System · INMARTECH PVT LTD
-  </p>
-</div>
+          <p className="text-gray-500 text-sm">
+            AI Operating System · INMARTECH PVT LTD
+          </p>
+        </div>
 
         {/* REGISTRATION CARD */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-7 sm:p-8 shadow-2xl shadow-black/20">
@@ -114,15 +131,15 @@ export default function RegisterPage() {
           </p>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+            <div
+              role="alert"
+              className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm"
+            >
               {error}
             </div>
           )}
 
-          <form
-            onSubmit={handleSubmit}
-            className="space-y-4"
-          >
+          <form onSubmit={handleSubmit} className="space-y-4">
             {/* NAME */}
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -138,10 +155,7 @@ export default function RegisterPage() {
                     required
                     value={form.firstName}
                     onChange={(e) =>
-                      update(
-                        'firstName',
-                        e.target.value,
-                      )
+                      update('firstName', e.target.value)
                     }
                     placeholder="Jane"
                     autoComplete="given-name"
@@ -159,10 +173,7 @@ export default function RegisterPage() {
                   type="text"
                   value={form.lastName}
                   onChange={(e) =>
-                    update(
-                      'lastName',
-                      e.target.value,
-                    )
+                    update('lastName', e.target.value)
                   }
                   placeholder="Doe"
                   autoComplete="family-name"
@@ -185,10 +196,7 @@ export default function RegisterPage() {
                   required
                   value={form.email}
                   onChange={(e) =>
-                    update(
-                      'email',
-                      e.target.value,
-                    )
+                    update('email', e.target.value)
                   }
                   placeholder="jane@company.com"
                   autoComplete="email"
@@ -211,10 +219,7 @@ export default function RegisterPage() {
                   required
                   value={form.password}
                   onChange={(e) =>
-                    update(
-                      'password',
-                      e.target.value,
-                    )
+                    update('password', e.target.value)
                   }
                   placeholder="Min. 8 characters"
                   autoComplete="new-password"
@@ -223,9 +228,8 @@ export default function RegisterPage() {
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setShowPwd(!showPwd)
-                  }
+                  onClick={() => setShowPwd(!showPwd)}
+                  aria-label={showPwd ? 'Hide password' : 'Show password'}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition"
                 >
                   {showPwd ? (
@@ -275,10 +279,7 @@ export default function RegisterPage() {
                   required
                   value={form.organizationName}
                   onChange={(e) =>
-                    update(
-                      'organizationName',
-                      e.target.value,
-                    )
+                    update('organizationName', e.target.value)
                   }
                   placeholder="Acme Inc."
                   autoComplete="organization"
@@ -292,9 +293,7 @@ export default function RegisterPage() {
               <input
                 type="checkbox"
                 checked={agree}
-                onChange={(e) =>
-                  setAgree(e.target.checked)
-                }
+                onChange={(e) => setAgree(e.target.checked)}
                 className="mt-0.5 w-4 h-4 accent-violet-600 cursor-pointer"
               />
 
@@ -333,7 +332,6 @@ export default function RegisterPage() {
           {/* LOGIN LINK */}
           <p className="text-center text-sm text-gray-500 mt-5">
             Already have an account?{' '}
-
             <Link
               href="/login"
               className="text-violet-400 hover:text-violet-300 font-medium transition"

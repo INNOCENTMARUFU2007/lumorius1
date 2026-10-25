@@ -1,4 +1,4 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { NotificationsService } from './notifications.service';
 import {
   createMockDatabaseService,
@@ -9,7 +9,7 @@ import {
 } from '../test/helpers';
 
 jest.mock('uuid', () => ({
-  v4: jest.fn().mockReturnValue(FIXED_UUID),
+  v4: jest.fn().mockReturnValue('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'),
 }));
 
 describe('NotificationsService', () => {
@@ -38,7 +38,7 @@ describe('NotificationsService', () => {
     jest.clearAllMocks();
   });
 
-  // ── create ────────────────────────────────────────────────
+  // â”€â”€ create â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('create()', () => {
     it('inserts notification and returns the new id', async () => {
@@ -56,7 +56,7 @@ describe('NotificationsService', () => {
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO notifications'),
         [FIXED_UUID, FIXED_UUID, FIXED_UUID_2, 'task_assigned', 'New task: Write tests',
-         'Assigned by Alice', JSON.stringify({ taskId: FIXED_UUID })],
+         'Assigned by Alice', null, JSON.stringify({ taskId: FIXED_UUID })],
       );
       expect(result).toEqual({ id: FIXED_UUID });
     });
@@ -78,7 +78,7 @@ describe('NotificationsService', () => {
     });
   });
 
-  // ── findAll ───────────────────────────────────────────────
+  // â”€â”€ findAll â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('findAll()', () => {
     it('returns all notifications for a user', async () => {
@@ -119,39 +119,41 @@ describe('NotificationsService', () => {
     });
   });
 
-  // ── markRead ─────────────────────────────────────────────
+  // â”€â”€ markRead â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('markRead()', () => {
     it('marks a specific notification as read', async () => {
-      db.query.mockResolvedValueOnce(pgResult([]));
+      db.query.mockResolvedValueOnce(pgResult([{ id: FIXED_UUID_2 }]));
 
       const result = await service.markRead(FIXED_UUID, FIXED_UUID_2);
 
-      expect(db.query).toHaveBeenCalledWith(
-        'UPDATE notifications SET read_at = NOW() WHERE id = $1 AND user_id = $2',
-        [FIXED_UUID_2, FIXED_UUID],
+      const updateSql = db.query.mock.calls[0][0] as string;
+      expect(updateSql.replace(/\s+/g, ' ').trim()).toBe(
+        'UPDATE notifications SET read_at = COALESCE(read_at, NOW()) WHERE id = $1 AND user_id = $2 RETURNING id',
       );
+      expect(db.query.mock.calls[0][1]).toEqual([FIXED_UUID_2, FIXED_UUID]);
       expect(result).toEqual({ read: true });
     });
   });
 
-  // ── markAllRead ───────────────────────────────────────────
+  // â”€â”€ markAllRead â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('markAllRead()', () => {
     it('marks all unread notifications as read for the user', async () => {
-      db.query.mockResolvedValueOnce(pgResult([]));
+      db.query.mockResolvedValueOnce({ ...pgResult([]), rowCount: 4 });
 
       const result = await service.markAllRead(FIXED_UUID);
 
-      expect(db.query).toHaveBeenCalledWith(
+      const updateSql = db.query.mock.calls[0][0] as string;
+      expect(updateSql.replace(/\s+/g, ' ').trim()).toBe(
         'UPDATE notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL',
-        [FIXED_UUID],
       );
-      expect(result).toEqual({ read: true });
+      expect(db.query.mock.calls[0][1]).toEqual([FIXED_UUID]);
+      expect(result).toEqual({ read: true, updated: 4 });
     });
   });
 
-  // ── getUnreadCount ────────────────────────────────────────
+  // â”€â”€ getUnreadCount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('getUnreadCount()', () => {
     it('returns the unread notification count', async () => {
@@ -160,10 +162,11 @@ describe('NotificationsService', () => {
       const result = await service.getUnreadCount(FIXED_UUID);
 
       expect(result).toEqual({ count: 7 });
-      expect(db.query).toHaveBeenCalledWith(
-        'SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND read_at IS NULL',
-        [FIXED_UUID],
+      const countSql = db.query.mock.calls[0][0] as string;
+      expect(countSql.replace(/\s+/g, ' ').trim()).toBe(
+        'SELECT COUNT(*) AS count FROM notifications WHERE user_id = $1 AND read_at IS NULL',
       );
+      expect(db.query.mock.calls[0][1]).toEqual([FIXED_UUID]);
     });
 
     it('returns 0 when there are no unread notifications', async () => {
@@ -183,3 +186,5 @@ describe('NotificationsService', () => {
     });
   });
 });
+
+

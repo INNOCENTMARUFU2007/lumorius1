@@ -40,6 +40,25 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
         if (!user) {
             throw new common_1.UnauthorizedException('User not found or inactive');
         }
+        const sessionId = payload.sid;
+        if (!sessionId) {
+            throw new common_1.UnauthorizedException('Session is not bound to a device. Please sign in again.');
+        }
+        const session = await this.db.findOne('sessions', { id: sessionId, user_id: payload.sub, is_valid: true });
+        if (!session ||
+            !session.expires_at ||
+            new Date(String(session.expires_at)).getTime() <= Date.now()) {
+            throw new common_1.UnauthorizedException('Session revoked or expired. Please sign in again.');
+        }
+        const tokenCutoff = user.tokens_valid_after;
+        if (tokenCutoff) {
+            const cutoffMs = new Date(String(tokenCutoff)).getTime();
+            const issuedAt = payload.iat;
+            const cutoffSeconds = Math.floor(cutoffMs / 1000);
+            if (!Number.isFinite(cutoffMs) || typeof issuedAt !== 'number' || issuedAt <= cutoffSeconds) {
+                throw new common_1.UnauthorizedException('Session revoked. Please sign in again.');
+            }
+        }
         return payload;
     }
 };

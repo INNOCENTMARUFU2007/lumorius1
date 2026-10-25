@@ -7,12 +7,17 @@ export declare class DocumentsController {
         teamId?: string;
         tags?: string;
     }): Promise<Record<string, unknown>>;
-    findAll(user: JwtPayload, search?: string, status?: string, type?: string, teamId?: string, page?: number, pageSize?: number): Promise<{
+    findAll(user: JwtPayload, search?: string, status?: string, type?: string, teamId?: string, page?: string, pageSize?: string): Promise<{
         data: Record<string, unknown>[];
         total: number;
         page: number;
         pageSize: number;
         totalPages: number;
+    }>;
+    getSearchFacets(user: JwtPayload): Promise<{
+        types: Record<string, unknown>[];
+        tags: Record<string, unknown>[];
+        total: number;
     }>;
     findOne(user: JwtPayload, id: string): Promise<Record<string, unknown>>;
     getDownloadUrl(user: JwtPayload, id: string): Promise<{
@@ -26,11 +31,20 @@ export declare class DocumentsController {
         query: string;
         documentIds?: string[];
         topK?: number;
+        type?: string;
+        tag?: string;
+        createdAfter?: string;
+        teamId?: string;
+        myHistory?: boolean;
     }): Promise<Record<string, unknown>[]>;
     ask(user: JwtPayload, body: {
         question: string;
         documentIds?: string[];
         teamId?: string;
+        type?: string;
+        tag?: string;
+        createdAfter?: string;
+        myHistory?: boolean;
     }): Promise<{
         answer: string;
         sources: {
@@ -39,6 +53,10 @@ export declare class DocumentsController {
             documentName: unknown;
             content: string;
             score: unknown;
+            type: unknown;
+            tags: unknown;
+            createdAt: unknown;
+            teamId: unknown;
         }[];
         confidence: unknown;
     }>;

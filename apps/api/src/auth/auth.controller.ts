@@ -455,11 +455,11 @@ export class AuthController {
   @ApiOperation({
     summary: 'Get current authenticated user',
   })
-  async me(
-    @CurrentUser() user: JwtPayload,
-  ) {
-    return user;
-  }
+ async me(
+  @CurrentUser() user: JwtPayload,
+) {
+  return this.authService.getCurrentUser(user.sub);
+}
 
   /**
    * Compatibility method for the existing test suite.

@@ -13,7 +13,7 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 -- ── ENUMS ────────────────────────────────────────────────────
 
 CREATE TYPE user_role AS ENUM ('owner', 'admin', 'manager', 'member', 'viewer', 'super_admin');
-CREATE TYPE plan_tier AS ENUM ('starter', 'growth', 'enterprise', 'custom');
+CREATE TYPE plan_tier AS ENUM ('free', 'starter', 'professional', 'enterprise', 'growth', 'custom');
 CREATE TYPE subscription_status AS ENUM ('trialing', 'active', 'past_due', 'canceled', 'unpaid', 'incomplete');
 CREATE TYPE invoice_status AS ENUM ('draft', 'open', 'paid', 'void', 'uncollectible');
 CREATE TYPE document_status AS ENUM ('uploading', 'processing', 'indexed', 'failed');
@@ -42,7 +42,7 @@ CREATE TABLE organizations (
   website        TEXT,
   industry       TEXT,
   size           TEXT,
-  plan_id        plan_tier   NOT NULL DEFAULT 'starter',
+  plan_id        plan_tier   NOT NULL DEFAULT 'free',
   trial_ends_at  TIMESTAMPTZ,
   settings       JSONB       NOT NULL DEFAULT '{}',
   metadata       JSONB       NOT NULL DEFAULT '{}',
@@ -64,6 +64,7 @@ CREATE TABLE users (
   role                  user_role   NOT NULL DEFAULT 'member',
   organization_id       UUID        REFERENCES organizations(id) ON DELETE SET NULL,
   email_verified        BOOLEAN     NOT NULL DEFAULT FALSE,
+  onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,
   is_active             BOOLEAN     NOT NULL DEFAULT TRUE,
   mfa_enabled           BOOLEAN     NOT NULL DEFAULT FALSE,
   mfa_secret            TEXT,
@@ -314,16 +315,29 @@ CREATE TABLE billing_plans (
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-INSERT INTO billing_plans (id, name, tier, price_monthly, price_yearly, features, limits) VALUES
-  ('starter',    'Starter',    'starter',    0,    0,
+INSERT INTO billing_plans
+  (id, name, tier, price_monthly, price_yearly, features, limits, is_active)
+VALUES
+  ('free', 'Free', 'free', 0.00, 0.00,
    '{"ai_chat":true,"documents":true,"tasks":true}',
-   '{"users":3,"documents":50,"ai_tokens_monthly":100000,"storage_gb":5}'),
-  ('growth',     'Growth',     'growth',     79,   758,
-   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true,"analytics":true,"workflows":true}',
-   '{"users":25,"documents":500,"ai_tokens_monthly":1000000,"storage_gb":50}'),
-  ('enterprise', 'Enterprise', 'enterprise', 299,  2868,
-   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true,"analytics":true,"workflows":true,"api_access":true,"sso":true,"custom_models":true}',
-   '{"users":-1,"documents":-1,"ai_tokens_monthly":-1,"storage_gb":-1}');
+   '{"users":1,"documents":10,"ai_tokens_monthly":25000,"storage_gb":1}', TRUE),
+  ('starter', 'Starter', 'starter', 149.00, 1490.00,
+   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true}',
+   '{"users":3,"documents":50,"ai_tokens_monthly":100000,"storage_gb":5}', TRUE),
+  ('professional', 'Professional', 'professional', 499.00, 4990.00,
+   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true,"analytics":true,"workflows":true,"founder_os":true}',
+   '{"users":25,"documents":500,"ai_tokens_monthly":1000000,"storage_gb":50}', TRUE),
+  ('enterprise', 'Enterprise', 'enterprise', 1499.00, 14990.00,
+   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true,"analytics":true,"workflows":true,"founder_os":true,"api_access":true,"sso":true,"custom_models":true}',
+   '{"users":-1,"documents":-1,"ai_tokens_monthly":-1,"storage_gb":-1}', TRUE)
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  tier = EXCLUDED.tier,
+  price_monthly = EXCLUDED.price_monthly,
+  price_yearly = EXCLUDED.price_yearly,
+  features = EXCLUDED.features,
+  limits = EXCLUDED.limits,
+  is_active = EXCLUDED.is_active;
 
 -- ── SUBSCRIPTIONS ─────────────────────────────────────────────
 

@@ -4,9 +4,11 @@ export declare class AnalyticsService {
     private readonly db;
     private readonly aiService;
     constructor(db: DatabaseService, aiService: AiService);
-    getFounderDashboard(organizationId: string, userId: string): Promise<{
+    getFounderDashboard(organizationId: string, userId: string, days?: number, includeAiInsights?: boolean): Promise<{
         summary: {
-            tasks: Record<string, unknown>;
+            tasks: {
+                completion_trend: Record<string, unknown>[];
+            };
             documents: Record<string, unknown>;
             meetings: Record<string, unknown>;
         };
@@ -17,9 +19,11 @@ export declare class AnalyticsService {
         opportunities: any;
         generatedAt: string;
     }>;
-    getTaskStats(organizationId: string): Promise<Record<string, unknown>>;
+    getTaskStats(organizationId: string, days?: number): Promise<{
+        completion_trend: Record<string, unknown>[];
+    }>;
     getDocumentStats(organizationId: string): Promise<Record<string, unknown>>;
-    getMeetingStats(organizationId: string): Promise<Record<string, unknown>>;
+    getMeetingStats(organizationId: string, userId: string): Promise<Record<string, unknown>>;
     getKpiMetrics(organizationId: string): Promise<Record<string, unknown>[]>;
     getGoals(organizationId: string): Promise<Record<string, unknown>[]>;
     createKpiMetric(organizationId: string, userId: string, dto: {

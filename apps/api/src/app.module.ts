@@ -17,6 +17,7 @@ import { KnowledgeModule } from './knowledge/knowledge.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AiModule } from './ai/ai.module';
 import { BillingModule } from './billing/billing.module';
+import { IntegrationsModule } from './integrations/integrations.module';
 import { WorkflowsModule } from './workflows/workflows.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { StorageModule } from './storage/storage.module';
@@ -31,11 +32,12 @@ import configuration from './common/config/configuration';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      load: [configuration],
-      expandVariables: true,
-    }),
+   ConfigModule.forRoot({
+  isGlobal: true,
+  envFilePath: '../../.env',
+  load: [configuration],
+  expandVariables: true,
+}),
     // Global event emitter — enables @OnEvent() decorators across all modules
     EventEmitterModule.forRoot({
       wildcard: false,
@@ -81,6 +83,7 @@ import configuration from './common/config/configuration';
     FounderOsModule,
     AiModule,
     BillingModule,
+    IntegrationsModule,
     WorkflowsModule,
     NotificationsModule,
     HealthModule,

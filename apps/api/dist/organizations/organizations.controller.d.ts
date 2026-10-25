@@ -11,16 +11,31 @@ export declare class OrganizationsController {
     getUsage(user: JwtPayload): Promise<{
         users: {
             used: number;
-            limit: unknown;
+            limit: number;
         };
         storage: {
             usedGb: number;
-            limitGb: unknown;
+            limitGb: number;
         };
         aiRequests: {
-            used: unknown;
-            limit: unknown;
+            used: number;
+            limit: number;
         };
+    }>;
+    getMembers(user: JwtPayload): Promise<{
+        status: string;
+    }[]>;
+    inviteMember(user: JwtPayload, body: {
+        email: string;
+        role?: string;
+        teamId?: string;
+    }): Promise<{
+        sent: boolean;
+        email: string;
+    }>;
+    removeMember(user: JwtPayload, userId: string): Promise<{
+        removed: boolean;
+        userId: string;
     }>;
     getTeams(user: JwtPayload): Promise<Record<string, unknown>[]>;
     createTeam(user: JwtPayload, body: {
@@ -40,9 +55,10 @@ export declare class OrganizationsController {
         description?: string;
         headUserId?: string;
     }): Promise<Record<string, unknown>>;
+    getInvitationHistory(user: JwtPayload): Promise<Record<string, unknown>[]>;
     invite(user: JwtPayload, body: {
         email: string;
-        role: string;
+        role?: string;
         teamId?: string;
     }): Promise<{
         sent: boolean;
@@ -52,6 +68,17 @@ export declare class OrganizationsController {
         token: string;
     }): Promise<{
         accepted: boolean;
+    }>;
+    completeOnboarding(user: JwtPayload, body: {
+        orgName?: string;
+        orgSize?: string;
+        industry?: string;
+        invites?: string;
+        brainDesc?: string;
+        goalTitle?: string;
+    }): Promise<{
+        completed: boolean;
+        onboardingCompleted: boolean;
     }>;
 }
 //# sourceMappingURL=organizations.controller.d.ts.map

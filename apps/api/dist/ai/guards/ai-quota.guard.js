@@ -28,6 +28,7 @@ let AiQuotaGuard = AiQuotaGuard_1 = class AiQuotaGuard {
         this.logger = new common_1.Logger(AiQuotaGuard_1.name);
         this.BURST_LIMIT = 20;
         this.BURST_TTL_SEC = 60;
+        this.FREE_TOKEN_LIMIT = 25_000;
     }
     async canActivate(context) {
         const req = context.switchToHttp().getRequest();
@@ -36,7 +37,7 @@ let AiQuotaGuard = AiQuotaGuard_1 = class AiQuotaGuard {
             return true;
         }
         await this.checkBurstLimit(user.organizationId, context);
-        await this.checkMonthlyQuota(user.organizationId);
+        await this.checkMonthlyTokenQuota(user.organizationId);
         return true;
     }
     async checkBurstLimit(orgId, context) {
@@ -47,66 +48,74 @@ let AiQuotaGuard = AiQuotaGuard_1 = class AiQuotaGuard {
         }
         if (count > this.BURST_LIMIT) {
             const ttl = Math.max(await this.redis.ttl(key), 1);
-            const res = {
-                statusCode: 429,
-                message: `AI rate limit — max ${this.BURST_LIMIT} requests/min. Retry after ${ttl}s.`,
-                retryAfter: ttl,
-            };
-            const exc = new common_1.HttpException(res, common_1.HttpStatus.TOO_MANY_REQUESTS);
-            const http = context
+            const response = context
                 .switchToHttp()
                 .getResponse();
-            http.setHeader?.('Retry-After', String(ttl));
-            throw exc;
+            response.setHeader?.('Retry-After', String(ttl));
+            throw new common_1.HttpException({
+                statusCode: common_1.HttpStatus.TOO_MANY_REQUESTS,
+                message: `AI rate limit reached. Maximum ${this.BURST_LIMIT} requests per minute.`,
+                retryAfter: ttl,
+            }, common_1.HttpStatus.TOO_MANY_REQUESTS);
         }
     }
-    async checkMonthlyQuota(orgId) {
+    async checkMonthlyTokenQuota(orgId) {
         const limit = await this.getPlanLimit(orgId);
-        if (limit === 0) {
+        if (limit < 0) {
             return;
         }
-        const key = this.monthlyKey(orgId);
-        const used = await this.redis.incr(key);
-        if (used === 1) {
-            await this.redis.expireat(key, this.firstOfNextMonthUnix());
+        const now = new Date();
+        const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+        const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+        const usageResult = await this.db.query(`SELECT COALESCE(SUM(total_tokens), 0)::bigint AS used
+       FROM ai_usage
+       WHERE organization_id = $1
+         AND created_at >= $2
+         AND created_at < $3`, [orgId, monthStart, nextMonthStart]);
+        const used = Number(usageResult.rows[0]?.used ?? 0);
+        if (!Number.isFinite(used)) {
+            throw new common_1.HttpException('Unable to verify AI usage quota.', common_1.HttpStatus.SERVICE_UNAVAILABLE);
         }
-        if (used > limit) {
-            this.logger.warn(`[AiQuota] org=${orgId} used=${used} limit=${limit} — quota exceeded`);
+        if (used >= limit) {
+            this.logger.warn(`[AiQuota] org=${orgId} tokens_used=${used} token_limit=${limit}`);
             throw new common_1.HttpException({
-                statusCode: 402,
-                message: `Monthly AI quota of ${limit} requests exceeded. Upgrade your plan to continue.`,
+                statusCode: common_1.HttpStatus.PAYMENT_REQUIRED,
+                code: 'AI_TOKEN_QUOTA_EXCEEDED',
+                message: `Your monthly allowance of ${limit.toLocaleString()} AI tokens has been reached. Upgrade your plan to continue.`,
                 upgradeUrl: '/billing',
                 used,
                 limit,
+                remaining: 0,
             }, common_1.HttpStatus.PAYMENT_REQUIRED);
         }
     }
     async getPlanLimit(orgId) {
-        const cacheKey = `ai:plan:${orgId}`;
+        const cacheKey = `ai:plan:tokens:v2:${orgId}`;
         const cached = await this.redis.get(cacheKey);
         if (cached !== null) {
-            return parseInt(cached, 10);
+            const parsed = Number(cached);
+            if (Number.isFinite(parsed)) {
+                return parsed;
+            }
+            await this.redis.del(cacheKey);
         }
-        const res = await this.db.query(`SELECT bp.ai_requests_per_month
-       FROM subscriptions s
-       JOIN billing_plans bp ON bp.id = s.plan_id
-       WHERE s.organization_id = $1
-         AND s.status = 'active'
-       LIMIT 1`, [orgId]);
-        const limit = res.rows[0]?.ai_requests_per_month ?? 100;
+        const result = await this.db.query(`SELECT COALESCE(
+         NULLIF(bp.limits ->> 'ai_tokens_monthly', '')::bigint,
+         $2::bigint
+       ) AS ai_tokens_monthly
+       FROM organizations o
+       LEFT JOIN billing_plans bp
+         ON bp.id = o.plan_id::text
+        AND bp.is_active = TRUE
+       WHERE o.id = $1
+       LIMIT 1`, [orgId, this.FREE_TOKEN_LIMIT]);
+        const rawLimit = result.rows[0]?.ai_tokens_monthly;
+        const limit = rawLimit === undefined ? this.FREE_TOKEN_LIMIT : Number(rawLimit);
+        if (!Number.isFinite(limit)) {
+            throw new common_1.HttpException('Unable to verify the organisation AI plan.', common_1.HttpStatus.SERVICE_UNAVAILABLE);
+        }
         await this.redis.set(cacheKey, String(limit), 'EX', 300);
         return limit;
-    }
-    monthlyKey(orgId) {
-        const d = new Date();
-        const m = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-        return `ai:quota:${orgId}:${m}`;
-    }
-    firstOfNextMonthUnix() {
-        const d = new Date();
-        d.setUTCMonth(d.getUTCMonth() + 1, 1);
-        d.setUTCHours(0, 0, 0, 0);
-        return Math.floor(d.getTime() / 1000);
     }
 };
 exports.AiQuotaGuard = AiQuotaGuard;

@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { DatabaseService } from '../database/database.service';
@@ -7,8 +8,9 @@ export declare class AuthService {
     private readonly jwtService;
     private readonly configService;
     private readonly emailService;
+    private readonly eventEmitter;
     private readonly logger;
-    constructor(db: DatabaseService, jwtService: JwtService, configService: ConfigService, emailService: EmailService);
+    constructor(db: DatabaseService, jwtService: JwtService, configService: ConfigService, emailService: EmailService, eventEmitter: EventEmitter2);
     register(dto: {
         email: string;
         password: string;
@@ -24,8 +26,9 @@ export declare class AuthService {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     }>;
     verifyEmail(token: string): Promise<{
@@ -44,11 +47,23 @@ export declare class AuthService {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     } | {
         mfaRequired: boolean;
+    }>;
+    getCurrentUser(userId: string): Promise<{
+        id: unknown;
+        email: unknown;
+        name: unknown;
+        avatarUrl: unknown;
+        role: unknown;
+        organizationId: string;
+        emailVerified: boolean;
+        mfaEnabled: boolean;
+        onboardingCompleted: boolean;
     }>;
     refreshTokens(refreshToken: string): Promise<{
         accessToken: string;
@@ -60,8 +75,9 @@ export declare class AuthService {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     }>;
     logout(refreshToken: string): Promise<void>;
@@ -78,8 +94,9 @@ export declare class AuthService {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     }>;
     requestPasswordReset(email: string, ip?: string): Promise<{
@@ -103,9 +120,12 @@ export declare class AuthService {
         disabled: boolean;
     }>;
     getSessions(userId: string): Promise<Record<string, unknown>[]>;
-    revokeSession(userId: string, sessionId: string): Promise<void>;
+    revokeSession(userId: string, sessionId: string): Promise<{
+        revoked: boolean;
+    }>;
     revokeAllSessions(userId: string): Promise<{
         revoked: boolean;
+        revokedCount: number;
     }>;
     private generateTokens;
     private parseDuration;

@@ -1,4 +1,4 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import {
   ConflictException,
   UnauthorizedException,
@@ -21,7 +21,7 @@ import {
   FIXED_UUID_2,
 } from '../test/helpers';
 
-// ── Module-level mocks ────────────────────────────────────────
+// â”€â”€ Module-level mocks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 jest.mock('bcrypt', () => ({
   hash: jest.fn().mockResolvedValue('$2b$12$hashed'),
@@ -39,10 +39,10 @@ jest.mock('speakeasy', () => ({
 }));
 
 jest.mock('uuid', () => ({
-  v4: jest.fn().mockReturnValue(FIXED_UUID),
+  v4: jest.fn().mockReturnValue('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'),
 }));
 
-// ── Test suite ────────────────────────────────────────────────
+// â”€â”€ Test suite â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -92,7 +92,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── register ──────────────────────────────────────────────
+  // â”€â”€ register â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('register()', () => {
     const dto = {
@@ -106,7 +106,7 @@ describe('AuthService', () => {
       const createdUser = makeUser({ id: FIXED_UUID, email: 'new@example.com', name: 'New User' });
 
       db.findOne
-        .mockResolvedValueOnce(null)       // email uniqueness check → not found
+        .mockResolvedValueOnce(null)       // email uniqueness check â†’ not found
         .mockResolvedValueOnce(createdUser); // fetch user after insert
 
       const result = await service.register(dto);
@@ -161,7 +161,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── login ─────────────────────────────────────────────────
+  // â”€â”€ login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('login()', () => {
     const bcrypt = require('bcrypt');
@@ -289,7 +289,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── refreshTokens ─────────────────────────────────────────
+  // â”€â”€ refreshTokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('refreshTokens()', () => {
     it('returns new tokens for a valid refresh token', async () => {
@@ -332,7 +332,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── logout ────────────────────────────────────────────────
+  // â”€â”€ logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('logout()', () => {
     it('invalidates the session for the given refresh token', async () => {
@@ -345,7 +345,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── verifyEmail ───────────────────────────────────────────
+  // â”€â”€ verifyEmail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('verifyEmail()', () => {
     it('marks email as verified and token as used', async () => {
@@ -373,7 +373,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── requestPasswordReset ──────────────────────────────────
+  // â”€â”€ requestPasswordReset â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('requestPasswordReset()', () => {
     it('sends reset email when user exists', async () => {
@@ -400,7 +400,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── resetPassword ─────────────────────────────────────────
+  // â”€â”€ resetPassword â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('resetPassword()', () => {
     it('updates password hash and invalidates sessions', async () => {
@@ -431,7 +431,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── changePassword ────────────────────────────────────────
+  // â”€â”€ changePassword â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('changePassword()', () => {
     const bcrypt = require('bcrypt');
@@ -467,7 +467,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── MFA ───────────────────────────────────────────────────
+  // â”€â”€ MFA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('setupMfa()', () => {
     it('generates TOTP secret and stores it', async () => {
@@ -538,7 +538,7 @@ describe('AuthService', () => {
     });
   });
 
-  // ── Magic link ────────────────────────────────────────────
+  // â”€â”€ Magic link â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('sendMagicLink()', () => {
     it('inserts a magic link and sends email', async () => {
@@ -599,17 +599,29 @@ describe('AuthService', () => {
     });
   });
 
-  // ── Session management ────────────────────────────────────
+  // â”€â”€ Session management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('revokeAllSessions()', () => {
     it('invalidates all sessions for the user', async () => {
+      db.query.mockResolvedValueOnce({
+        rows: [
+          { id: 'session-1' },
+          { id: 'session-2' },
+          { id: 'session-3' },
+        ],
+        rowCount: 3,
+      });
+
       const result = await service.revokeAllSessions(FIXED_UUID);
 
-      expect(result).toEqual({ revoked: true });
+      expect(result).toEqual({ revoked: true, revokedCount: 3 });
       expect(db.query).toHaveBeenCalledWith(
-        'UPDATE sessions SET is_valid = FALSE WHERE user_id = $1',
+        'UPDATE sessions SET is_valid = FALSE WHERE user_id = $1 AND is_valid = TRUE RETURNING id',
         [FIXED_UUID],
       );
     });
   });
 });
+
+
+

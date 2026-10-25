@@ -1,3 +1,4 @@
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   Injectable,
   UnauthorizedException,
@@ -29,6 +30,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
+    private readonly eventEmitter: EventEmitter2
   ) {}
 
   // ── Registration ────────────────────────────────────────────
@@ -57,7 +59,7 @@ export class AuthService {
           .substring(0, 50);
         await client.query(
           `INSERT INTO organizations (id, name, slug, plan_id)
-           VALUES ($1, $2, $3, 'starter')`,
+           VALUES ($1, $2, $3, 'free')`,
           [orgId, dto.organizationName, `${slug}-${Date.now()}`],
         );
       }
@@ -232,11 +234,33 @@ export class AuthService {
       )
       .catch(() => null);
 
-    return this.generateTokens(user);
+    return this.generateTokens(user, undefined, undefined, { ipAddress: ip, userAgent });
   }
 
   // ── Token refresh ────────────────────────────────────────────
 
+  async getCurrentUser(userId: string) {
+    const user = await this.db.findOne<Record<string, unknown>>(
+      'users',
+      { id: userId },
+    );
+
+    if (!user || user.is_active === false) {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      avatarUrl: user.avatar_url ?? null,
+      role: user.role,
+      organizationId: (user.organization_id as string | null) ?? null,
+      emailVerified: Boolean(user.email_verified),
+      mfaEnabled: Boolean(user.mfa_enabled),
+      onboardingCompleted: Boolean(user.onboarding_completed),
+    };
+  }
   async refreshTokens(refreshToken: string) {
     const session = await this.db.findOne<Record<string, unknown>>('sessions', {
       refresh_token: refreshToken,
@@ -252,15 +276,23 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token expired. Please sign in again.');
     }
 
-    const user = await this.db.findOne<Record<string, unknown>>('users', { id: session.user_id });
-    if (!user) throw new UnauthorizedException('User not found');
+    const user = await this.db.findOne<Record<string, unknown>>('users', {
+      id: session.user_id,
+    });
+    if (!user || user.is_active === false) {
+      await this.db.query(
+        'UPDATE sessions SET is_valid = FALSE WHERE user_id = $1',
+        [session.user_id],
+      );
+      throw new UnauthorizedException('Account is disabled. Please contact support.');
+    }
 
     const newRefreshToken = uuidv4();
     await this.db.query(
       `UPDATE sessions SET refresh_token = $1, last_active_at = NOW() WHERE id = $2`,
       [newRefreshToken, session.id],
     );
-    return this.generateTokens(user, newRefreshToken);
+    return this.generateTokens(user, newRefreshToken, String(session.id));
   }
 
   async logout(refreshToken: string) {
@@ -447,44 +479,107 @@ export class AuthService {
   }
 
   async revokeSession(userId: string, sessionId: string) {
-    await this.db.query(
-      'UPDATE sessions SET is_valid = FALSE WHERE id = $1 AND user_id = $2',
+    const result = await this.db.query(
+      'UPDATE sessions SET is_valid = FALSE WHERE id = $1 AND user_id = $2 AND is_valid = TRUE RETURNING id',
       [sessionId, userId],
     );
-  }
 
-  async revokeAllSessions(userId: string) {
+    if (!result.rows?.length) {
+      return { revoked: false };
+    }
+
     await this.db.query(
-      'UPDATE sessions SET is_valid = FALSE WHERE user_id = $1',
-      [userId],
+      `INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata)
+       SELECT organization_id, $1, 'security.session.revoked', 'session', $2, $3
+       FROM users WHERE id = $1 AND organization_id IS NOT NULL`,
+      [userId, sessionId, JSON.stringify({ source: 'security_centre' })],
     );
+
     return { revoked: true };
   }
 
-  // ── Internal helpers ─────────────────────────────────────────
+  async revokeAllSessions(userId: string) {
+    const result = await this.db.query(
+      'UPDATE sessions SET is_valid = FALSE WHERE user_id = $1 AND is_valid = TRUE RETURNING id',
+      [userId],
+    );
+
+    const revokedCount = result.rows?.length ?? 0;
+    if (revokedCount > 0) {
+      await this.db.query(
+        `INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata)
+         SELECT organization_id, $1, 'security.sessions.revoked_all', 'session', NULL, $2
+         FROM users WHERE id = $1 AND organization_id IS NOT NULL`,
+        [userId, JSON.stringify({ revokedCount, source: 'security_centre' })],
+      );
+    }
+
+    return { revoked: true, revokedCount };
+  }
 
   private async generateTokens(
     user: Record<string, unknown>,
     existingRefreshToken?: string,
+    existingSessionId?: string,
+    sessionContext: { ipAddress?: string; userAgent?: string } = {},
   ) {
     const payload = {
       sub: user.id,
       email: user.email,
       organizationId: user.organization_id,
       role: user.role,
-      emailVerified: user.email_verified,
+      emailVerified: Boolean(user.email_verified),
+      onboardingCompleted: Boolean(user.onboarding_completed),
     };
 
-    const accessToken = this.jwtService.sign(payload);
+    const sessionId = existingSessionId ?? uuidv4();
+    const accessToken = this.jwtService.sign({ ...payload, sid: sessionId });
     const refreshToken = existingRefreshToken ?? uuidv4();
 
     const refreshExpiresIn = this.configService.get<string>('jwt.refreshExpiresIn', '7d');
     const expiresAt = new Date(Date.now() + this.parseDuration(refreshExpiresIn));
 
     if (!existingRefreshToken) {
+      const sessionUserAgent = sessionContext.userAgent ?? '';
+      const sessionDeviceType = /Android|iPhone|iPad|Mobile/i.test(sessionUserAgent) ? 'mobile' : 'desktop';
+      const sessionBrowser = /Edg\//i.test(sessionUserAgent) ? 'Microsoft Edge'
+        : /Chrome\//i.test(sessionUserAgent) ? 'Google Chrome'
+        : /Firefox\//i.test(sessionUserAgent) ? 'Firefox'
+        : /Safari\//i.test(sessionUserAgent) ? 'Safari'
+        : 'Browser';
+      const sessionDeviceName = sessionUserAgent
+        ? `${sessionBrowser} (${sessionDeviceType})`
+        : 'Unknown device';
+
       await this.db.query(
-        `INSERT INTO sessions (user_id, refresh_token, expires_at) VALUES ($1, $2, $3)`,
-        [user.id, refreshToken, expiresAt],
+        `INSERT INTO sessions (
+           id, user_id, refresh_token, expires_at, device_name,
+           device_type, ip_address, user_agent
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          sessionId,
+          user.id,
+          refreshToken,
+          expiresAt,
+          sessionDeviceName,
+          sessionDeviceType,
+          sessionContext.ipAddress ?? null,
+          sessionUserAgent || null,
+        ],
+      );
+
+      // Record a login/session event without storing access or refresh secrets.
+      await this.db.query(
+        `INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+         SELECT organization_id, $1, 'auth.session.created', 'session', $2, $3, $4, $5
+         FROM users WHERE id = $1 AND organization_id IS NOT NULL`,
+        [
+          user.id,
+          sessionId,
+          JSON.stringify({ deviceName: sessionDeviceName, deviceType: sessionDeviceType }),
+          sessionContext.ipAddress ?? null,
+          sessionUserAgent || null,
+        ],
       );
     }
 
@@ -497,9 +592,10 @@ export class AuthService {
         email: user.email,
         name: user.name,
         role: user.role,
-        organizationId: user.organization_id,
-        emailVerified: user.email_verified,
-        mfaEnabled: user.mfa_enabled,
+        organizationId: user.organization_id ?? null,
+        emailVerified: Boolean(user.email_verified),
+        mfaEnabled: Boolean(user.mfa_enabled),
+        onboardingCompleted: Boolean(user.onboarding_completed),
       },
     };
   }

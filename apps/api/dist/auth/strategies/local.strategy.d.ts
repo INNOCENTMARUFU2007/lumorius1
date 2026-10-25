@@ -14,8 +14,9 @@ export declare class LocalStrategy extends LocalStrategy_base {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     } | {
         mfaRequired: boolean;

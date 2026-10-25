@@ -1,6 +1,13 @@
 import { Queue } from 'bull';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
+interface MeetingQuery {
+    search?: string;
+    status?: string;
+    teamId?: string;
+    page?: number;
+    pageSize?: number;
+}
 export declare class MeetingsService {
     private readonly db;
     private readonly storage;
@@ -12,13 +19,7 @@ export declare class MeetingsService {
         teamId?: string;
         scheduledAt?: string;
     }): Promise<Record<string, unknown>>;
-    findAll(organizationId: string, query: {
-        search?: string;
-        status?: string;
-        teamId?: string;
-        page?: number;
-        pageSize?: number;
-    }): Promise<{
+    findAll(organizationId: string, query: MeetingQuery): Promise<{
         data: Record<string, unknown>[];
         total: number;
         page: number;
@@ -32,4 +33,5 @@ export declare class MeetingsService {
         deleted: boolean;
     }>;
 }
+export {};
 //# sourceMappingURL=meetings.service.d.ts.map

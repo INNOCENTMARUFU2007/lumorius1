@@ -1,10 +1,19 @@
+
 'use client';
 
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
 import { motion } from 'framer-motion';
-import { Mic, Upload, Clock, CheckCircle, Loader2, ChevronRight, Trash2 } from 'lucide-react';
+import {
+  Mic,
+  Upload,
+  Clock,
+  CheckCircle,
+  Loader2,
+  ChevronRight,
+  Trash2,
+} from 'lucide-react';
 import api from '@/lib/api';
 import { formatRelative } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -18,15 +27,31 @@ const STATUS_STYLES: Record<string, string> = {
   failed: 'bg-red-100 text-red-700',
 };
 
+interface MeetingRecord {
+  id: string;
+  title?: string | null;
+  status: string;
+  created_at: string;
+  duration_seconds?: number | string | null;
+  created_by_name?: string | null;
+  summary?: string | null;
+}
+
+interface MeetingsResponse {
+  data?: MeetingRecord[];
+}
+
 export default function MeetingsPage() {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery<MeetingsResponse>({
     queryKey: ['meetings'],
     queryFn: async () => {
-      const res = await api.get('/meetings', { params: { pageSize: 50 } });
-      return res.data.data;
+      const res = await api.get('/meetings', {
+        params: { pageSize: 50 },
+      });
+      return res.data.data as MeetingsResponse;
     },
     refetchInterval: 10000,
   });
@@ -35,10 +60,16 @@ export default function MeetingsPage() {
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append('file', file);
-      if (title) form.append('title', title);
+
+      const meetingTitle = title.trim();
+      if (meetingTitle) {
+        form.append('title', meetingTitle);
+      }
+
       const res = await api.post('/meetings/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+
       return res.data.data;
     },
     onSuccess: () => {
@@ -46,7 +77,9 @@ export default function MeetingsPage() {
       setTitle('');
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
     },
-    onError: () => toast.error('Upload failed'),
+    onError: () => {
+      toast.error('Upload failed. Check the file and try again.');
+    },
   });
 
   const deleteMutation = useMutation({
@@ -55,118 +88,218 @@ export default function MeetingsPage() {
       toast.success('Meeting deleted');
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
     },
+    onError: () => {
+      toast.error('Failed to delete meeting');
+    },
   });
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: useCallback((files: File[]) => files[0] && uploadMutation.mutate(files[0]), [uploadMutation]),
-    accept: { 'audio/*': [], 'video/*': [] },
+  const onDrop = useCallback(
+    (files: File[]) => {
+      const file = files[0];
+      if (file) {
+        uploadMutation.mutate(file);
+      }
+    },
+    [uploadMutation],
+  );
+
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
+    onDrop,
+    accept: {
+      'audio/*': [],
+      'video/*': [],
+    },
     maxFiles: 1,
+    maxSize: 500 * 1024 * 1024,
+    disabled: uploadMutation.isPending,
+    noClick: true,
   });
+
+  const meetings = Array.isArray(data?.data) ? data.data : [];
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex items-center gap-3">
-        <div className="p-2 bg-green-500/10 rounded-xl">
-          <Mic className="w-5 h-5 text-green-500" />
+        <div className="rounded-xl bg-green-500/10 p-2">
+          <Mic className="h-5 w-5 text-green-500" />
         </div>
         <div>
           <h1 className="text-2xl font-bold">Meeting Intelligence</h1>
-          <p className="text-muted-foreground text-sm">Upload recordings. Get transcripts, summaries, and action items.</p>
+          <p className="text-sm text-muted-foreground">
+            Upload recordings. Get transcripts, summaries, and action items.
+          </p>
         </div>
       </div>
 
       {/* Upload */}
-      <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+      <section className="space-y-3 rounded-xl border border-border bg-card p-5">
+        <label htmlFor="meeting-title" className="sr-only">
+          Meeting title
+        </label>
         <input
+          id="meeting-title"
           value={title}
-          onChange={(e) => setTitle(e.target.value)}
+          onChange={(event) => setTitle(event.target.value)}
           placeholder="Meeting title (optional)"
-          className="w-full px-4 py-2.5 text-sm bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+          className="w-full rounded-lg border border-border bg-muted px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          disabled={uploadMutation.isPending}
         />
+
         <div
           {...getRootProps()}
-          className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-            isDragActive ? 'border-brand-500 bg-brand-500/5' : 'border-border hover:border-brand-400'
+          className={`rounded-xl border-2 border-dashed p-6 text-center transition-all ${
+            uploadMutation.isPending
+              ? 'cursor-not-allowed opacity-60'
+              : 'cursor-pointer'
+          } ${
+            isDragActive
+              ? 'border-brand-500 bg-brand-500/5'
+              : 'border-border hover:border-brand-400'
           }`}
         >
           <input {...getInputProps()} />
+
           {uploadMutation.isPending ? (
             <div className="flex items-center justify-center gap-2 text-muted-foreground">
-              <Loader2 className="w-5 h-5 animate-spin" />
+              <Loader2 className="h-5 w-5 animate-spin" />
               <span>Uploading recording…</span>
             </div>
           ) : (
             <>
-              <Upload className="w-7 h-7 mx-auto text-muted-foreground mb-2" />
-              <p className="font-medium text-foreground">Drop audio/video file here</p>
-              <p className="text-xs text-muted-foreground mt-1">MP3, MP4, WAV, M4A, WEBM • Max 500MB</p>
+              <Upload className="mx-auto mb-2 h-7 w-7 text-muted-foreground" />
+              <p className="font-medium text-foreground">
+                {isDragActive
+                  ? 'Drop your recording here'
+                  : 'Drop an audio/video file here'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                MP3, MP4, WAV, M4A, WEBM · Maximum 500 MB
+              </p>
+              <button
+                type="button"
+                onClick={open}
+                className="mt-3 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                Browse files
+              </button>
             </>
           )}
         </div>
-      </div>
+      </section>
 
       {/* Meetings list */}
-      <div className="space-y-2">
+      <section className="space-y-2">
         {isLoading ? (
-          Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-20 bg-card border border-border rounded-xl animate-pulse" />
+          Array.from({ length: 4 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-20 animate-pulse rounded-xl border border-border bg-card"
+            />
           ))
-        ) : (data?.data ?? []).length === 0 ? (
-          <div className="text-center py-16 text-muted-foreground">
-            <Mic className="w-10 h-10 mx-auto mb-3 opacity-30" />
+        ) : isError ? (
+          <div
+            role="alert"
+            className="rounded-xl border border-destructive/30 p-6 text-sm text-destructive"
+          >
+            Meetings could not be loaded. Please try refreshing the page.
+          </div>
+        ) : meetings.length === 0 ? (
+          <div className="py-16 text-center text-muted-foreground">
+            <Mic className="mx-auto mb-3 h-10 w-10 opacity-30" />
             <p>No meetings yet. Upload your first recording.</p>
           </div>
         ) : (
-          (data?.data ?? []).map((meeting: Record<string, unknown>) => (
-            <motion.div
-              key={meeting.id as string}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-4 p-4 bg-card border border-border rounded-xl hover:shadow-sm transition group"
-            >
-              <div className={`p-2.5 rounded-xl ${
-                meeting.status === 'completed' ? 'bg-green-500/10' : 'bg-blue-500/10'
-              }`}>
-                {meeting.status === 'completed' ? (
-                  <CheckCircle className="w-4 h-4 text-green-500" />
-                ) : (
-                  <Clock className="w-4 h-4 text-blue-500" />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-foreground truncate">{meeting.title as string}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {formatRelative(meeting.created_at as string)}
-                  {meeting.duration_seconds && ` · ${Math.round(Number(meeting.duration_seconds) / 60)} min`}
-                  {meeting.created_by_name && ` · ${meeting.created_by_name as string}`}
-                </p>
-              </div>
-              {meeting.summary && (
-                <p className="text-xs text-muted-foreground max-w-48 truncate hidden md:block">
-                  {meeting.summary as string}
-                </p>
-              )}
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize shrink-0 ${STATUS_STYLES[meeting.status as string] ?? 'bg-muted text-muted-foreground'}`}>
-                {meeting.status as string}
-              </span>
-              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                <Link
-                  href={`/meetings/${meeting.id as string}`}
-                  className="p-1.5 rounded-lg hover:bg-muted transition"
+          meetings.map((meeting) => {
+            const status = meeting.status || 'uploading';
+            const duration = Number(meeting.duration_seconds);
+            const hasDuration =
+              meeting.duration_seconds !== null &&
+              meeting.duration_seconds !== undefined &&
+              meeting.duration_seconds !== '' &&
+              Number.isFinite(duration) &&
+              duration >= 0;
+
+            return (
+              <motion.div
+                key={meeting.id}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="group flex items-center gap-4 rounded-xl border border-border bg-card p-4 transition hover:shadow-sm"
+              >
+                <div
+                  className={`rounded-xl p-2.5 ${
+                    status === 'completed'
+                      ? 'bg-green-500/10'
+                      : 'bg-blue-500/10'
+                  }`}
                 >
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                </Link>
-                <button
-                  onClick={() => deleteMutation.mutate(meeting.id as string)}
-                  className="p-1.5 rounded-lg hover:bg-destructive/10 hover:text-destructive transition"
+                  {status === 'completed' ? (
+                    <CheckCircle className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <Clock className="h-4 w-4 text-blue-500" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-foreground">
+                    {meeting.title?.trim() || 'Untitled meeting'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {meeting.created_at
+                      ? formatRelative(meeting.created_at)
+                      : 'Date unavailable'}
+                    {hasDuration &&
+                      ` · ${Math.round(duration / 60)} min`}
+                    {typeof meeting.created_by_name === 'string' &&
+                      meeting.created_by_name.trim() &&
+                      ` · ${meeting.created_by_name}`}
+                  </p>
+                </div>
+
+                {typeof meeting.summary === 'string' &&
+                  meeting.summary.trim().length > 0 && (
+                    <p className="hidden max-w-48 truncate text-xs text-muted-foreground md:block">
+                      {meeting.summary}
+                    </p>
+                  )}
+
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${
+                    STATUS_STYLES[status] ??
+                    'bg-muted text-muted-foreground'
+                  }`}
                 >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            </motion.div>
-          ))
+                  {status}
+                </span>
+
+                <div className="flex items-center gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
+                  <Link
+                    href={`/meetings/${encodeURIComponent(meeting.id)}`}
+                    aria-label={`View ${meeting.title || 'meeting'}`}
+                    className="rounded-lg p-1.5 transition hover:bg-muted"
+                  >
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  </Link>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('Delete this meeting permanently?')) {
+                        deleteMutation.mutate(meeting.id);
+                      }
+                    }}
+                    disabled={deleteMutation.isPending}
+                    aria-label={`Delete ${meeting.title || 'meeting'}`}
+                    className="rounded-lg p-1.5 transition hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </motion.div>
+            );
+          })
         )}
-      </div>
+      </section>
     </div>
   );
 }

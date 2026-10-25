@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, UseGuards, RawBodyRequest, Req, Headers } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, RawBodyRequest, Req, Headers, ForbiddenException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Request } from 'express';
@@ -14,6 +14,15 @@ export class BillingController {
     private readonly configService: ConfigService,
   ) {}
 
+  private assertCanManageBilling(user: JwtPayload): void {
+    const role = String(user.role ?? '').toLowerCase();
+
+    if (role !== 'owner' && role !== 'admin') {
+      throw new ForbiddenException(
+        'Only organisation owners and administrators can manage billing.',
+      );
+    }
+  }
   @Get('plans')
   @ApiOperation({ summary: 'Get all available billing plans' })
   getPlans() {
@@ -36,6 +45,7 @@ export class BillingController {
     @CurrentUser() user: JwtPayload,
     @Body() body: { planId: string; interval: 'monthly' | 'annual' },
   ) {
+    this.assertCanManageBilling(user);
     const appUrl = this.configService.get<string>('appUrl');
     return this.billingService.createCheckoutSession(
       user.organizationId,
@@ -51,6 +61,7 @@ export class BillingController {
   @UseGuards(AuthGuard('jwt'))
   @ApiOperation({ summary: 'Create a Stripe billing portal session' })
   createPortal(@CurrentUser() user: JwtPayload) {
+    this.assertCanManageBilling(user);
     const appUrl = this.configService.get<string>('appUrl');
     return this.billingService.createPortalSession(user.organizationId, `${appUrl}/billing`);
   }

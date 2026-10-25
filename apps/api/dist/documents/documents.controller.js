@@ -26,13 +26,26 @@ let DocumentsController = class DocumentsController {
     upload(file, user, body) {
         return this.documentsService.upload(file, user.organizationId, user.sub, {
             teamId: body.teamId,
-            tags: body.tags ? body.tags.split(',') : [],
+            tags: body.tags
+                ? body.tags
+                    .split(',')
+                    .map((tag) => tag.trim())
+                    .filter(Boolean)
+                : [],
         });
     }
     findAll(user, search, status, type, teamId, page, pageSize) {
         return this.documentsService.findAll(user.organizationId, {
-            search, status, type, teamId, page, pageSize,
+            search,
+            status,
+            type,
+            teamId,
+            page,
+            pageSize,
         });
+    }
+    getSearchFacets(user) {
+        return this.documentsService.getSearchFacets(user.organizationId);
     }
     findOne(user, id) {
         return this.documentsService.findById(id, user.organizationId);
@@ -47,12 +60,25 @@ let DocumentsController = class DocumentsController {
         return this.documentsService.search(user.organizationId, body.query, {
             documentIds: body.documentIds,
             topK: body.topK,
+            type: body.type,
+            tag: body.tag,
+            createdAfter: body.createdAfter,
+            teamId: body.teamId,
+            uploadedById: body.myHistory
+                ? user.sub
+                : undefined,
         });
     }
     ask(user, body) {
         return this.documentsService.ask(user.organizationId, body.question, {
             documentIds: body.documentIds,
             teamId: body.teamId,
+            type: body.type,
+            tag: body.tag,
+            createdAfter: body.createdAfter,
+            uploadedById: body.myHistory
+                ? user.sub
+                : undefined,
         });
     }
 };
@@ -63,7 +89,9 @@ __decorate([
         limits: { fileSize: 100 * 1024 * 1024 },
     })),
     (0, swagger_1.ApiConsumes)('multipart/form-data'),
-    (0, swagger_1.ApiOperation)({ summary: 'Upload and index a document into Company Brain' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Upload and index a document into Company Brain',
+    }),
     __param(0, (0, common_1.UploadedFile)()),
     __param(1, (0, current_user_decorator_1.CurrentUser)()),
     __param(2, (0, common_1.Body)()),
@@ -73,7 +101,9 @@ __decorate([
 ], DocumentsController.prototype, "upload", null);
 __decorate([
     (0, common_1.Get)(),
-    (0, swagger_1.ApiOperation)({ summary: 'List documents in Company Brain' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'List documents in Company Brain',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Query)('search')),
     __param(2, (0, common_1.Query)('status')),
@@ -82,12 +112,24 @@ __decorate([
     __param(5, (0, common_1.Query)('page')),
     __param(6, (0, common_1.Query)('pageSize')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, String, String, String, String, Number, Number]),
+    __metadata("design:paramtypes", [Object, String, String, String, String, String, String]),
     __metadata("design:returntype", void 0)
 ], DocumentsController.prototype, "findAll", null);
 __decorate([
+    (0, common_1.Get)('search-facets'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Get indexed-document search filters for the current organization',
+    }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], DocumentsController.prototype, "getSearchFacets", null);
+__decorate([
     (0, common_1.Get)(':id'),
-    (0, swagger_1.ApiOperation)({ summary: 'Get a document by ID' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Get a document by ID',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
@@ -96,7 +138,9 @@ __decorate([
 ], DocumentsController.prototype, "findOne", null);
 __decorate([
     (0, common_1.Get)(':id/download'),
-    (0, swagger_1.ApiOperation)({ summary: 'Get a presigned download URL' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Get a presigned download URL',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
@@ -105,7 +149,9 @@ __decorate([
 ], DocumentsController.prototype, "getDownloadUrl", null);
 __decorate([
     (0, common_1.Delete)(':id'),
-    (0, swagger_1.ApiOperation)({ summary: 'Delete a document' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Delete a document',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
@@ -114,7 +160,9 @@ __decorate([
 ], DocumentsController.prototype, "delete", null);
 __decorate([
     (0, common_1.Post)('search'),
-    (0, swagger_1.ApiOperation)({ summary: 'Semantic search across documents' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Semantic search across documents',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -123,7 +171,9 @@ __decorate([
 ], DocumentsController.prototype, "search", null);
 __decorate([
     (0, common_1.Post)('ask'),
-    (0, swagger_1.ApiOperation)({ summary: 'Ask a question about your documents (RAG)' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Ask a question about your documents (RAG)',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),

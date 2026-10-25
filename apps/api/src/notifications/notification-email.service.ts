@@ -47,6 +47,31 @@ export interface GoalAchievedEvent {
   organizationId: string;
 }
 
+export interface OrganizationNotificationEvent {
+  organizationId: string;
+  eventKey?: string;
+  title?: string;
+  message?: string;
+  actionUrl?: string;
+  actionLabel?: string;
+  type?: string;
+  data?: Record<string, unknown>;
+  recipientRoles?: string[];
+  excludeUserIds?: string[];
+  sendEmail?: boolean;
+}
+
+export interface BillingPaymentFailedEvent {
+  organizationId: string;
+  eventKey: string;
+  invoiceId: string;
+  currency: string;
+}
+
+export interface SecurityNotificationEvent
+  extends OrganizationNotificationEvent {
+  userId?: string;
+}
 @Injectable()
 export class NotificationEmailService {
   private readonly logger = new Logger(NotificationEmailService.name);
@@ -220,6 +245,234 @@ export class NotificationEmailService {
 
   // ── Daily overdue task reminder — 9 am UTC ────────────────
 
+  private async broadcastNotification(
+    payload: OrganizationNotificationEvent,
+  ) {
+    const created = await this.notificationsService.createForOrganization({
+      organizationId: payload.organizationId,
+      type: payload.type ?? 'info',
+      title: payload.title ?? 'Lumorius notification',
+      message: payload.message ?? '',
+      actionUrl: payload.actionUrl ?? '/notifications',
+      data: payload.data,
+      recipientRoles: payload.recipientRoles,
+      excludeUserIds: payload.excludeUserIds,
+      eventKey: payload.eventKey,
+    });
+
+    if (!payload.sendEmail || created.userIds.length === 0) {
+      return;
+    }
+
+    const recipients = await this.db.query<{
+      id: string;
+      email: string;
+      name: string | null;
+    }>(
+      `SELECT id, email, name
+       FROM users
+       WHERE id = ANY($1::uuid[])
+         AND is_active = TRUE`,
+      [created.userIds],
+    );
+
+    const results = await Promise.allSettled(
+      recipients.rows.map((recipient) =>
+        this.emailService.sendNotificationEmail(
+          recipient.email,
+          recipient.name ?? 'there',
+          payload.title ?? 'Lumorius notification',
+          payload.message ?? '',
+          payload.actionUrl ?? '/notifications',
+          payload.actionLabel ?? 'Open Lumorius',
+        ),
+      ),
+    );
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        this.logger.error(
+          `Notification email failed for ${recipients.rows[index]?.email}`,
+          result.reason instanceof Error
+            ? result.reason.stack
+            : String(result.reason),
+        );
+      }
+    });
+  }
+
+  @OnEvent('billing.payment_failed', { async: true })
+  async handleBillingPaymentFailed(payload: BillingPaymentFailedEvent) {
+    try {
+      await this.broadcastNotification({
+        organizationId: payload.organizationId,
+        eventKey: payload.eventKey,
+        type: 'billing',
+        title: 'Payment failed — action required',
+        message:
+          'A subscription payment failed. Review billing details and resolve the payment issue to avoid interruption.',
+        actionUrl: '/billing',
+        actionLabel: 'Review billing',
+        recipientRoles: ['owner', 'admin'],
+        sendEmail: true,
+        data: {
+          invoiceId: payload.invoiceId,
+          currency: payload.currency,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        'Billing payment-failed notification failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  @OnEvent('billing.subscription_attention', { async: true })
+  async handleBillingSubscriptionAttention(
+    payload: OrganizationNotificationEvent & {
+      status?: string;
+      eventType?: string;
+    },
+  ) {
+    try {
+      await this.broadcastNotification({
+        organizationId: payload.organizationId,
+        eventKey: payload.eventKey,
+        type: 'billing',
+        title: 'Subscription needs attention',
+        message:
+          `Stripe reports subscription status "${payload.status ?? 'unknown'}". ` +
+          'Review billing to determine whether action is required.',
+        actionUrl: '/billing',
+        actionLabel: 'Review billing',
+        recipientRoles: ['owner', 'admin'],
+        sendEmail: true,
+        data: {
+          status: payload.status ?? 'unknown',
+          eventType: payload.eventType ?? 'unknown',
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        'Subscription-attention notification failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  @OnEvent('billing.upgrade_recommended', { async: true })
+  async handleBillingUpgradeRecommended(
+    payload: OrganizationNotificationEvent,
+  ) {
+    try {
+      await this.broadcastNotification({
+        ...payload,
+        type: 'billing',
+        title: payload.title ?? 'Plan upgrade recommended',
+        message:
+          payload.message ??
+          'Your organisation may need a higher plan for its current capacity requirements.',
+        actionUrl: '/billing',
+        actionLabel: 'Review upgrade options',
+        recipientRoles: ['owner', 'admin'],
+        sendEmail: payload.sendEmail ?? true,
+      });
+    } catch (error) {
+      this.logger.error(
+        'Upgrade recommendation notification failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  @OnEvent('ai.insight.created', { async: true })
+  async handleAiInsightCreated(
+    payload: OrganizationNotificationEvent,
+  ) {
+    try {
+      await this.broadcastNotification({
+        ...payload,
+        type: 'ai',
+        title: payload.title ?? 'New AI insight',
+        message:
+          payload.message ??
+          'A new AI insight is available for your organisation.',
+        actionUrl: payload.actionUrl ?? '/ai',
+        sendEmail: payload.sendEmail ?? false,
+      });
+    } catch (error) {
+      this.logger.error(
+        'AI insight notification failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
+  @OnEvent('security.event.created', { async: true })
+  async handleSecurityEvent(payload: SecurityNotificationEvent) {
+    try {
+      if (payload.userId) {
+        const user = await this.db.findOne<{
+          id: string;
+          email: string;
+          name: string | null;
+        }>(
+          'users',
+          {
+            id: payload.userId,
+            organization_id: payload.organizationId,
+            is_active: true,
+          },
+        );
+
+        if (user) {
+          await this.notificationsService.create({
+            userId: user.id,
+            organizationId: payload.organizationId,
+            type: 'security',
+            title: payload.title ?? 'Security alert',
+            message:
+              payload.message ??
+              'A security event requires your attention.',
+            actionUrl: payload.actionUrl ?? '/security',
+            data: payload.data,
+          });
+
+          if (payload.sendEmail ?? true) {
+            await this.emailService.sendNotificationEmail(
+              user.email,
+              user.name ?? 'there',
+              payload.title ?? 'Security alert',
+              payload.message ??
+                'A security event requires your attention.',
+              payload.actionUrl ?? '/security',
+              payload.actionLabel ?? 'Review security',
+            );
+          }
+        }
+      }
+
+      await this.broadcastNotification({
+        ...payload,
+        type: 'security',
+        title: payload.title ?? 'Organisation security alert',
+        message:
+          payload.message ??
+          'A security event requires administrator attention.',
+        actionUrl: payload.actionUrl ?? '/security',
+        actionLabel: payload.actionLabel ?? 'Review security',
+        recipientRoles: ['owner', 'admin'],
+        excludeUserIds: payload.userId ? [payload.userId] : [],
+        sendEmail: payload.sendEmail ?? true,
+      });
+    } catch (error) {
+      this.logger.error(
+        'Security event notification failed',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
   @Cron('0 9 * * *')
   async sendOverdueTaskReminders() {
     this.logger.log('Running overdue task reminder cron...');

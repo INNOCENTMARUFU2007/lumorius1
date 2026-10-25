@@ -1,0 +1,255 @@
+﻿=== SECURITY / API-KEY SOURCE FILES ===
+C:\Users\HomePC\lumorius\apps\api\src\common\guards\api-key.guard.ts
+C:\Users\HomePC\lumorius\apps\api\src\common\middleware\security.middleware.ts
+C:\Users\HomePC\lumorius\apps\api\src\security\security.controller.ts
+C:\Users\HomePC\lumorius\apps\api\src\security\security.module.ts
+C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+
+=== FRONTEND API-KEY HANDLERS ===
+
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\integrations\page.tsx
+LineNumber : 14
+Line       : type AuthMode = 'oauth' | 'api_key' | 'webhook';
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\integrations\page.tsx
+LineNumber : 105
+Line       :     mutationFn: async (input: { provider: string; credentials: { apiKey?: string; appKey?: string; webhookUrl?: string } }) => {
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\integrations\page.tsx
+LineNumber : 142
+Line       :     if (item.authMode === 'api_key') {
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\integrations\page.tsx
+LineNumber : 143
+Line       :       const apiKey = window.prompt('Enter the Datadog API key. It will be encrypted before saving:')?.trim();
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\integrations\page.tsx
+LineNumber : 144
+Line       :       if (!apiKey) return;
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\integrations\page.tsx
+LineNumber : 147
+Line       :       configureMutation.mutate({ provider: item.id, credentials: { apiKey, appKey } });
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 55
+Line       :   const { data: apiKeys = [] } = useQuery<Record<string, unknown>[]>({
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 56
+Line       :     queryKey: ['security', 'api-keys'],
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 58
+Line       :       const res = await api.get('/security/api-keys');
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 81
+Line       :       const res = await api.post('/security/api-keys', { name: newKeyName });
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 88
+Line       :       qc.invalidateQueries({ queryKey: ['security', 'api-keys'] });
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 89
+Line       :       toast.success('API key created — copy it now, it won\'t be shown again!');
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 95
+Line       :       await api.delete(`/security/api-keys/${keyId}`);
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 98
+Line       :       qc.invalidateQueries({ queryKey: ['security', 'api-keys'] });
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 99
+Line       :       toast.success('API key revoked');
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 145
+Line       :     toast.success('API key copied to clipboard');
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 157
+Line       :           <p className="text-gray-400 text-sm">API keys, sessions, MFA, and audit logs</p>
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 164
+Line       :           <StatCard icon={Key}           label="Active API Keys"      value={summary.apiKeysActive as number}         color="violet"  />
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 229
+Line       :                 ⚠️ Copy your API key now — it won't be shown again
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 248
+Line       :       {/* API Keys */}
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 253
+Line       :             <h2 className="font-semibold text-white">API Keys</h2>
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 254
+Line       :             <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full">{apiKeys.length}</span>
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 284
+Line       :         {apiKeys.length === 0 ? (
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 285
+Line       :           <p className="text-sm text-gray-500 text-center py-6">No API keys yet. Create one to authenticate external integrations.</p>
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 288
+Line       :             {apiKeys.map((key) => (
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 294
+Line       :                     <p className="text-xs text-gray-500 font-mono">{key.key_prefix as string}…</p>
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\web\src\app\(dashboard)\security\page.tsx
+LineNumber : 305
+Line       :                       if (confirm('Revoke this API key? This cannot be undone.')) {
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+
+
+
+=== API ROUTES AND API-KEY SERVICES ===
+
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\gdpr\gdpr.service.ts
+LineNumber : 44
+Line       :         `SELECT name, scopes, last_used_at, created_at FROM api_keys
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\gdpr\gdpr.service.ts
+LineNumber : 145
+Line       :   `DELETE FROM api_keys WHERE created_by_id = $1`,
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.controller.ts
+LineNumber : 14
+Line       : class CreateApiKeyDto {
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.controller.ts
+LineNumber : 54
+Line       :     @Body() dto: CreateApiKeyDto,
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.controller.ts
+LineNumber : 56
+Line       :     return this.securityService.createApiKey(user.organizationId!, user.sub, dto);
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 134
+Line       :   async createApiKey(
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 149
+Line       :       `INSERT INTO api_keys (
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 154
+Line       :          key_hash,
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 155
+Line       :          key_prefix,
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 220
+Line       :          ak.key_prefix,
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 227
+Line       :        FROM api_keys ak
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 243
+Line       :       `UPDATE api_keys
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 268
+Line       :        FROM api_keys
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 269
+Line       :        WHERE key_prefix = $1
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 286
+Line       :         String(candidate.key_hash),
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 291
+Line       :           `UPDATE api_keys
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+Path       : C:\Users\HomePC\lumorius\apps\api\src\security\security.service.ts
+LineNumber : 339
+Line       :          FROM api_keys
+Context    : Microsoft.PowerShell.Commands.MatchInfoContext
+
+
+
+
+=== API-KEY DATABASE SCHEMA ===
+   column_name   |        data_type         | is_nullable 
+-----------------+--------------------------+-------------
+ id              | uuid                     | NO
+ organization_id | uuid                     | NO
+ created_by_id   | uuid                     | NO
+ name            | text                     | NO
+ key_hash        | text                     | NO
+ key_prefix      | text                     | NO
+ scopes          | ARRAY                    | NO
+ last_used_at    | timestamp with time zone | YES
+ expires_at      | timestamp with time zone | YES
+ is_active       | boolean                  | NO
+ created_at      | timestamp with time zone | NO
+(11 rows)
+

@@ -1,4 +1,4 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import {
@@ -14,7 +14,7 @@ import {
 } from '../test/helpers';
 
 jest.mock('uuid', () => ({
-  v4: jest.fn().mockReturnValue(FIXED_UUID),
+  v4: jest.fn().mockReturnValue('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'),
 }));
 
 describe('TasksService', () => {
@@ -47,7 +47,7 @@ describe('TasksService', () => {
     jest.clearAllMocks();
   });
 
-  // ── create ────────────────────────────────────────────────
+  // â”€â”€ create â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('create()', () => {
     const orgId = FIXED_UUID_2;
@@ -66,7 +66,7 @@ describe('TasksService', () => {
 
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO tasks'),
-        expect.arrayContaining([FIXED_UUID, 'Write tests', undefined, 'medium', orgId, creatorId]),
+        expect.arrayContaining([FIXED_UUID, 'Write tests', null, 'medium', orgId, creatorId]),
       );
       expect(result).toEqual(task);
     });
@@ -89,7 +89,7 @@ describe('TasksService', () => {
         taskId: FIXED_UUID,
         taskTitle: 'New task',
         assigneeId,
-        assignerName: 'Innocent Tester',
+        assignerName: 'Alice Tester',
         organizationId: orgId,
         priority: 'high',
         dueDate: undefined,
@@ -133,7 +133,7 @@ describe('TasksService', () => {
     });
   });
 
-  // ── findAll ───────────────────────────────────────────────
+  // â”€â”€ findAll â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('findAll()', () => {
     it('returns paginated tasks with total count', async () => {
@@ -201,7 +201,7 @@ describe('TasksService', () => {
     });
   });
 
-  // ── findById ──────────────────────────────────────────────
+  // â”€â”€ findById â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('findById()', () => {
     it('returns task when found', async () => {
@@ -222,7 +222,7 @@ describe('TasksService', () => {
     });
   });
 
-  // ── update ────────────────────────────────────────────────
+  // â”€â”€ update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('update()', () => {
     it('returns existing task when dto is empty (no-op)', async () => {
@@ -288,7 +288,7 @@ describe('TasksService', () => {
       expect(eventEmitter.emit).toHaveBeenCalledWith('task.assigned', expect.objectContaining({
         taskId: FIXED_UUID,
         assigneeId: FIXED_UUID_3,
-        assignerName: 'Innocent Tester',
+        assignerName: 'Alice Tester',
         organizationId: FIXED_UUID_2,
       }));
     });
@@ -302,14 +302,14 @@ describe('TasksService', () => {
         .mockResolvedValueOnce(pgResult([]))
         .mockResolvedValueOnce(pgResult([updatedTask]));
 
-      // No assigneeId in the update DTO — same assignee
+      // No assigneeId in the update DTO â€” same assignee
       await service.update(FIXED_UUID, FIXED_UUID_2, { title: 'Updated title' });
 
       expect(eventEmitter.emit).not.toHaveBeenCalled();
     });
   });
 
-  // ── delete ────────────────────────────────────────────────
+  // â”€â”€ delete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('delete()', () => {
     it('deletes the task and returns confirmation', async () => {
@@ -325,7 +325,7 @@ describe('TasksService', () => {
     });
   });
 
-  // ── Projects ──────────────────────────────────────────────
+  // â”€â”€ Projects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('createProject()', () => {
     it('inserts project and returns it', async () => {
@@ -380,3 +380,5 @@ describe('TasksService', () => {
     });
   });
 });
+
+

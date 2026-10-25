@@ -141,7 +141,10 @@ export class GdprService {
         [`deleted_${uid}@deleted.invalid`, uid],
       );
       await this.db.query(`DELETE FROM user_sessions WHERE user_id = $1`, [uid]);
-      await this.db.query(`DELETE FROM api_keys WHERE user_id = $1`, [uid]);
+     await this.db.query(
+  `DELETE FROM api_keys WHERE created_by_id = $1`,
+  [uid],
+); 
       this.logger.warn(`GDPR: user ${uid} (${user.email}) purged`);
     }
 

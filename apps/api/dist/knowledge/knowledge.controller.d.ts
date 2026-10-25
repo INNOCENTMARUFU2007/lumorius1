@@ -10,11 +10,11 @@ export declare class KnowledgeController {
     createNode(user: JwtPayload, body: Record<string, unknown>): Promise<Record<string, unknown>>;
     getNode(user: JwtPayload, id: string): Promise<Record<string, unknown>>;
     createRelation(user: JwtPayload, body: Record<string, unknown>): Promise<{
+        id: string;
         fromNodeId: string;
         toNodeId: string;
         relationType: string;
-        strength?: number;
-        id: string;
+        strength: number;
     }>;
     search(user: JwtPayload, body: {
         query: string;

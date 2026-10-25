@@ -33,6 +33,19 @@ let OrganizationsController = class OrganizationsController {
     getUsage(user) {
         return this.orgsService.getUsage(user.organizationId);
     }
+    getMembers(user) {
+        return this.orgsService.getMembers(user.organizationId);
+    }
+    inviteMember(user, body) {
+        return this.orgsService.invite(user.organizationId, user.sub, {
+            email: body.email,
+            role: body.role ?? 'member',
+            teamId: body.teamId,
+        });
+    }
+    removeMember(user, userId) {
+        return this.orgsService.removeMember(user.organizationId, userId, user.sub);
+    }
     getTeams(user) {
         return this.orgsService.getTeams(user.organizationId);
     }
@@ -48,11 +61,21 @@ let OrganizationsController = class OrganizationsController {
     createDepartment(user, body) {
         return this.orgsService.createDepartment(user.organizationId, body);
     }
+    getInvitationHistory(user) {
+        return this.orgsService.getInvitationHistory(user.organizationId);
+    }
     invite(user, body) {
-        return this.orgsService.invite(user.organizationId, user.sub, body);
+        return this.orgsService.invite(user.organizationId, user.sub, {
+            email: body.email,
+            role: body.role ?? 'member',
+            teamId: body.teamId,
+        });
     }
     acceptInvite(user, body) {
         return this.orgsService.acceptInvitation(body.token, user.sub);
+    }
+    completeOnboarding(user, body) {
+        return this.orgsService.completeOnboarding(user.sub, body);
     }
 };
 exports.OrganizationsController = OrganizationsController;
@@ -76,15 +99,53 @@ __decorate([
 ], OrganizationsController.prototype, "update", null);
 __decorate([
     (0, common_1.Get)('me/usage'),
-    (0, swagger_1.ApiOperation)({ summary: 'Get usage stats for current organization' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Get usage statistics for the current organization',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", void 0)
 ], OrganizationsController.prototype, "getUsage", null);
 __decorate([
+    (0, common_1.Get)('members'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'List members of the current organization',
+    }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], OrganizationsController.prototype, "getMembers", null);
+__decorate([
+    (0, common_1.Post)('members/invite'),
+    (0, roles_decorator_1.Roles)('manager'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Invite a member to the organization',
+    }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", void 0)
+], OrganizationsController.prototype, "inviteMember", null);
+__decorate([
+    (0, common_1.Delete)('members/:userId'),
+    (0, roles_decorator_1.Roles)('manager'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Remove a member from the organization',
+    }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Param)('userId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", void 0)
+], OrganizationsController.prototype, "removeMember", null);
+__decorate([
     (0, common_1.Get)('me/teams'),
-    (0, swagger_1.ApiOperation)({ summary: 'List teams in organization' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'List teams in the organization',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
@@ -103,7 +164,7 @@ __decorate([
 __decorate([
     (0, common_1.Post)('me/teams/:teamId/members'),
     (0, roles_decorator_1.Roles)('manager'),
-    (0, swagger_1.ApiOperation)({ summary: 'Add member to team' }),
+    (0, swagger_1.ApiOperation)({ summary: 'Add a member to a team' }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Param)('teamId')),
     __param(2, (0, common_1.Body)()),
@@ -113,7 +174,9 @@ __decorate([
 ], OrganizationsController.prototype, "addTeamMember", null);
 __decorate([
     (0, common_1.Get)('me/departments'),
-    (0, swagger_1.ApiOperation)({ summary: 'List departments' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'List departments in the organization',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object]),
@@ -130,9 +193,21 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], OrganizationsController.prototype, "createDepartment", null);
 __decorate([
+    (0, common_1.Get)('me/invitations'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Get invitation history for the current organization',
+    }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], OrganizationsController.prototype, "getInvitationHistory", null);
+__decorate([
     (0, common_1.Post)('me/invite'),
     (0, roles_decorator_1.Roles)('manager'),
-    (0, swagger_1.ApiOperation)({ summary: 'Invite a user to the organization' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Invite a user to the organization',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
@@ -141,13 +216,26 @@ __decorate([
 ], OrganizationsController.prototype, "invite", null);
 __decorate([
     (0, common_1.Post)('accept-invite'),
-    (0, swagger_1.ApiOperation)({ summary: 'Accept an organization invitation' }),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Accept an organization invitation',
+    }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [Object, Object]),
     __metadata("design:returntype", void 0)
 ], OrganizationsController.prototype, "acceptInvite", null);
+__decorate([
+    (0, common_1.Post)('onboarding'),
+    (0, swagger_1.ApiOperation)({
+        summary: 'Complete user onboarding',
+    }),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", void 0)
+], OrganizationsController.prototype, "completeOnboarding", null);
 exports.OrganizationsController = OrganizationsController = __decorate([
     (0, swagger_1.ApiTags)('organizations'),
     (0, swagger_1.ApiBearerAuth)(),

@@ -1,9 +1,9 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 
-// ── Mock service ──────────────────────────────────────────────
+// â”€â”€ Mock service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const createMockAuthService = () => ({
   register:             jest.fn(),
@@ -25,6 +25,7 @@ const createMockAuthService = () => ({
 });
 
 const mockUser = {
+  sub: 'user-1',
   id:           'user-1',
   email:        'innocent@lumorius.com',
   name:         'INNOCENT',
@@ -38,7 +39,7 @@ const mockTokens = {
   user:         mockUser,
 };
 
-// ── Tests ─────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -55,7 +56,7 @@ describe('AuthController', () => {
     controller = module.get<AuthController>(AuthController);
   });
 
-  // ── register ─────────────────────────────────────────────────
+  // â”€â”€ register â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('register()', () => {
     it('delegates to authService.register and returns result', async () => {
@@ -75,7 +76,7 @@ describe('AuthController', () => {
     });
   });
 
-  // ── login ─────────────────────────────────────────────────────
+  // â”€â”€ login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('login()', () => {
     it('returns tokens on successful login', async () => {
@@ -96,7 +97,7 @@ describe('AuthController', () => {
     });
   });
 
-  // ── refresh ───────────────────────────────────────────────────
+  // â”€â”€ refresh â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('refreshTokens()', () => {
     it('returns new token pair', async () => {
@@ -107,7 +108,7 @@ describe('AuthController', () => {
     });
   });
 
-  // ── logout ────────────────────────────────────────────────────
+  // â”€â”€ logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('logout()', () => {
     it('calls authService.logout and returns success', async () => {
@@ -116,23 +117,23 @@ describe('AuthController', () => {
         { refreshToken: 'rt-token' },
         mockUser as any,
       );
-      expect(authService.logout).toHaveBeenCalledWith(mockUser.id, 'rt-token');
+      expect(authService.logout).toHaveBeenCalledWith('rt-token');
       expect(result).toEqual({ success: true });
     });
   });
 
-  // ── me ────────────────────────────────────────────────────────
+  // â”€â”€ me â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('getProfile()', () => {
     it('returns current user profile', async () => {
-      authService.getProfile.mockResolvedValue(mockUser);
+
       const result = await controller.getProfile(mockUser as any);
-      expect(authService.getProfile).toHaveBeenCalledWith(mockUser.id);
+      expect(authService.getProfile).not.toHaveBeenCalled();
       expect(result).toEqual(mockUser);
     });
   });
 
-  // ── verifyEmail ───────────────────────────────────────────────
+  // â”€â”€ verifyEmail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('verifyEmail()', () => {
     it('calls authService.verifyEmail with token', async () => {
@@ -143,7 +144,7 @@ describe('AuthController', () => {
     });
   });
 
-  // ── password reset ────────────────────────────────────────────
+  // â”€â”€ password reset â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('requestPasswordReset()', () => {
     it('always returns sent:true (no enumeration)', async () => {
@@ -153,7 +154,7 @@ describe('AuthController', () => {
     });
   });
 
-  // ── MFA ───────────────────────────────────────────────────────
+  // â”€â”€ MFA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('setupMfa()', () => {
     it('returns TOTP secret and QR url', async () => {
@@ -162,19 +163,20 @@ describe('AuthController', () => {
         qrCodeUrl: 'otpauth://totp/...',
       });
       const result = await controller.setupMfa(mockUser as any);
-      expect(authService.setupMfa).toHaveBeenCalledWith(mockUser.id);
+      expect(authService.setupMfa).toHaveBeenCalledWith(mockUser.sub);
       expect(result.secret).toBe('BASE32SECRET');
     });
   });
 
-  // ── revokeAllSessions ─────────────────────────────────────────
+  // â”€â”€ revokeAllSessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('revokeAllSessions()', () => {
     it('calls service and returns count', async () => {
-      authService.revokeAllSessions.mockResolvedValue({ revoked: 3 });
+      authService.revokeAllSessions.mockResolvedValue({ revoked: true, revokedCount: 3 });
       const result = await controller.revokeAllSessions(mockUser as any);
-      expect(authService.revokeAllSessions).toHaveBeenCalledWith(mockUser.id);
-      expect(result).toEqual({ revoked: 3 });
+      expect(authService.revokeAllSessions).toHaveBeenCalledWith(mockUser.sub);
+      expect(result).toEqual({ revoked: true, revokedCount: 3 });
     });
   });
 });
+

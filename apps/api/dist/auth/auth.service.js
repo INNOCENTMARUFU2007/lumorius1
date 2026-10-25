@@ -44,6 +44,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var AuthService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthService = void 0;
+const event_emitter_1 = require("@nestjs/event-emitter");
 const common_1 = require("@nestjs/common");
 const jwt_1 = require("@nestjs/jwt");
 const config_1 = require("@nestjs/config");
@@ -58,11 +59,12 @@ const LOCKOUT_MINUTES = 30;
 const VERIFY_TOKEN_TTL_HOURS = 24;
 const RESET_TOKEN_TTL_MINUTES = 60;
 let AuthService = AuthService_1 = class AuthService {
-    constructor(db, jwtService, configService, emailService) {
+    constructor(db, jwtService, configService, emailService, eventEmitter) {
         this.db = db;
         this.jwtService = jwtService;
         this.configService = configService;
         this.emailService = emailService;
+        this.eventEmitter = eventEmitter;
         this.logger = new common_1.Logger(AuthService_1.name);
     }
     async register(dto) {
@@ -82,7 +84,7 @@ let AuthService = AuthService_1 = class AuthService {
                     .replace(/^-+|-+$/g, '')
                     .substring(0, 50);
                 await client.query(`INSERT INTO organizations (id, name, slug, plan_id)
-           VALUES ($1, $2, $3, 'starter')`, [orgId, dto.organizationName, `${slug}-${Date.now()}`]);
+           VALUES ($1, $2, $3, 'free')`, [orgId, dto.organizationName, `${slug}-${Date.now()}`]);
             }
             await client.query(`INSERT INTO users (id, email, password_hash, name, organization_id, role, password_changed_at)
          VALUES ($1, $2, $3, $4, $5, $6, NOW())`, [
@@ -176,7 +178,24 @@ let AuthService = AuthService_1 = class AuthService {
         this.emailService
             .sendLoginAlert(user.email, user.name, ip ?? 'unknown', userAgent ?? 'unknown device')
             .catch(() => null);
-        return this.generateTokens(user);
+        return this.generateTokens(user, undefined, undefined, { ipAddress: ip, userAgent });
+    }
+    async getCurrentUser(userId) {
+        const user = await this.db.findOne('users', { id: userId });
+        if (!user || user.is_active === false) {
+            throw new common_1.UnauthorizedException('User not found or inactive');
+        }
+        return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            avatarUrl: user.avatar_url ?? null,
+            role: user.role,
+            organizationId: user.organization_id ?? null,
+            emailVerified: Boolean(user.email_verified),
+            mfaEnabled: Boolean(user.mfa_enabled),
+            onboardingCompleted: Boolean(user.onboarding_completed),
+        };
     }
     async refreshTokens(refreshToken) {
         const session = await this.db.findOne('sessions', {
@@ -189,12 +208,16 @@ let AuthService = AuthService_1 = class AuthService {
             await this.db.query('UPDATE sessions SET is_valid = FALSE WHERE id = $1', [session.id]);
             throw new common_1.UnauthorizedException('Refresh token expired. Please sign in again.');
         }
-        const user = await this.db.findOne('users', { id: session.user_id });
-        if (!user)
-            throw new common_1.UnauthorizedException('User not found');
+        const user = await this.db.findOne('users', {
+            id: session.user_id,
+        });
+        if (!user || user.is_active === false) {
+            await this.db.query('UPDATE sessions SET is_valid = FALSE WHERE user_id = $1', [session.user_id]);
+            throw new common_1.UnauthorizedException('Account is disabled. Please contact support.');
+        }
         const newRefreshToken = (0, uuid_1.v4)();
         await this.db.query(`UPDATE sessions SET refresh_token = $1, last_active_at = NOW() WHERE id = $2`, [newRefreshToken, session.id]);
-        return this.generateTokens(user, newRefreshToken);
+        return this.generateTokens(user, newRefreshToken, String(session.id));
     }
     async logout(refreshToken) {
         await this.db.query('UPDATE sessions SET is_valid = FALSE WHERE refresh_token = $1', [refreshToken]);
@@ -320,26 +343,72 @@ let AuthService = AuthService_1 = class AuthService {
         return res.rows;
     }
     async revokeSession(userId, sessionId) {
-        await this.db.query('UPDATE sessions SET is_valid = FALSE WHERE id = $1 AND user_id = $2', [sessionId, userId]);
-    }
-    async revokeAllSessions(userId) {
-        await this.db.query('UPDATE sessions SET is_valid = FALSE WHERE user_id = $1', [userId]);
+        const result = await this.db.query('UPDATE sessions SET is_valid = FALSE WHERE id = $1 AND user_id = $2 AND is_valid = TRUE RETURNING id', [sessionId, userId]);
+        if (!result.rows?.length) {
+            return { revoked: false };
+        }
+        await this.db.query(`INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata)
+       SELECT organization_id, $1, 'security.session.revoked', 'session', $2, $3
+       FROM users WHERE id = $1 AND organization_id IS NOT NULL`, [userId, sessionId, JSON.stringify({ source: 'security_centre' })]);
         return { revoked: true };
     }
-    async generateTokens(user, existingRefreshToken) {
+    async revokeAllSessions(userId) {
+        const result = await this.db.query('UPDATE sessions SET is_valid = FALSE WHERE user_id = $1 AND is_valid = TRUE RETURNING id', [userId]);
+        const revokedCount = result.rows?.length ?? 0;
+        if (revokedCount > 0) {
+            await this.db.query(`INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata)
+         SELECT organization_id, $1, 'security.sessions.revoked_all', 'session', NULL, $2
+         FROM users WHERE id = $1 AND organization_id IS NOT NULL`, [userId, JSON.stringify({ revokedCount, source: 'security_centre' })]);
+        }
+        return { revoked: true, revokedCount };
+    }
+    async generateTokens(user, existingRefreshToken, existingSessionId, sessionContext = {}) {
         const payload = {
             sub: user.id,
             email: user.email,
             organizationId: user.organization_id,
             role: user.role,
-            emailVerified: user.email_verified,
+            emailVerified: Boolean(user.email_verified),
+            onboardingCompleted: Boolean(user.onboarding_completed),
         };
-        const accessToken = this.jwtService.sign(payload);
+        const sessionId = existingSessionId ?? (0, uuid_1.v4)();
+        const accessToken = this.jwtService.sign({ ...payload, sid: sessionId });
         const refreshToken = existingRefreshToken ?? (0, uuid_1.v4)();
         const refreshExpiresIn = this.configService.get('jwt.refreshExpiresIn', '7d');
         const expiresAt = new Date(Date.now() + this.parseDuration(refreshExpiresIn));
         if (!existingRefreshToken) {
-            await this.db.query(`INSERT INTO sessions (user_id, refresh_token, expires_at) VALUES ($1, $2, $3)`, [user.id, refreshToken, expiresAt]);
+            const sessionUserAgent = sessionContext.userAgent ?? '';
+            const sessionDeviceType = /Android|iPhone|iPad|Mobile/i.test(sessionUserAgent) ? 'mobile' : 'desktop';
+            const sessionBrowser = /Edg\//i.test(sessionUserAgent) ? 'Microsoft Edge'
+                : /Chrome\//i.test(sessionUserAgent) ? 'Google Chrome'
+                    : /Firefox\//i.test(sessionUserAgent) ? 'Firefox'
+                        : /Safari\//i.test(sessionUserAgent) ? 'Safari'
+                            : 'Browser';
+            const sessionDeviceName = sessionUserAgent
+                ? `${sessionBrowser} (${sessionDeviceType})`
+                : 'Unknown device';
+            await this.db.query(`INSERT INTO sessions (
+           id, user_id, refresh_token, expires_at, device_name,
+           device_type, ip_address, user_agent
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [
+                sessionId,
+                user.id,
+                refreshToken,
+                expiresAt,
+                sessionDeviceName,
+                sessionDeviceType,
+                sessionContext.ipAddress ?? null,
+                sessionUserAgent || null,
+            ]);
+            await this.db.query(`INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+         SELECT organization_id, $1, 'auth.session.created', 'session', $2, $3, $4, $5
+         FROM users WHERE id = $1 AND organization_id IS NOT NULL`, [
+                user.id,
+                sessionId,
+                JSON.stringify({ deviceName: sessionDeviceName, deviceType: sessionDeviceType }),
+                sessionContext.ipAddress ?? null,
+                sessionUserAgent || null,
+            ]);
         }
         return {
             accessToken,
@@ -350,9 +419,10 @@ let AuthService = AuthService_1 = class AuthService {
                 email: user.email,
                 name: user.name,
                 role: user.role,
-                organizationId: user.organization_id,
-                emailVerified: user.email_verified,
-                mfaEnabled: user.mfa_enabled,
+                organizationId: user.organization_id ?? null,
+                emailVerified: Boolean(user.email_verified),
+                mfaEnabled: Boolean(user.mfa_enabled),
+                onboardingCompleted: Boolean(user.onboarding_completed),
             },
         };
     }
@@ -370,6 +440,7 @@ exports.AuthService = AuthService = AuthService_1 = __decorate([
     __metadata("design:paramtypes", [database_service_1.DatabaseService,
         jwt_1.JwtService,
         config_1.ConfigService,
-        email_service_1.EmailService])
+        email_service_1.EmailService,
+        event_emitter_1.EventEmitter2])
 ], AuthService);
 //# sourceMappingURL=auth.service.js.map

@@ -9,7 +9,8 @@ import { SecurityService } from './security.service';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { IsString, IsOptional, IsArray, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsDateString, IsInt, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 
 class CreateApiKeyDto {
   @IsString() name: string = '';
@@ -22,6 +23,7 @@ class AuditQueryDto {
   @IsOptional() @IsString() userId?: string;
   @IsOptional() @IsString() from?: string;
   @IsOptional() @IsString() to?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number;
 }
 
 @ApiTags('security')
@@ -68,7 +70,7 @@ export class SecurityController {
     @CurrentUser() user: JwtPayload,
     @Param('id') keyId: string,
   ) {
-    return this.securityService.revokeApiKey(user.organizationId!, keyId);
+    return this.securityService.revokeApiKey(user.organizationId!, keyId, user.sub);
   }
 
   @Get('login-attempts')

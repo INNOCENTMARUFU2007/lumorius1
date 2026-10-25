@@ -1,120 +1,452 @@
+
 'use client';
 
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Settings, Users, Building2, Bell, Shield, Mail } from 'lucide-react';
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
+import {
+  Settings,
+  Users,
+  Building2,
+  Shield,
+  Mail,
+} from 'lucide-react';
 import api from '@/lib/api';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 
+type UsageItem = {
+  label: string;
+  used: number | null;
+  limit: number | null;
+  suffix?: string;
+};
+
+type ApiRecord = Record<string, unknown>;
+
+type UsageMetric = {
+  used?: number | string | null;
+  limit?: number | string | null;
+};
+
+type UsageData = {
+  users?: UsageMetric;
+  storage?: {
+    usedGb?: number | string | null;
+    limitGb?: number | string | null;
+  };
+  aiRequests?: UsageMetric;
+};
+
+function isRecord(value: unknown): value is ApiRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+/**
+ * Supports responses such as:
+ * { users: ... }
+ * { data: { users: ... } }
+ * { data: { data: { users: ... } } }
+ */
+function unwrapData(payload: unknown): unknown {
+  let current = payload;
+
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (
+      isRecord(current) &&
+      Object.prototype.hasOwnProperty.call(current, 'data')
+    ) {
+      current = current.data;
+    } else {
+      break;
+    }
+  }
+
+  return current;
+}
+
+function normalizeRecord(
+  payload: unknown,
+  nestedKeys: string[] = [],
+): ApiRecord {
+  let current = unwrapData(payload);
+
+  if (isRecord(current)) {
+    for (const key of nestedKeys) {
+      if (isRecord(current[key])) {
+        current = unwrapData(current[key]);
+        break;
+      }
+    }
+  }
+
+  if (!isRecord(current)) {
+    throw new Error(
+      'The API returned an unexpected response format.',
+    );
+  }
+
+  return current;
+}
+
+function readString(
+  record: ApiRecord | undefined,
+  ...keys: string[]
+): string | null {
+  if (!record) return null;
+
+  for (const key of keys) {
+    const value = record[key];
+
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function toNumber(value: unknown): number | null {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getErrorMessage(
+  error: unknown,
+  fallback: string,
+): string {
+  if (isRecord(error)) {
+    const response = error.response;
+
+    if (isRecord(response) && isRecord(response.data)) {
+      const message = response.data.message;
+
+      if (typeof message === 'string' && message.trim()) {
+        return message;
+      }
+
+      if (
+        Array.isArray(message) &&
+        message.every((item) => typeof item === 'string')
+      ) {
+        return message.join(', ');
+      }
+    }
+
+    if (
+      typeof error.message === 'string' &&
+      error.message.trim()
+    ) {
+      return error.message;
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('member');
 
-  const { data: org } = useQuery({
+  // Safely handle incomplete user profiles.
+  const profileName =
+    typeof user?.name === 'string' && user.name.trim()
+      ? user.name.trim()
+      : typeof user?.email === 'string' && user.email.trim()
+        ? user.email.trim()
+        : 'User';
+
+  const profileInitial = profileName.charAt(0).toUpperCase();
+
+  const profileEmail =
+    typeof user?.email === 'string' && user.email.trim()
+      ? user.email
+      : 'Email unavailable';
+
+  const profileRole =
+    typeof user?.role === 'string' && user.role.trim()
+      ? user.role
+      : 'Member';
+
+  // Organisation query: one declaration, with a guaranteed valid return.
+  const {
+    data: org,
+    isLoading: orgLoading,
+    isError: orgError,
+    error: orgQueryError,
+    refetch: refetchOrg,
+  } = useQuery<ApiRecord, Error>({
     queryKey: ['org'],
     queryFn: async () => {
-      const res = await api.get('/organizations/me');
-      return res.data.data;
+      const response = await api.get<unknown>(
+        '/organizations/me',
+      );
+
+      return normalizeRecord(response.data, [
+        'organization',
+        'org',
+      ]);
     },
+    retry: 1,
   });
 
-  const { data: usage } = useQuery({
+  // Usage query: handles both direct and wrapped API responses.
+  const {
+    data: usageData,
+    isLoading: usageLoading,
+    isError: usageError,
+    error: usageQueryError,
+    refetch: refetchUsage,
+  } = useQuery<UsageData, Error>({
     queryKey: ['org', 'usage'],
     queryFn: async () => {
-      const res = await api.get('/organizations/me/usage');
-      return res.data.data;
+      const response = await api.get<unknown>(
+        '/organizations/me/usage',
+      );
+
+      let payload = unwrapData(response.data);
+
+      if (isRecord(payload) && isRecord(payload.usage)) {
+        payload = unwrapData(payload.usage);
+      }
+
+      if (!isRecord(payload)) {
+        throw new Error(
+          'The usage API returned an unexpected response format.',
+        );
+      }
+
+      return payload as UsageData;
     },
+    retry: 1,
   });
+
+  const storageUsed = toNumber(usageData?.storage?.usedGb);
+
+  const usageItems: UsageItem[] = [
+    {
+      label: 'Users',
+      used: toNumber(usageData?.users?.used),
+      limit: toNumber(usageData?.users?.limit),
+    },
+    {
+      label: 'Storage',
+      used:
+        storageUsed === null
+          ? null
+          : Math.round(storageUsed * 10) / 10,
+      limit: toNumber(usageData?.storage?.limitGb),
+      suffix: 'GB',
+    },
+    {
+      label: 'AI Requests',
+      used: toNumber(usageData?.aiRequests?.used),
+      limit: toNumber(usageData?.aiRequests?.limit),
+    },
+  ];
 
   const inviteMutation = useMutation({
-    mutationFn: () => api.post('/organizations/me/invite', { email: inviteEmail, role: inviteRole }),
+    mutationFn: async () =>
+      api.post('/organizations/me/invite', {
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      }),
+
     onSuccess: () => {
-      toast.success(`Invitation sent to ${inviteEmail}`);
+      toast.success(
+        `Invitation sent to ${inviteEmail.trim()}`,
+      );
+
       setInviteEmail('');
+
+      queryClient.invalidateQueries({
+        queryKey: ['org', 'usage'],
+      });
     },
-    onError: (err: unknown) => {
-      const error = err as { response?: { data?: { message?: string } } };
-      toast.error(error?.response?.data?.message ?? 'Failed to send invitation');
+
+    onError: (error: unknown) => {
+      toast.error(
+        getErrorMessage(error, 'Failed to send invitation'),
+      );
     },
   });
 
+  const organisationName =
+    readString(org, 'name', 'organization_name', 'organisation_name') ??
+    'Unavailable';
+
+  const organisationSlug =
+    readString(org, 'slug') ?? 'Unavailable';
+
+  const organisationPlan =
+    readString(org, 'plan_name', 'plan') ?? 'Unavailable';
+
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="mx-auto max-w-3xl space-y-6">
+      {/* Page header */}
       <div className="flex items-center gap-3">
-        <div className="p-2 bg-gray-500/10 rounded-xl">
-          <Settings className="w-5 h-5 text-gray-500" />
+        <div className="rounded-xl bg-gray-500/10 p-2">
+          <Settings className="h-5 w-5 text-gray-500" />
         </div>
-        <h1 className="text-2xl font-bold">Settings</h1>
+
+        <div>
+          <h1 className="text-2xl font-bold">Settings</h1>
+          <p className="text-sm text-muted-foreground">
+            Manage your organisation, usage, and profile.
+          </p>
+        </div>
       </div>
 
-      {/* Organization */}
-      <div className="bg-card border border-border rounded-xl p-5 space-y-4">
+      {/* Organisation */}
+      <section className="space-y-4 rounded-xl border border-border bg-card p-5">
         <div className="flex items-center gap-2">
-          <Building2 className="w-4 h-4 text-muted-foreground" />
-          <h3 className="font-semibold">Organization</h3>
+          <Building2 className="h-4 w-4 text-muted-foreground" />
+          <h2 className="font-semibold">Organisation</h2>
         </div>
-        {org && (
-          <div className="grid grid-cols-2 gap-4 text-sm">
+
+        {orgLoading ? (
+          <p className="text-sm text-muted-foreground">
+            Loading organisation details…
+          </p>
+        ) : orgError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-sm text-red-500">
+              {getErrorMessage(
+                orgQueryError,
+                'Organisation details could not be loaded.',
+              )}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                void refetchOrg();
+              }}
+              className="text-sm font-medium text-brand-500 hover:underline"
+            >
+              Try again
+            </button>
+          </div>
+        ) : org ? (
+          <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
             <div>
               <p className="text-muted-foreground">Name</p>
-              <p className="font-medium">{(org as Record<string, unknown>).name as string}</p>
+              <p className="break-words font-medium">
+                {organisationName}
+              </p>
             </div>
+
             <div>
               <p className="text-muted-foreground">Slug</p>
-              <p className="font-medium font-mono">{(org as Record<string, unknown>).slug as string}</p>
+              <p className="break-words font-mono font-medium">
+                {organisationSlug}
+              </p>
             </div>
+
             <div>
               <p className="text-muted-foreground">Plan</p>
-              <p className="font-medium capitalize">{(org as Record<string, unknown>).plan_name as string}</p>
+              <p className="font-medium capitalize">
+                {organisationPlan}
+              </p>
             </div>
           </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Organisation information is unavailable.
+          </p>
         )}
-      </div>
+      </section>
 
       {/* Usage */}
-      {usage && (
-        <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-          <div className="flex items-center gap-2">
-            <Shield className="w-4 h-4 text-muted-foreground" />
-            <h3 className="font-semibold">Usage</h3>
+      <section className="space-y-4 rounded-xl border border-border bg-card p-5">
+        <div className="flex items-center gap-2">
+          <Shield className="h-4 w-4 text-muted-foreground" />
+          <h2 className="font-semibold">Usage</h2>
+        </div>
+
+        {usageLoading ? (
+          <p className="text-sm text-muted-foreground">
+            Loading usage information…
+          </p>
+        ) : usageError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-sm text-red-500">
+              {getErrorMessage(
+                usageQueryError,
+                'Usage information could not be loaded.',
+              )}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                void refetchUsage();
+              }}
+              className="text-sm font-medium text-brand-500 hover:underline"
+            >
+              Try again
+            </button>
           </div>
+        ) : usageData ? (
           <div className="space-y-3">
-            {[
-              {
-                label: 'Users',
-                used: (usage as Record<string, Record<string, unknown>>).users.used as number,
-                limit: (usage as Record<string, Record<string, unknown>>).users.limit as number | null,
-              },
-              {
-                label: 'Storage',
-                used: Math.round(Number((usage as Record<string, Record<string, unknown>>).storage.usedGb) * 10) / 10,
-                limit: (usage as Record<string, Record<string, unknown>>).storage.limitGb as number | null,
-                suffix: 'GB',
-              },
-              {
-                label: 'AI Requests',
-                used: (usage as Record<string, Record<string, unknown>>).aiRequests.used as number,
-                limit: (usage as Record<string, Record<string, unknown>>).aiRequests.limit as number | null,
-              },
-            ].map(({ label, used, limit, suffix }) => {
-              const pct = limit ? Math.min(100, (used / limit) * 100) : 0;
+            {usageItems.map(({ label, used, limit, suffix }) => {
+              const percentage =
+                used !== null && limit !== null && limit > 0
+                  ? Math.min(100, (used / limit) * 100)
+                  : 0;
+
               return (
                 <div key={label}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-muted-foreground">{label}</span>
-                    <span className="font-medium">
-                      {used.toLocaleString()}{suffix ? ` ${suffix}` : ''}{' '}
-                      {limit ? `/ ${limit.toLocaleString()}${suffix ? ` ${suffix}` : ''}` : '(unlimited)'}
+                  <div className="mb-1 flex justify-between gap-3 text-sm">
+                    <span className="text-muted-foreground">
+                      {label}
+                    </span>
+
+                    <span className="text-right font-medium">
+                      {used === null
+                        ? 'Unavailable'
+                        : `${used.toLocaleString()}${suffix ? ` ${suffix}` : ''}`}
+
+                      {used !== null &&
+                        (limit === null
+                          ? ' (unlimited)'
+                          : ` / ${limit.toLocaleString()}${suffix ? ` ${suffix}` : ''}`)}
                     </span>
                   </div>
-                  {limit && (
-                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+
+                  {limit !== null && limit > 0 && used !== null && (
+                    <div className="h-2 overflow-hidden rounded-full bg-muted">
                       <div
-                        className={`h-full rounded-full transition-all ${pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-yellow-500' : 'bg-brand-500'}`}
-                        style={{ width: `${pct}%` }}
+                        className={`h-full rounded-full transition-all ${
+                          percentage > 90
+                            ? 'bg-red-500'
+                            : percentage > 70
+                              ? 'bg-yellow-500'
+                              : 'bg-brand-500'
+                        }`}
+                        style={{ width: `${percentage}%` }}
                       />
                     </div>
                   )}
@@ -122,63 +454,107 @@ export default function SettingsPage() {
               );
             })}
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Usage information is unavailable.
+          </p>
+        )}
+      </section>
 
-      {/* Invite */}
-      <div className="bg-card border border-border rounded-xl p-5 space-y-4">
+      {/* Invite team members */}
+      <section className="space-y-4 rounded-xl border border-border bg-card p-5">
         <div className="flex items-center gap-2">
-          <Mail className="w-4 h-4 text-muted-foreground" />
-          <h3 className="font-semibold">Invite Team Members</h3>
+          <Mail className="h-4 w-4 text-muted-foreground" />
+          <h2 className="font-semibold">Invite Team Members</h2>
         </div>
-        <div className="flex gap-2">
+
+        <form
+          className="flex flex-col gap-2 sm:flex-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+
+            if (inviteEmail.trim()) {
+              inviteMutation.mutate();
+            }
+          }}
+        >
           <input
             value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
+            onChange={(event) =>
+              setInviteEmail(event.target.value)
+            }
             placeholder="colleague@company.com"
             type="email"
-            className="flex-1 px-4 py-2.5 text-sm bg-muted border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+            required
+            autoComplete="email"
+            className="min-w-0 flex-1 rounded-lg border border-border bg-muted px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
           />
+
           <select
             value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value)}
-            className="px-3 py-2.5 text-sm bg-muted border border-border rounded-lg focus:outline-none"
+            onChange={(event) =>
+              setInviteRole(event.target.value)
+            }
+            aria-label="Invitation role"
+            className="rounded-lg border border-border bg-muted px-3 py-2.5 text-sm focus:outline-none"
           >
-            {['viewer', 'member', 'manager', 'admin'].map((r) => (
-              <option key={r} value={r}>{r}</option>
-            ))}
+            {['viewer', 'member', 'manager', 'admin'].map(
+              (role) => (
+                <option key={role} value={role}>
+                  {role}
+                </option>
+              ),
+            )}
           </select>
+
           <button
-            onClick={() => inviteEmail && inviteMutation.mutate()}
-            disabled={!inviteEmail || inviteMutation.isPending}
-            className="px-4 py-2.5 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600 transition disabled:opacity-50"
+            type="submit"
+            disabled={
+              !inviteEmail.trim() || inviteMutation.isPending
+            }
+            className="rounded-lg bg-brand-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Invite
+            {inviteMutation.isPending ? 'Sending…' : 'Invite'}
           </button>
-        </div>
-      </div>
+        </form>
+      </section>
 
       {/* Profile */}
-      <div className="bg-card border border-border rounded-xl p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <Users className="w-4 h-4 text-muted-foreground" />
-          <h3 className="font-semibold">Your Profile</h3>
+      <section className="rounded-xl border border-border bg-card p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <Users className="h-4 w-4 text-muted-foreground" />
+          <h2 className="font-semibold">Your Profile</h2>
         </div>
-        {user && (
+
+        {user ? (
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-brand-500 flex items-center justify-center text-white font-bold text-lg">
-              {user.name.charAt(0)}
+            <div
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-500 text-lg font-bold text-white"
+              aria-label={`Profile initial: ${profileInitial}`}
+            >
+              {profileInitial}
             </div>
-            <div>
-              <p className="font-semibold text-foreground">{user.name}</p>
-              <p className="text-sm text-muted-foreground">{user.email}</p>
-              <span className="text-xs capitalize bg-brand-100 text-brand-700 px-2 py-0.5 rounded-full mt-1 inline-block">
-                {user.role}
+
+            <div className="min-w-0">
+              <p className="break-words font-semibold text-foreground">
+                {profileName}
+              </p>
+
+              <p className="break-words text-sm text-muted-foreground">
+                {profileEmail}
+              </p>
+
+              <span className="mt-1 inline-block rounded-full bg-brand-100 px-2 py-0.5 text-xs capitalize text-brand-700">
+                {profileRole}
               </span>
             </div>
           </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Profile information is currently unavailable.
+          </p>
         )}
-      </div>
+      </section>
     </div>
   );
 }

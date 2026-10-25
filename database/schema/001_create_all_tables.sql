@@ -7,24 +7,23 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgvector";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
+CREATE TYPE plan_tier AS ENUM ('free', 'starter', 'professional', 'enterprise', 'growth', 'custom');
+
 -- ============================================================
 -- BILLING PLANS
 -- ============================================================
 CREATE TABLE billing_plans (
-  id            VARCHAR(50) PRIMARY KEY,
-  name          VARCHAR(100) NOT NULL,
-  description   TEXT,
-  monthly_price_cents INTEGER NOT NULL DEFAULT 0,
-  annual_price_cents  INTEGER NOT NULL DEFAULT 0,
-  max_users     INTEGER,
-  storage_gb    INTEGER,
-  ai_requests_per_month INTEGER,
-  stripe_price_id_monthly VARCHAR(255),
-  stripe_price_id_annual  VARCHAR(255),
-  features      JSONB NOT NULL DEFAULT '[]',
-  is_active     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  tier plan_tier NOT NULL,
+  price_monthly NUMERIC(10,2) NOT NULL DEFAULT 0,
+  price_yearly NUMERIC(10,2) NOT NULL DEFAULT 0,
+  stripe_price_monthly TEXT,
+  stripe_price_yearly TEXT,
+  features JSONB NOT NULL DEFAULT '{}',
+  limits JSONB NOT NULL DEFAULT '{}',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================
@@ -35,7 +34,7 @@ CREATE TABLE organizations (
   name          VARCHAR(255) NOT NULL,
   slug          VARCHAR(100) NOT NULL UNIQUE,
   logo_url      TEXT,
-  plan_id       VARCHAR(50) NOT NULL REFERENCES billing_plans(id) DEFAULT 'starter',
+  plan_id       plan_tier NOT NULL DEFAULT 'free',
   settings      JSONB NOT NULL DEFAULT '{}',
   stripe_customer_id VARCHAR(255),
   storage_used_bytes BIGINT NOT NULL DEFAULT 0,
@@ -54,6 +53,7 @@ CREATE TABLE users (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   email           VARCHAR(255) NOT NULL UNIQUE,
   email_verified  BOOLEAN NOT NULL DEFAULT FALSE,
+  onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,
   password_hash   TEXT,
   name            VARCHAR(255) NOT NULL,
   avatar_url      TEXT,

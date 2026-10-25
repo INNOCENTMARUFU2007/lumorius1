@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, Shield } from 'lucide-react';
 import api from '@/lib/api';
-import { setTokens } from '@/lib/auth';
+import { setTokens, getAuthDestination } from '@/lib/auth';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
@@ -43,7 +43,7 @@ export default function LoginPage() {
 
       setTokens(data.accessToken, data.refreshToken);
 
-      router.push('/dashboard');
+      router.replace(getAuthDestination(data.user));
     } catch (err: any) {
       const msg = err?.response?.data?.message;
 

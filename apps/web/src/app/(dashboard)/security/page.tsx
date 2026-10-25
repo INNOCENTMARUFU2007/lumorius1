@@ -34,10 +34,34 @@ function StatCard({ icon: Icon, label, value, color = 'violet' }: {
   );
 }
 
+const PUBLIC_API_SCOPES = [
+  { value: 'documents:read', label: 'Read documents', description: 'Read document metadata in your organisation.' },
+  { value: 'tasks:read', label: 'Read tasks', description: 'Read task data in your organisation.' },
+  { value: 'projects:read', label: 'Read projects', description: 'Read project data in your organisation.' },
+] as const;
+
+function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'response' in error) {
+    const response = (error as { response?: { data?: { message?: unknown } } }).response;
+    const message = response?.data?.message;
+    if (typeof message === 'string') return message;
+    if (Array.isArray(message)) return message.map(String).join(', ');
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+function safeAuditMetadata(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const safeEntries = Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !/(secret|token|password|authorization|credential|key_hash|api.?key)/i.test(key));
+  if (safeEntries.length === 0) return null;
+  return JSON.stringify(Object.fromEntries(safeEntries), null, 2);
+}
 export default function SecurityPage() {
   const qc = useQueryClient();
   const [showNewKey, setShowNewKey] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
+  const [selectedScopes, setSelectedScopes] = useState<string[]>(['documents:read']);
+  const [keyExpiryDate, setKeyExpiryDate] = useState('');
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [keyVisible, setKeyVisible] = useState(false);
   const [mfaStep, setMfaStep] = useState<'idle' | 'setup' | 'verify'>('idle');
@@ -78,15 +102,58 @@ export default function SecurityPage() {
 
   const createKey = useMutation({
     mutationFn: async () => {
-      const res = await api.post('/security/api-keys', { name: newKeyName });
-      return res.data.data as { key: string };
+      const expiresAt = keyExpiryDate
+        ? new Date(`${keyExpiryDate}T23:59:59`).toISOString()
+        : undefined;
+      const res = await api.post('/security/api-keys', {
+        name: newKeyName.trim(),
+        scopes: selectedScopes,
+        expiresAt,
+      });
+      return res.data.data as {
+        id: string;
+        name: string;
+        key: string;
+        prefix?: string;
+        scopes?: string[];
+        expiresAt?: string | null;
+        createdAt?: string;
+      };
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setCreatedKey(data.key);
       setShowNewKey(false);
       setNewKeyName('');
-      qc.invalidateQueries({ queryKey: ['security', 'api-keys'] });
-      toast.success('API key created — copy it now, it won\'t be shown again!');
+      setSelectedScopes(['documents:read']);
+      setKeyExpiryDate('');
+      const created = data;
+      // Update the visible list immediately so the new key count and row do not
+      // depend on a page refresh. The server refetch below then reconciles fields.
+      qc.setQueryData<Record<string, unknown>[]>(
+        ['security', 'api-keys'],
+        (current) => {
+          const createdRow: Record<string, unknown> = {
+            id: created.id,
+            name: created.name,
+            key_prefix: created.prefix ?? created.key.slice(0, 12),
+            scopes: created.scopes ?? selectedScopes,
+            last_used_at: null,
+            expires_at: created.expiresAt ?? (keyExpiryDate ? new Date(`${keyExpiryDate}T23:59:59`).toISOString() : null),
+            is_active: true,
+            created_at: created.createdAt ?? new Date().toISOString(),
+          };
+          const rows = current ?? [];
+          return [createdRow, ...rows.filter((row) => row.id !== created.id)];
+        },
+      );
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['security', 'api-keys'] }),
+        qc.invalidateQueries({ queryKey: ['security', 'summary'] }),
+      ]);
+      toast.success('API key created. Copy it now; it will not be shown again.');
+    },
+    onError: (error: unknown) => {
+      toast.error(getApiErrorMessage(error, 'Could not create API key'));
     },
   });
 
@@ -96,18 +163,31 @@ export default function SecurityPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['security', 'api-keys'] });
+      qc.invalidateQueries({ queryKey: ['security', 'summary'] });
+      qc.invalidateQueries({ queryKey: ['security', 'audit-logs'] });
+      qc.invalidateQueries({ queryKey: ['security', 'summary'] });
       toast.success('API key revoked');
+    },
+    onError: (error: unknown) => {
+      toast.error(getApiErrorMessage(error, 'Could not revoke API key'));
     },
   });
 
   const revokeSession = useMutation({
     mutationFn: async (sessionId: string) => {
-      await api.delete(`/auth/sessions/${sessionId}`);
+      const response = await api.delete(`/auth/sessions/${sessionId}`);
+      return response.data.data as { revoked?: boolean };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result && (result as { revoked?: boolean }).revoked === false) {
+        toast.error('Session was already revoked or could not be found');
+        return;
+      }
       qc.invalidateQueries({ queryKey: ['auth', 'sessions'] });
-      toast.success('Session revoked');
+      qc.invalidateQueries({ queryKey: ['security', 'audit-logs'] });
+      toast.success('Device session revoked');
     },
+    onError: (error: any) => toast.error(error?.response?.data?.message ?? 'Failed to revoke device session'),
   });
 
   const revokeAll = useMutation({
@@ -262,22 +342,60 @@ export default function SecurityPage() {
         </div>
 
         {showNewKey && (
-          <div className="mb-4 flex gap-2">
-            <input
-              className="flex-1 bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-violet-500"
-              placeholder="Key name (e.g. Production App)"
-              value={newKeyName}
-              onChange={(e) => setNewKeyName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && newKeyName && createKey.mutate()}
-              autoFocus
-            />
-            <button
-              onClick={() => createKey.mutate()}
-              disabled={!newKeyName || createKey.isPending}
-              className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-700 text-white text-sm rounded-lg transition"
-            >
-              Create
-            </button>
+          <div className="mb-4 space-y-3 rounded-xl border border-gray-800 p-3">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-violet-500"
+                placeholder="Key name (e.g. Production CRM)"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && newKeyName.trim() && selectedScopes.length > 0 && createKey.mutate()}
+                autoFocus
+                maxLength={100}
+              />
+              <button
+                onClick={() => createKey.mutate()}
+                disabled={!newKeyName.trim() || selectedScopes.length === 0 || createKey.isPending}
+                className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-700 text-white text-sm rounded-lg transition"
+              >
+                {createKey.isPending ? 'Creating...' : 'Create'}
+              </button>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-200">API permissions</p>
+              <p className="text-xs text-gray-500 mt-1">Choose the minimum permissions this integration needs. These scopes are enforced by the public API.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
+                {PUBLIC_API_SCOPES.map((scope) => (
+                  <label key={scope.value} className="flex items-start gap-2 rounded-lg border border-gray-800 bg-gray-950/50 p-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-1 accent-violet-500"
+                      checked={selectedScopes.includes(scope.value)}
+                      onChange={(e) => setSelectedScopes((current) => e.target.checked
+                        ? Array.from(new Set([...current, scope.value]))
+                        : current.filter((value) => value !== scope.value))}
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-gray-200">{scope.label}</span>
+                      <span className="block text-xs text-gray-500 mt-1">{scope.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {selectedScopes.length === 0 && <p className="text-xs text-amber-400 mt-2">Select at least one permission.</p>}
+            </div>
+            <div>
+              <label htmlFor="api-key-expiry" className="block text-sm font-medium text-gray-200">Expiry date (optional)</label>
+              <input
+                id="api-key-expiry"
+                type="date"
+                min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}
+                value={keyExpiryDate}
+                onChange={(e) => setKeyExpiryDate(e.target.value)}
+                className="mt-2 w-full sm:w-64 bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-violet-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">Leave blank for no expiry. Otherwise, the key expires at 11:59 PM local time on the selected date.</p>
+            </div>
           </div>
         )}
 
@@ -292,10 +410,16 @@ export default function SecurityPage() {
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white truncate">{key.name as string}</p>
                     <p className="text-xs text-gray-500 font-mono">{key.key_prefix as string}…</p>
+                    <p className="text-xs text-gray-500 mt-1">Permissions: {Array.isArray(key.scopes) ? key.scopes.map(String).join(', ') : 'Not specified'}</p>
+                    <p className={`text-xs mt-1 ${key.expires_at && new Date(String(key.expires_at)).getTime() <= Date.now() ? 'text-red-400' : 'text-gray-500'}`}>
+                      {key.expires_at
+                        ? `${new Date(String(key.expires_at)).getTime() <= Date.now() ? 'Expired' : 'Expires'} ${new Date(String(key.expires_at)).toLocaleString()}`
+                        : 'Expires: Never'}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0 ml-4">
-                  {key.last_used_at && (
+                  {Boolean(key.last_used_at) &&  (
                     <span className="text-xs text-gray-500 hidden sm:block">
                       Last used {new Date(key.last_used_at as string).toLocaleDateString()}
                     </span>
@@ -382,12 +506,28 @@ export default function SecurityPage() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-200">
                     <span className="font-mono text-violet-400 text-xs">{log.action as string}</span>
-                    {log.resource_type && <span className="text-gray-500"> · {log.resource_type as string}</span>}
+                    {Boolean(log.resource_type) && <span className="text-gray-500"> · {log.resource_type as string}</span>}
                   </p>
-                  {log.user_name && <p className="text-xs text-gray-500 mt-0.5">by {log.user_name as string}</p>}
+                                    <p className="text-xs text-gray-500 mt-0.5">
+                    Actor: {(log.user_name as string) || (log.user_email as string) || 'System'}
+                    {Boolean(log.user_email) && <span className="ml-1">({log.user_email as string})</span>}
+                  </p>
+                  {(Boolean(log.resource_id) || Boolean(log.ip_address) || Boolean(log.user_agent)) && (
+                    <p className="text-xs text-gray-500 mt-1 break-words">
+                      {Boolean(log.resource_id) && <span>Resource ID: {log.resource_id as string} </span>}
+                      {Boolean(log.ip_address) && <span>IP: {log.ip_address as string} </span>}
+                      {Boolean(log.user_agent) && <span className="block truncate">Device: {log.user_agent as string}</span>}
+                    </p>
+                  )}
+                  {Boolean(safeAuditMetadata(log.metadata)) && (
+                    <details className="mt-1 text-xs text-gray-400">
+                      <summary className="cursor-pointer hover:text-violet-300">Event details</summary>
+                      <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-gray-950 p-2">{safeAuditMetadata(log.metadata)}</pre>
+                    </details>
+                  )}
                 </div>
                 <span className="text-xs text-gray-600 shrink-0">
-                  {new Date(log.created_at as string).toLocaleTimeString()}
+                  {new Date(log.created_at as string).toLocaleString()}
                 </span>
               </div>
             ))}

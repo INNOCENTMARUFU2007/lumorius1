@@ -36,6 +36,9 @@ let GoogleStrategy = class GoogleStrategy extends (0, passport_1.PassportStrateg
         if (!email)
             return done(new Error('No email from Google'), false);
         let user = await this.db.findOne('users', { email });
+        if (user && user.is_active === false) {
+            return done(new common_1.UnauthorizedException('Account is disabled. Contact support.'), false);
+        }
         if (!user) {
             const userId = (0, uuid_1.v4)();
             await this.db.query(`INSERT INTO users (id, email, name, avatar_url, email_verified)

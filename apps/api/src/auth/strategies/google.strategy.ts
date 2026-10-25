@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { Strategy, VerifyCallback } from 'passport-google-oauth20';
 import { ConfigService } from '@nestjs/config';
@@ -34,6 +34,9 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     if (!email) return done(new Error('No email from Google'), false);
 
     let user = await this.db.findOne<Record<string, unknown>>('users', { email });
+    if (user && user.is_active === false) {
+      return done(new UnauthorizedException('Account is disabled. Contact support.'), false);
+    }
     if (!user) {
       const userId = uuidv4();
       await this.db.query(

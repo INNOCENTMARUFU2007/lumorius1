@@ -1,0 +1,957 @@
+
+import { Injectable, Logger } from '@nestjs/common';
+import { v4 as uuidv4 } from 'uuid';
+
+import { DatabaseService } from '../database/database.service';
+import { AiService } from '../ai/ai.service';
+
+type HealthScore = {
+  overall: number | null;
+  financial: number | null;
+  growth: number | null;
+  team: number | null;
+  product: number | null;
+  breakdown: {
+    taskCompletionRate: number | null;
+    overdueTaskRate: number | null;
+    documentIndexRate: number | null;
+    weeklyActiveUsers: number | null;
+    meetings30d: number;
+    okrProgress: number | null;
+  };
+};
+
+@Injectable()
+export class FounderOsService {
+  private readonly logger = new Logger(FounderOsService.name);
+
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly aiService: AiService,
+  ) {}
+
+  // ── OKRs ────────────────────────────────────────────────────
+
+  async getOkrs(
+    organizationId: string,
+    quarter?: string,
+    year?: number,
+  ) {
+    const currentYear = year ?? new Date().getFullYear();
+    const currentQ =
+      quarter ?? `Q${Math.ceil((new Date().getMonth() + 1) / 3)}`;
+
+    const res = await this.db.query(
+      `SELECT
+         o.*,
+         u.name AS owner_name,
+         u.avatar_url AS owner_avatar,
+         COALESCE(
+           json_agg(kr.* ORDER BY kr.created_at ASC)
+             FILTER (WHERE kr.id IS NOT NULL),
+           '[]'
+         ) AS key_results
+       FROM objectives o
+       LEFT JOIN users u ON o.owner_id = u.id
+       LEFT JOIN key_results kr ON kr.objective_id = o.id
+       WHERE o.organization_id = $1
+         AND o.quarter = $2
+         AND o.year = $3
+       GROUP BY o.id, u.name, u.avatar_url
+       ORDER BY o.created_at DESC`,
+      [organizationId, currentQ, currentYear],
+    );
+
+    return {
+      objectives: res.rows,
+      quarter: currentQ,
+      year: currentYear,
+    };
+  }
+
+  async createObjective(
+    organizationId: string,
+    userId: string,
+    dto: {
+      title: string;
+      description?: string;
+      quarter: string;
+      year: number;
+      dueDate?: string;
+      ownerId?: string;
+    },
+  ) {
+    const id = uuidv4();
+
+    await this.db.query(
+      `INSERT INTO objectives (
+         id,
+         organization_id,
+         owner_id,
+         title,
+         description,
+         quarter,
+         year,
+         due_date
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        organizationId,
+        dto.ownerId ?? userId,
+        dto.title,
+        dto.description ?? null,
+        dto.quarter,
+        dto.year,
+        dto.dueDate ?? null,
+      ],
+    );
+
+    return this.db.findOne('objectives', { id });
+  }
+
+  async updateObjective(
+    organizationId: string,
+    objectiveId: string,
+    dto: {
+      title?: string;
+      description?: string;
+      status?: string;
+      progress?: number;
+    },
+  ) {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    if (dto.title !== undefined) {
+      sets.push(`title = $${idx++}`);
+      params.push(dto.title);
+    }
+
+    if (dto.description !== undefined) {
+      sets.push(`description = $${idx++}`);
+      params.push(dto.description);
+    }
+
+    if (dto.status !== undefined) {
+      sets.push(`status = $${idx++}`);
+      params.push(dto.status);
+    }
+
+    if (dto.progress !== undefined) {
+      sets.push(`progress = $${idx++}`);
+      params.push(dto.progress);
+    }
+
+    if (sets.length === 0) {
+      return this.db.findOne('objectives', {
+        id: objectiveId,
+        organization_id: organizationId,
+      });
+    }
+
+    sets.push('updated_at = NOW()');
+
+    await this.db.query(
+      `UPDATE objectives
+       SET ${sets.join(', ')}
+       WHERE id = $${idx++}
+         AND organization_id = $${idx}`,
+      [...params, objectiveId, organizationId],
+    );
+
+    return this.db.findOne('objectives', {
+      id: objectiveId,
+    });
+  }
+
+  async addKeyResult(
+    objectiveId: string,
+    dto: {
+      title: string;
+      metricType?: string;
+      targetValue: number;
+      startValue?: number;
+      unit?: string;
+    },
+  ) {
+    const id = uuidv4();
+
+    await this.db.query(
+      `INSERT INTO key_results (
+         id,
+         objective_id,
+         title,
+         metric_type,
+         target_value,
+         start_value,
+         current_value,
+         unit
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $6, $7)`,
+      [
+        id,
+        objectiveId,
+        dto.title,
+        dto.metricType ?? 'percentage',
+        dto.targetValue,
+        dto.startValue ?? 0,
+        dto.unit ?? null,
+      ],
+    );
+
+    return this.db.findOne('key_results', { id });
+  }
+
+  async updateKeyResult(
+    krId: string,
+    currentValue: number,
+  ) {
+    await this.db.query(
+      `UPDATE key_results
+       SET current_value = $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [currentValue, krId],
+    );
+
+    return this.db.findOne('key_results', {
+      id: krId,
+    });
+  }
+
+  // ── KPI Snapshots ───────────────────────────────────────────
+
+  async recordKpiSnapshot(
+    organizationId: string,
+    metricKey: string,
+    value: number,
+    metadata?: Record<string, unknown>,
+  ) {
+    const today = new Date().toISOString().split('T')[0];
+
+    await this.db.query(
+      `INSERT INTO kpi_snapshots (
+         organization_id,
+         snapshot_date,
+         metric_key,
+         metric_value,
+         metadata
+       )
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (
+         organization_id,
+         snapshot_date,
+         metric_key
+       )
+       DO UPDATE SET
+         metric_value = EXCLUDED.metric_value,
+         metadata = EXCLUDED.metadata`,
+      [
+        organizationId,
+        today,
+        metricKey,
+        value,
+        JSON.stringify(metadata ?? {}),
+      ],
+    );
+
+    return {
+      recorded: true,
+      date: today,
+      metricKey,
+      value,
+    };
+  }
+
+  async getKpiTimeseries(
+    organizationId: string,
+    metricKey: string,
+    days = 30,
+  ) {
+    const safeDays = Math.max(1, Math.floor(days));
+
+    const res = await this.db.query(
+      `SELECT
+         snapshot_date,
+         metric_value,
+         metadata
+       FROM kpi_snapshots
+       WHERE organization_id = $1
+         AND metric_key = $2
+         AND snapshot_date >= CURRENT_DATE - $3::integer
+       ORDER BY snapshot_date ASC`,
+      [organizationId, metricKey, safeDays],
+    );
+
+    return res.rows;
+  }
+
+  async getAllKpiSnapshots(
+    organizationId: string,
+    days = 30,
+  ) {
+    const safeDays = Math.max(1, Math.floor(days));
+
+    const res = await this.db.query(
+      `SELECT
+         metric_key,
+         MAX(
+           CASE
+             WHEN snapshot_date = CURRENT_DATE
+             THEN metric_value
+           END
+         ) AS today,
+         MAX(
+           CASE
+             WHEN snapshot_date = CURRENT_DATE - 1
+             THEN metric_value
+           END
+         ) AS yesterday,
+         MAX(
+           CASE
+             WHEN snapshot_date = CURRENT_DATE - 7
+             THEN metric_value
+           END
+         ) AS last_week,
+         MAX(
+           CASE
+             WHEN snapshot_date = CURRENT_DATE - 30
+             THEN metric_value
+           END
+         ) AS last_month,
+         json_agg(
+           json_build_object(
+             'date', snapshot_date,
+             'value', metric_value
+           )
+           ORDER BY snapshot_date ASC
+         ) AS series
+       FROM kpi_snapshots
+       WHERE organization_id = $1
+         AND snapshot_date >= CURRENT_DATE - $2::integer
+       GROUP BY metric_key
+       ORDER BY metric_key`,
+      [organizationId, safeDays],
+    );
+
+    return res.rows;
+  }
+
+  // ── Business Health Score ───────────────────────────────────
+
+  async computeHealthScore(
+    organizationId: string,
+  ): Promise<HealthScore> {
+    const [
+      taskStats,
+      docStats,
+      meetingStats,
+      memberStats,
+      objectiveStats,
+    ] = await Promise.all([
+      this.db.query(
+        `SELECT
+           COUNT(*) AS total,
+           COUNT(*) FILTER (
+             WHERE status = 'done'
+           ) AS completed,
+           COUNT(*) FILTER (
+             WHERE due_date < NOW()
+               AND status != 'done'
+           ) AS overdue
+         FROM tasks
+         WHERE organization_id = $1`,
+        [organizationId],
+      ),
+
+      this.db.query(
+        `SELECT
+           COUNT(*) AS total,
+           COUNT(*) FILTER (
+             WHERE status = 'indexed'
+           ) AS indexed
+         FROM documents
+         WHERE organization_id = $1`,
+        [organizationId],
+      ),
+
+      this.db.query(
+        `SELECT COUNT(*) AS total_30d
+         FROM meetings
+         WHERE organization_id = $1
+           AND created_at > NOW() - INTERVAL '30 days'`,
+        [organizationId],
+      ),
+
+      this.db.query(
+        `SELECT
+           COUNT(*) AS active_users,
+           COUNT(*) FILTER (
+             WHERE last_login_at > NOW() - INTERVAL '7 days'
+           ) AS wau
+         FROM users
+         WHERE organization_id = $1
+           AND is_active = TRUE`,
+        [organizationId],
+      ),
+
+      this.db.query(
+        `SELECT
+           COUNT(*) AS total,
+           AVG(progress) AS avg_progress
+         FROM objectives
+         WHERE organization_id = $1
+           AND year = $2`,
+        [organizationId, new Date().getFullYear()],
+      ),
+    ]);
+
+    const t = (taskStats.rows[0] ?? {}) as Record<string, unknown>;
+    const d = (docStats.rows[0] ?? {}) as Record<string, unknown>;
+    const m = (meetingStats.rows[0] ?? {}) as Record<string, unknown>;
+    const mb = (memberStats.rows[0] ?? {}) as Record<string, unknown>;
+    const k = (objectiveStats.rows[0] ?? {}) as Record<string, unknown>;
+
+    const totalTasks = Number(t.total ?? 0);
+    const completedTasks = Number(t.completed ?? 0);
+    const overdueTasks = Number(t.overdue ?? 0);
+
+    const totalDocuments = Number(d.total ?? 0);
+    const indexedDocuments = Number(d.indexed ?? 0);
+
+    const activeUsers = Number(mb.active_users ?? 0);
+    const weeklyActiveUsers = Number(mb.wau ?? 0);
+    const totalMeetings30d = Number(m.total_30d ?? 0);
+    const totalObjectives = Number(k.total ?? 0);
+
+    const completionRate: number | null =
+      totalTasks > 0
+        ? (completedTasks / totalTasks) * 100
+        : null;
+
+    const overdueRate: number | null =
+      totalTasks > 0
+        ? (overdueTasks / totalTasks) * 100
+        : null;
+
+    const docIndexRate: number | null =
+      totalDocuments > 0
+        ? (indexedDocuments / totalDocuments) * 100
+        : null;
+
+    const wau: number | null =
+      activeUsers > 0
+        ? (weeklyActiveUsers / activeUsers) * 100
+        : null;
+
+    const okrProgress: number | null =
+      totalObjectives > 0 && k.avg_progress != null
+        ? Number(k.avg_progress)
+        : null;
+
+    const productScore: number | null =
+      completionRate !== null && overdueRate !== null
+        ? Math.min(
+            100,
+            Math.max(
+              0,
+              completionRate * 0.7 +
+                Math.max(0, 100 - overdueRate) * 0.3,
+            ),
+          )
+        : null;
+
+    const teamScore: number | null =
+      activeUsers > 0 && wau !== null
+        ? Math.min(
+            100,
+            Math.max(
+              0,
+              wau * 0.6 +
+                (Math.min(totalMeetings30d, 20) / 20) * 100 * 0.4,
+            ),
+          )
+        : null;
+
+    const growthInputs = [
+      okrProgress,
+      docIndexRate,
+    ].filter(
+      (value): value is number =>
+        value !== null && Number.isFinite(value),
+    );
+
+    const growthScore: number | null =
+      growthInputs.length > 0
+        ? Math.min(
+            100,
+            Math.max(
+              0,
+              growthInputs.reduce(
+                (sum, value) => sum + value,
+                0,
+              ) / growthInputs.length,
+            ),
+          )
+        : null;
+
+    // Revenue data is not integrated; do not invent a financial score.
+    const financialScore: number | null = null;
+
+    const scoreInputs: Array<{
+      value: number | null;
+      weight: number;
+    }> = [
+      { value: productScore, weight: 0.3 },
+      { value: teamScore, weight: 0.25 },
+      { value: growthScore, weight: 0.25 },
+    ];
+
+    const availableScores = scoreInputs.filter(
+      (
+        item,
+      ): item is { value: number; weight: number } =>
+        item.value !== null &&
+        Number.isFinite(item.value),
+    );
+
+    const availableWeight = availableScores.reduce(
+      (sum, item) => sum + item.weight,
+      0,
+    );
+
+    const overall: number | null =
+      availableWeight > 0
+        ? Math.round(
+            availableScores.reduce(
+              (sum, item) =>
+                sum + item.value * item.weight,
+              0,
+            ) / availableWeight,
+          )
+        : null;
+
+    const healthScore: HealthScore = {
+      overall,
+      financial: financialScore,
+      growth:
+        growthScore === null
+          ? null
+          : Math.round(growthScore),
+      team:
+        teamScore === null
+          ? null
+          : Math.round(teamScore),
+      product:
+        productScore === null
+          ? null
+          : Math.round(productScore),
+      breakdown: {
+        taskCompletionRate:
+          completionRate === null
+            ? null
+            : Math.round(completionRate),
+        overdueTaskRate:
+          overdueRate === null
+            ? null
+            : Math.round(overdueRate),
+        documentIndexRate:
+          docIndexRate === null
+            ? null
+            : Math.round(docIndexRate),
+        weeklyActiveUsers:
+          wau === null ? null : Math.round(wau),
+        meetings30d: totalMeetings30d,
+        okrProgress:
+          okrProgress === null
+            ? null
+            : Math.round(okrProgress),
+      },
+    };
+
+    // A failure to persist history must not break the dashboard.
+    try {
+      await this.db.query(
+        `INSERT INTO health_scores (
+           organization_id,
+           overall_score,
+           financial_score,
+           growth_score,
+           team_score,
+           product_score,
+           breakdown
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          organizationId,
+          healthScore.overall,
+          healthScore.financial,
+          healthScore.growth,
+          healthScore.team,
+          healthScore.product,
+          JSON.stringify(healthScore.breakdown),
+        ],
+      );
+    } catch (error) {
+      this.logger.warn(
+        'Could not persist Founder OS health score history.',
+        error instanceof Error
+          ? error.message
+          : String(error),
+      );
+    }
+
+    return healthScore;
+  }
+
+  async getHealthScoreHistory(
+    organizationId: string,
+    limit = 30,
+  ) {
+    const safeLimit = Math.max(
+      1,
+      Math.min(365, Math.floor(limit)),
+    );
+
+    const res = await this.db.query(
+      `SELECT
+         scored_at,
+         overall_score,
+         financial_score,
+         growth_score,
+         team_score,
+         product_score
+       FROM health_scores
+       WHERE organization_id = $1
+       ORDER BY scored_at DESC
+       LIMIT $2`,
+      [organizationId, safeLimit],
+    );
+
+    return res.rows;
+  }
+
+  // ── Full Founder OS Dashboard ───────────────────────────────
+
+  async getDashboard(
+    organizationId: string,
+    _userId: string,
+  ) {
+    const currentQ =
+      `Q${Math.ceil((new Date().getMonth() + 1) / 3)}`;
+
+    const currentYear = new Date().getFullYear();
+
+    const healthScore =
+      await this.computeHealthScore(organizationId);
+
+    // Only send measured numerical values to the AI.
+    const healthNumbers: Record<string, number> = {};
+
+    const scoreEntries: Array<
+      [string, number | null]
+    > = [
+      ['overall', healthScore.overall],
+      ['financial', healthScore.financial],
+      ['growth', healthScore.growth],
+      ['team', healthScore.team],
+      ['product', healthScore.product],
+    ];
+
+    for (const [key, value] of scoreEntries) {
+      if (
+        value !== null &&
+        Number.isFinite(value)
+      ) {
+        healthNumbers[key] = value;
+      }
+    }
+
+    const [
+      okrs,
+      kpis,
+      taskBreakdown,
+      teamVelocity,
+      aiInsights,
+    ] = await Promise.all([
+      this.getOkrs(
+        organizationId,
+        currentQ,
+        currentYear,
+      ),
+
+      this.getAllKpiSnapshots(
+        organizationId,
+        30,
+      ),
+
+      this.db.query(
+        `SELECT
+           status,
+           priority,
+           COUNT(*) AS count
+         FROM tasks
+         WHERE organization_id = $1
+         GROUP BY status, priority`,
+        [organizationId],
+      ),
+
+      // Return 12 consecutive calendar weeks, including weeks with
+      // zero completed tasks, so the frontend can draw a continuous
+      // timeline instead of a single-point vertical line.
+      this.db.query(
+        `WITH weeks AS (
+           SELECT generate_series(
+             date_trunc('week', NOW()) - INTERVAL '11 weeks',
+             date_trunc('week', NOW()),
+             INTERVAL '1 week'
+           ) AS week_start
+         ),
+         weekly_completed AS (
+           SELECT
+             date_trunc('week', t.completed_at) AS week_start,
+             COUNT(*)::int AS completed
+           FROM tasks t
+           WHERE t.organization_id = $1
+             AND t.status = 'done'
+             AND t.completed_at IS NOT NULL
+             AND t.completed_at >=
+                 date_trunc('week', NOW()) - INTERVAL '11 weeks'
+             AND t.completed_at <
+                 date_trunc('week', NOW()) + INTERVAL '1 week'
+           GROUP BY 1
+         ),
+         weekly_created AS (
+           SELECT
+             date_trunc('week', t.created_at) AS week_start,
+             COUNT(*)::int AS total
+           FROM tasks t
+           WHERE t.organization_id = $1
+             AND t.created_at >=
+                 date_trunc('week', NOW()) - INTERVAL '11 weeks'
+             AND t.created_at <
+                 date_trunc('week', NOW()) + INTERVAL '1 week'
+           GROUP BY 1
+         )
+         SELECT
+           w.week_start AS week,
+           COALESCE(wc.completed, 0)::int AS completed,
+           COALESCE(wcr.total, 0)::int AS total
+         FROM weeks w
+         LEFT JOIN weekly_completed wc
+           ON wc.week_start = w.week_start
+         LEFT JOIN weekly_created wcr
+           ON wcr.week_start = w.week_start
+         ORDER BY w.week_start ASC`,
+        [organizationId],
+      ),
+
+      this.generateAiInsights(
+        organizationId,
+        healthNumbers,
+      ),
+    ]);
+
+    return {
+      quarter: currentQ,
+      year: currentYear,
+      healthScore,
+      okrs,
+      kpis,
+      taskBreakdown: taskBreakdown.rows,
+      teamVelocity: teamVelocity.rows,
+      aiInsights,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  // ── AI Insights ─────────────────────────────────────────────
+
+  private async generateAiInsights(
+    organizationId: string,
+    healthScore: Record<string, number>,
+  ) {
+    const entries = Object.entries(healthScore);
+
+    if (entries.length === 0) {
+      return {
+        insights: [],
+        message:
+          'Not enough measured business data to generate insights.',
+      };
+    }
+
+    const scoreLines = entries
+      .map(([key, value]) => `${key}: ${value}/100`)
+      .join('\n');
+
+    const prompt = `
+You are a business strategy advisor.
+
+Analyze the following measured business health scores and provide
+three concise, practical, actionable insights.
+
+Use only the supplied data. Do not invent metrics, revenue figures,
+trends, causes, or business facts. A missing metric means the data
+is unavailable, not that performance is zero.
+
+Measured scores:
+${scoreLines}
+
+Return valid JSON only, in this format:
+{
+  "insights": [
+    {
+      "type": "strength",
+      "title": "Short title",
+      "description": "Actionable explanation"
+    }
+  ]
+}
+
+The type must be one of: strength, warning, opportunity.
+`;
+
+    try {
+      const result = await this.aiService.chat([
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ]);
+
+      if (
+        typeof result !== 'string' ||
+        !result.trim()
+      ) {
+        return null;
+      }
+
+      const cleaned = result
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+
+      if (
+        firstBrace < 0 ||
+        lastBrace <= firstBrace
+      ) {
+        this.logger.warn(
+          `AI returned non-JSON insights for organization ${organizationId}.`,
+        );
+
+        return null;
+      }
+
+      const parsed: unknown = JSON.parse(
+        cleaned.slice(firstBrace, lastBrace + 1),
+      );
+
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        !Array.isArray(
+          (parsed as { insights?: unknown }).insights,
+        )
+      ) {
+        return null;
+      }
+
+      const insights = (
+        parsed as {
+          insights: Array<Record<string, unknown>>;
+        }
+      ).insights
+        .filter(
+          (item) =>
+            item &&
+            typeof item.title === 'string' &&
+            typeof item.description === 'string' &&
+            [
+              'strength',
+              'warning',
+              'opportunity',
+            ].includes(String(item.type)),
+        )
+        .slice(0, 3)
+        .map((item) => ({
+          type: item.type as
+            | 'strength'
+            | 'warning'
+            | 'opportunity',
+          title: item.title as string,
+          description: item.description as string,
+        }));
+
+      return { insights };
+    } catch (error) {
+      this.logger.warn(
+        `AI insight generation failed for organization ${organizationId}.`,
+        error instanceof Error
+          ? error.message
+          : String(error),
+      );
+
+      return null;
+    }
+  }
+
+  // ── Usage Metering ──────────────────────────────────────────
+
+  async recordUsage(
+    organizationId: string,
+    userId: string,
+    metric: string,
+    quantity = 1,
+    metadata?: Record<string, unknown>,
+  ) {
+    await this.db.query(
+      `INSERT INTO usage_records (
+         organization_id,
+         user_id,
+         metric,
+         quantity,
+         metadata
+       )
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        organizationId,
+        userId,
+        metric,
+        quantity,
+        JSON.stringify(metadata ?? {}),
+      ],
+    );
+  }
+
+  async getUsageSummary(
+    organizationId: string,
+    days = 30,
+  ) {
+    const safeDays = Math.max(
+      1,
+      Math.floor(days),
+    );
+
+    const res = await this.db.query(
+      `SELECT
+         metric,
+         SUM(quantity) AS total,
+         COUNT(*) AS events
+       FROM usage_records
+       WHERE organization_id = $1
+         AND created_at >
+             NOW() - ($2::integer * INTERVAL '1 day')
+       GROUP BY metric
+       ORDER BY total DESC`,
+      [organizationId, safeDays],
+    );
+
+    return res.rows;
+  }
+}

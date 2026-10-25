@@ -6,6 +6,8 @@ export declare class EmailService {
     constructor(configService: ConfigService);
     private get from();
     private get appUrl();
+    private escapeHtml;
+    private getNotificationActionUrl;
     private layout;
     private send;
     sendWelcome(email: string, name: string): Promise<void>;
@@ -14,6 +16,7 @@ export declare class EmailService {
     sendMagicLink(email: string, url: string): Promise<void>;
     sendLoginAlert(email: string, name: string, ip: string, device: string): Promise<void>;
     sendTeamInvitation(email: string, inviterName: string, orgName: string, token: string): Promise<void>;
+    sendNotificationEmail(email: string, name: string, title: string, message: string, actionUrl?: string, actionLabel?: string): Promise<void>;
     sendSubscriptionConfirmation(email: string, name: string, planName: string, amountUsd: string, nextBillingDate: string): Promise<void>;
     sendPaymentFailed(email: string, name: string, planName: string, retryUrl: string): Promise<void>;
     sendApiKeyCreated(email: string, name: string, keyName: string, keyPrefix: string): Promise<void>;

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards, Query } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { AnalyticsService } from './analytics.service';
@@ -15,8 +15,10 @@ export class AnalyticsController {
 
   @Get('founder-dashboard')
   @ApiOperation({ summary: 'Founder OS — AI-powered daily focus dashboard' })
-  getFounderDashboard(@CurrentUser() user: JwtPayload) {
-    return this.analyticsService.getFounderDashboard(user.organizationId, user.sub);
+  getFounderDashboard(@CurrentUser() user: JwtPayload, @Query('days') days?: string) {
+    const requestedDays = Number(days);
+    const rangeDays = [7, 30, 90].includes(requestedDays) ? requestedDays : 30;
+    return this.analyticsService.getFounderDashboard(user.organizationId, user.sub, rangeDays, false);
   }
 
   @Get('team-dashboard')

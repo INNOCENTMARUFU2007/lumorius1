@@ -1,7 +1,9 @@
+
 'use client';
 
-import { useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
@@ -13,11 +15,7 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 
-function PasswordStrength({
-  password,
-}: {
-  password: string;
-}) {
+function PasswordStrength({ password }: { password: string }) {
   const checks = [
     {
       label: '8+ characters',
@@ -58,9 +56,7 @@ function PasswordStrength({
           <div
             key={i}
             className={`h-1 flex-1 rounded-full transition-all ${
-              i < score
-                ? colors[score - 1]
-                : 'bg-gray-700'
+              i < score ? colors[score - 1] : 'bg-gray-700'
             }`}
           />
         ))}
@@ -71,9 +67,7 @@ function PasswordStrength({
           <div
             key={label}
             className={`flex items-center gap-1.5 text-xs ${
-              pass
-                ? 'text-emerald-400'
-                : 'text-gray-500'
+              pass ? 'text-emerald-400' : 'text-gray-500'
             }`}
           >
             {pass ? (
@@ -90,9 +84,10 @@ function PasswordStrength({
 }
 
 export default function ResetPasswordPage() {
-  const params = useSearchParams();
   const router = useRouter();
-  const token = params.get('token');
+
+  const [token, setToken] = useState<string | null>(null);
+  const [tokenLoaded, setTokenLoaded] = useState(false);
 
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -100,6 +95,70 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+
+  // Read the reset token in the browser, avoiding useSearchParams()
+  // during Next.js static prerendering.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setToken(params.get('token'));
+    setTokenLoaded(true);
+  }, []);
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!token) {
+      setError('Invalid reset link. Please request a new one.');
+      return;
+    }
+
+    if (password !== confirm) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+
+    setError('');
+    setLoading(true);
+
+    try {
+      await api.post('/auth/reset-password', {
+        token,
+        newPassword: password,
+      });
+
+      setSuccess(true);
+
+      setTimeout(() => {
+        router.push('/login');
+      }, 3000);
+    } catch (err: any) {
+      setError(
+        err?.response?.data?.message ??
+          'Reset failed. The link may have expired.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Avoid briefly displaying the invalid-link state before the
+  // browser has read the URL.
+  if (!tokenLoaded) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+        <div
+          className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin"
+          role="status"
+          aria-label="Loading reset link"
+        />
+      </div>
+    );
+  }
 
   if (!token) {
     return (
@@ -109,7 +168,6 @@ export default function ResetPasswordPage() {
           animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-md text-center"
         >
-          {/* Official Lumorius Logo */}
           <div className="flex justify-center mb-8">
             <img
               src="/logo-horizontal.svg"
@@ -135,52 +193,11 @@ export default function ResetPasswordPage() {
     );
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (password !== confirm) {
-      setError('Passwords do not match');
-      return;
-    }
-
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters');
-      return;
-    }
-
-    setError('');
-    setLoading(true);
-
-    try {
-      await api.post('/auth/reset-password', {
-        token,
-        newPassword: password,
-      });
-
-      setSuccess(true);
-
-      setTimeout(() => router.push('/login'), 3000);
-    } catch (err: any) {
-      setError(
-        err?.response?.data?.message ??
-          'Reset failed. The link may have expired.',
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4 py-8 sm:py-10">
       <motion.div
-        initial={{
-          opacity: 0,
-          y: 20,
-        }}
-        animate={{
-          opacity: 1,
-          y: 0,
-        }}
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45 }}
         className="w-full max-w-md"
       >
@@ -199,7 +216,7 @@ export default function ResetPasswordPage() {
           </p>
         </div>
 
-        {/* RESET PASSWORD CARD */}
+        {/* Reset Password Card */}
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-7 sm:p-8 shadow-2xl shadow-black/20">
           {success ? (
             <div className="text-center">
@@ -220,8 +237,7 @@ export default function ResetPasswordPage() {
               </h1>
 
               <p className="text-gray-400 text-sm mb-4">
-                Your password has been updated.
-                Redirecting to sign in…
+                Your password has been updated. Redirecting to sign in…
               </p>
 
               <Link
@@ -244,18 +260,21 @@ export default function ResetPasswordPage() {
               </div>
 
               {error && (
-                <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+                <div
+                  role="alert"
+                  className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm"
+                >
                   {error}
                 </div>
               )}
 
-              <form
-                onSubmit={handleSubmit}
-                className="space-y-4"
-              >
+              <form onSubmit={handleSubmit} className="space-y-4">
                 {/* New Password */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                  <label
+                    htmlFor="new-password"
+                    className="block text-xs font-medium text-gray-400 mb-1.5"
+                  >
                     New Password
                   </label>
 
@@ -263,12 +282,12 @@ export default function ResetPasswordPage() {
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
 
                     <input
+                      id="new-password"
                       type={showPwd ? 'text' : 'password'}
                       required
+                      minLength={8}
                       value={password}
-                      onChange={(e) =>
-                        setPassword(e.target.value)
-                      }
+                      onChange={(e) => setPassword(e.target.value)}
                       placeholder="Min. 8 characters"
                       autoComplete="new-password"
                       className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl pl-10 pr-10 py-3 text-sm focus:outline-none focus:border-violet-500 transition placeholder-gray-600"
@@ -276,8 +295,9 @@ export default function ResetPasswordPage() {
 
                     <button
                       type="button"
-                      onClick={() =>
-                        setShowPwd(!showPwd)
+                      onClick={() => setShowPwd(!showPwd)}
+                      aria-label={
+                        showPwd ? 'Hide password' : 'Show password'
                       }
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition"
                     >
@@ -290,15 +310,16 @@ export default function ResetPasswordPage() {
                   </div>
 
                   {password && (
-                    <PasswordStrength
-                      password={password}
-                    />
+                    <PasswordStrength password={password} />
                   )}
                 </div>
 
                 {/* Confirm Password */}
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                  <label
+                    htmlFor="confirm-password"
+                    className="block text-xs font-medium text-gray-400 mb-1.5"
+                  >
                     Confirm Password
                   </label>
 
@@ -306,12 +327,11 @@ export default function ResetPasswordPage() {
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
 
                     <input
+                      id="confirm-password"
                       type="password"
                       required
                       value={confirm}
-                      onChange={(e) =>
-                        setConfirm(e.target.value)
-                      }
+                      onChange={(e) => setConfirm(e.target.value)}
                       placeholder="Repeat password"
                       autoComplete="new-password"
                       className="w-full bg-gray-800 border border-gray-700 text-white rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-violet-500 transition placeholder-gray-600"
@@ -336,7 +356,11 @@ export default function ResetPasswordPage() {
                   className="w-full py-3 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white rounded-xl font-semibold text-sm transition flex items-center justify-center"
                 >
                   {loading ? (
-                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span
+                      className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"
+                      role="status"
+                      aria-label="Resetting password"
+                    />
                   ) : (
                     'Reset Password'
                   )}

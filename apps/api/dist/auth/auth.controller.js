@@ -155,7 +155,7 @@ let AuthController = class AuthController {
         return req.user;
     }
     async me(user) {
-        return user;
+        return this.authService.getCurrentUser(user.sub);
     }
     async getProfile(user) {
         return user;

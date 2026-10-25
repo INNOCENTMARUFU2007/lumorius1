@@ -18,8 +18,8 @@ export declare class DocumentsService {
         status?: string;
         type?: string;
         teamId?: string;
-        page?: number;
-        pageSize?: number;
+        page?: number | string;
+        pageSize?: number | string;
     }): Promise<{
         data: Record<string, unknown>[];
         total: number;
@@ -27,17 +27,31 @@ export declare class DocumentsService {
         pageSize: number;
         totalPages: number;
     }>;
+    getSearchFacets(organizationId: string): Promise<{
+        types: Record<string, unknown>[];
+        tags: Record<string, unknown>[];
+        total: number;
+    }>;
     findById(docId: string, organizationId: string): Promise<Record<string, unknown>>;
     delete(docId: string, organizationId: string): Promise<{
         deleted: boolean;
     }>;
-    search(organizationId: string, query: string, opts: {
+    search(organizationId: string, query: string, opts?: {
         documentIds?: string[];
         topK?: number;
+        type?: string;
+        tag?: string;
+        createdAfter?: string;
+        teamId?: string;
+        uploadedById?: string;
     }): Promise<Record<string, unknown>[]>;
     ask(organizationId: string, question: string, opts: {
         documentIds?: string[];
         teamId?: string;
+        type?: string;
+        tag?: string;
+        createdAfter?: string;
+        uploadedById?: string;
     }): Promise<{
         answer: string;
         sources: {
@@ -46,6 +60,10 @@ export declare class DocumentsService {
             documentName: unknown;
             content: string;
             score: unknown;
+            type: unknown;
+            tags: unknown;
+            createdAt: unknown;
+            teamId: unknown;
         }[];
         confidence: unknown;
     }>;

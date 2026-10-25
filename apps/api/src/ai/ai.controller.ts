@@ -73,6 +73,10 @@ export class AiController {
     @CurrentUser() user: JwtPayload,
     @Body() body: { data: Record<string, unknown> },
   ) {
-    return this.aiService.generateWeeklyReport(user.organizationId, body.data);
+   return this.aiService.generateWeeklyReport(body.data, {
+  organizationId: user.organizationId,
+  userId: user.sub,
+  feature: 'weekly_report',
+});
   }
 }

@@ -19,11 +19,11 @@ export declare class KnowledgeService {
         relationType: string;
         strength?: number;
     }): Promise<{
+        id: string;
         fromNodeId: string;
         toNodeId: string;
         relationType: string;
-        strength?: number;
-        id: string;
+        strength: number;
     }>;
     getGraph(organizationId: string, query: {
         nodeId?: string;

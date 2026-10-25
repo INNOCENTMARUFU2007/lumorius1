@@ -1,9 +1,9 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 
-// ── Mocks ─────────────────────────────────────────────────────
+// â”€â”€ Mocks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const createMockNotificationsService = () => ({
   create:          jest.fn(),
@@ -17,6 +17,7 @@ const createMockNotificationsService = () => ({
 
 const mockUser = {
   id:              'user-1',
+  sub:             'user-1',
   email:           'alice@lumorius.com',
   organization_id: 'org-1',
   role:            'admin',
@@ -34,7 +35,7 @@ const makeNotif = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-// ── Tests ─────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('NotificationsController', () => {
   let controller: NotificationsController;
@@ -51,58 +52,58 @@ describe('NotificationsController', () => {
     controller = module.get<NotificationsController>(NotificationsController);
   });
 
-  // ── findAll ───────────────────────────────────────────────────
+  // â”€â”€ findAll â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('findAll()', () => {
     it('returns all notifications for current user', async () => {
       const notifs = [makeNotif(), makeNotif()];
-      service.findAll.mockResolvedValue({ data: notifs, total: 2 });
+      service.findAll.mockResolvedValue(notifs);
 
-      const result = await controller.findAll(mockUser as any, {});
+      const result = await controller.findAll(mockUser as any);
 
-      expect(service.findAll).toHaveBeenCalledWith(mockUser.id, {});
-      expect(result.data).toHaveLength(2);
+      expect(service.findAll).toHaveBeenCalledWith(mockUser.sub, false);
+      expect(result).toHaveLength(2);
     });
 
     it('passes unread filter to service', async () => {
-      service.findAll.mockResolvedValue({ data: [], total: 0 });
+      service.findAll.mockResolvedValue([]);
 
-      await controller.findAll(mockUser as any, { unreadOnly: true } as any);
+      await controller.findAll(mockUser as any, 'true');
 
-      expect(service.findAll).toHaveBeenCalledWith(mockUser.id, { unreadOnly: true });
+      expect(service.findAll).toHaveBeenCalledWith(mockUser.sub, true);
     });
   });
 
-  // ── getUnreadCount ────────────────────────────────────────────
+  // â”€â”€ getUnreadCount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('getUnreadCount()', () => {
     it('returns unread count for user', async () => {
-      service.getUnreadCount.mockResolvedValue(5);
+      service.getUnreadCount.mockResolvedValue({ count: 5 });
 
       const result = await controller.getUnreadCount(mockUser as any);
 
-      expect(service.getUnreadCount).toHaveBeenCalledWith(mockUser.id);
+      expect(service.getUnreadCount).toHaveBeenCalledWith(mockUser.sub);
       expect(result).toEqual({ count: 5 });
     });
 
     it('returns 0 when no unread notifications', async () => {
-      service.getUnreadCount.mockResolvedValue(0);
+      service.getUnreadCount.mockResolvedValue({ count: 0 });
       const result = await controller.getUnreadCount(mockUser as any);
       expect(result).toEqual({ count: 0 });
     });
   });
 
-  // ── markRead ──────────────────────────────────────────────────
+  // â”€â”€ markRead â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('markRead()', () => {
     it('marks a single notification as read', async () => {
-      const notif = makeNotif({ read_at: new Date() });
-      service.markRead.mockResolvedValue(notif);
 
-      const result = await controller.markRead('notif-1', mockUser as any);
+      service.markRead.mockResolvedValue({ read: true });
 
-      expect(service.markRead).toHaveBeenCalledWith('notif-1', mockUser.id);
-      expect(result.read_at).not.toBeNull();
+      const result = await controller.markRead(mockUser as any, 'notif-1');
+
+      expect(service.markRead).toHaveBeenCalledWith(mockUser.sub, 'notif-1');
+      expect(result).toEqual({ read: true });
     });
 
     it('propagates NotFoundException when notif not found', async () => {
@@ -111,40 +112,40 @@ describe('NotificationsController', () => {
       );
 
       await expect(
-        controller.markRead('bad-id', mockUser as any),
+        controller.markRead(mockUser as any, 'bad-id'),
       ).rejects.toThrow(HttpException);
     });
   });
 
-  // ── markAllRead ───────────────────────────────────────────────
+  // â”€â”€ markAllRead â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('markAllRead()', () => {
     it('marks all notifications as read for user', async () => {
-      service.markAllRead.mockResolvedValue({ updated: 7 });
+      service.markAllRead.mockResolvedValue({ read: true, updated: 7 });
 
       const result = await controller.markAllRead(mockUser as any);
 
-      expect(service.markAllRead).toHaveBeenCalledWith(mockUser.id);
-      expect(result).toEqual({ updated: 7 });
+      expect(service.markAllRead).toHaveBeenCalledWith(mockUser.sub);
+      expect(result).toEqual({ read: true, updated: 7 });
     });
 
     it('returns updated:0 when nothing was unread', async () => {
-      service.markAllRead.mockResolvedValue({ updated: 0 });
+      service.markAllRead.mockResolvedValue({ read: true, updated: 0 });
       const result = await controller.markAllRead(mockUser as any);
-      expect(result).toEqual({ updated: 0 });
+      expect(result).toEqual({ read: true, updated: 0 });
     });
   });
 
-  // ── delete ────────────────────────────────────────────────────
+  // â”€â”€ delete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('delete()', () => {
     it('deletes notification by id', async () => {
-      service.delete.mockResolvedValue({ deleted: true });
+      service.delete.mockResolvedValue({ deleted: true, id: 'notif-1' });
 
-      const result = await controller.delete('notif-1', mockUser as any);
+      const result = await controller.delete(mockUser as any, 'notif-1');
 
-      expect(service.delete).toHaveBeenCalledWith('notif-1', mockUser.id);
-      expect(result).toEqual({ deleted: true });
+      expect(service.delete).toHaveBeenCalledWith(mockUser.sub, 'notif-1');
+      expect(result).toEqual({ deleted: true, id: 'notif-1' });
     });
 
     it('propagates NotFoundException for unknown notification', async () => {
@@ -153,8 +154,9 @@ describe('NotificationsController', () => {
       );
 
       await expect(
-        controller.delete('bad-id', mockUser as any),
+        controller.delete(mockUser as any, 'bad-id'),
       ).rejects.toThrow(HttpException);
     });
   });
 });
+

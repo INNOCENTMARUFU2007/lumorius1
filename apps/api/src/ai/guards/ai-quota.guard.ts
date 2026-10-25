@@ -19,31 +19,20 @@ interface JwtUser {
 }
 
 interface OrgPlan {
-  ai_requests_per_month: number;
+  ai_tokens_monthly: number | string;
 }
 
-/**
- * NX-000013 — AI Quota Enforcement Guard
- *
- * Applied to all state-changing AI endpoints (POST /ai/*).
- *
- * Two layers of protection:
- *  1. Per-minute burst limit — 20 requests / 60 s (Redis counter, TTL 60s)
- *  2. Monthly plan quota — billing_plans.ai_requests_per_month
- *       0 = unlimited (Enterprise plan)
- *       counter key: ai:quota:{orgId}:{YYYY-MM}
- *       expires first of next month
- *
- * HTTP responses:
- *  429 Too Many Requests — burst limit hit (Retry-After header set)
- *  402 Payment Required — monthly quota exhausted
- */
+interface MonthlyUsage {
+  used: number | string;
+}
+
 @Injectable()
 export class AiQuotaGuard implements CanActivate {
   private readonly logger = new Logger(AiQuotaGuard.name);
 
   private readonly BURST_LIMIT = 20;
   private readonly BURST_TTL_SEC = 60;
+  private readonly FREE_TOKEN_LIMIT = 25_000;
 
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -59,12 +48,11 @@ export class AiQuotaGuard implements CanActivate {
     }
 
     await this.checkBurstLimit(user.organizationId, context);
-    await this.checkMonthlyQuota(user.organizationId);
+    await this.checkMonthlyTokenQuota(user.organizationId);
 
     return true;
   }
 
-  // ── Burst limit (20 req / 60 s per org) ─────────────────────────────────
   private async checkBurstLimit(
     orgId: string,
     context: ExecutionContext,
@@ -79,123 +67,122 @@ export class AiQuotaGuard implements CanActivate {
     if (count > this.BURST_LIMIT) {
       const ttl = Math.max(await this.redis.ttl(key), 1);
 
-      const res = {
-        statusCode: 429,
-        message: `AI rate limit — max ${this.BURST_LIMIT} requests/min. Retry after ${ttl}s.`,
-        retryAfter: ttl,
-      };
-
-      const exc = new HttpException(
-        res,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-
-      // Set Retry-After on the underlying response object
-      const http = context
+      const response = context
         .switchToHttp()
         .getResponse<{
-          setHeader?: (key: string, value: string) => void;
+          setHeader?: (name: string, value: string) => void;
         }>();
 
-      http.setHeader?.('Retry-After', String(ttl));
+      response.setHeader?.('Retry-After', String(ttl));
 
-      throw exc;
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `AI rate limit reached. Maximum ${this.BURST_LIMIT} requests per minute.`,
+          retryAfter: ttl,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
   }
 
-  // ── Monthly quota ────────────────────────────────────────────────────────
-  private async checkMonthlyQuota(orgId: string): Promise<void> {
+  private async checkMonthlyTokenQuota(orgId: string): Promise<void> {
     const limit = await this.getPlanLimit(orgId);
 
-    if (limit === 0) {
+    // A negative limit represents unlimited usage.
+    if (limit < 0) {
       return;
     }
 
-    const key = this.monthlyKey(orgId);
-    const used = await this.redis.incr(key);
+    const now = new Date();
+    const monthStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+    );
+    const nextMonthStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+    );
 
-    if (used === 1) {
-      await this.redis.expireat(
-        key,
-        this.firstOfNextMonthUnix(),
+    const usageResult = await this.db.query<MonthlyUsage>(
+      `SELECT COALESCE(SUM(total_tokens), 0)::bigint AS used
+       FROM ai_usage
+       WHERE organization_id = $1
+         AND created_at >= $2
+         AND created_at < $3`,
+      [orgId, monthStart, nextMonthStart],
+    );
+
+    const used = Number(usageResult.rows[0]?.used ?? 0);
+
+    if (!Number.isFinite(used)) {
+      throw new HttpException(
+        'Unable to verify AI usage quota.',
+        HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
 
-    if (used > limit) {
+    if (used >= limit) {
       this.logger.warn(
-        `[AiQuota] org=${orgId} used=${used} limit=${limit} — quota exceeded`,
+        `[AiQuota] org=${orgId} tokens_used=${used} token_limit=${limit}`,
       );
 
       throw new HttpException(
         {
-          statusCode: 402,
-          message: `Monthly AI quota of ${limit} requests exceeded. Upgrade your plan to continue.`,
+          statusCode: HttpStatus.PAYMENT_REQUIRED,
+          code: 'AI_TOKEN_QUOTA_EXCEEDED',
+          message: `Your monthly allowance of ${limit.toLocaleString()} AI tokens has been reached. Upgrade your plan to continue.`,
           upgradeUrl: '/billing',
           used,
           limit,
+          remaining: 0,
         },
         HttpStatus.PAYMENT_REQUIRED,
       );
     }
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
-
-  /** Fetch the org's plan limit; cache in Redis for 5 minutes. */
   private async getPlanLimit(orgId: string): Promise<number> {
-    const cacheKey = `ai:plan:${orgId}`;
+    // Versioned key prevents reusing the old cached request-based quota.
+    const cacheKey = `ai:plan:tokens:v2:${orgId}`;
     const cached = await this.redis.get(cacheKey);
 
     if (cached !== null) {
-      return parseInt(cached, 10);
+      const parsed = Number(cached);
+
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+
+      await this.redis.del(cacheKey);
     }
 
-    const res = await this.db.query<OrgPlan>(
-      `SELECT bp.ai_requests_per_month
-       FROM subscriptions s
-       JOIN billing_plans bp ON bp.id = s.plan_id
-       WHERE s.organization_id = $1
-         AND s.status = 'active'
+    const result = await this.db.query<OrgPlan>(
+      `SELECT COALESCE(
+         NULLIF(bp.limits ->> 'ai_tokens_monthly', '')::bigint,
+         $2::bigint
+       ) AS ai_tokens_monthly
+       FROM organizations o
+       LEFT JOIN billing_plans bp
+         ON bp.id = o.plan_id::text
+        AND bp.is_active = TRUE
+       WHERE o.id = $1
        LIMIT 1`,
-      [orgId],
+      [orgId, this.FREE_TOKEN_LIMIT],
     );
 
-    // Default 100/month if no subscription row found (free tier)
+    // Default to the restrictive Free allowance when a plan cannot be found.
+    const rawLimit = result.rows[0]?.ai_tokens_monthly;
     const limit =
-      res.rows[0]?.ai_requests_per_month ?? 100;
+      rawLimit === undefined ? this.FREE_TOKEN_LIMIT : Number(rawLimit);
 
-    await this.redis.set(
-      cacheKey,
-      String(limit),
-      'EX',
-      300,
-    );
+    if (!Number.isFinite(limit)) {
+      throw new HttpException(
+        'Unable to verify the organisation AI plan.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    await this.redis.set(cacheKey, String(limit), 'EX', 300);
 
     return limit;
-  }
-
-  private monthlyKey(orgId: string): string {
-    const d = new Date();
-
-    const m = `${d.getUTCFullYear()}-${String(
-      d.getUTCMonth() + 1,
-    ).padStart(2, '0')}`;
-
-    return `ai:quota:${orgId}:${m}`;
-  }
-
-  private firstOfNextMonthUnix(): number {
-    const d = new Date();
-
-    d.setUTCMonth(
-      d.getUTCMonth() + 1,
-      1,
-    );
-
-    d.setUTCHours(0, 0, 0, 0);
-
-    return Math.floor(
-      d.getTime() / 1000,
-    );
   }
 }

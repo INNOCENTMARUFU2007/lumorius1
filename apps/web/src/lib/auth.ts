@@ -1,6 +1,7 @@
+
 import api from './api';
 
-const ACCESS_KEY  = 'lumorius_access';
+const ACCESS_KEY = 'lumorius_access';
 const REFRESH_KEY = 'lumorius_refresh';
 
 export function getAccessToken(): string | null {
@@ -16,7 +17,8 @@ export function getRefreshToken(): string | null {
 export function setTokens(access: string, refresh: string) {
   localStorage.setItem(ACCESS_KEY, access);
   localStorage.setItem(REFRESH_KEY, refresh);
-  // Sync access token to cookie so Next.js middleware can read it
+
+  // Sync access token to cookie so Next.js middleware can read it.
   document.cookie = `lumorius_access=${access}; path=/; max-age=${15 * 60}; SameSite=Strict`;
 }
 
@@ -34,10 +36,25 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
+  avatarUrl?: string | null;
   role: string;
   organizationId: string | null;
   emailVerified: boolean;
+  onboardingCompleted: boolean;
   mfaEnabled: boolean;
+}
+export function getAuthDestination(
+  user: Pick<AuthUser, 'emailVerified' | 'onboardingCompleted'>,
+): string {
+  if (!user.emailVerified) {
+    return '/verify-email';
+  }
+
+  if (!user.onboardingCompleted) {
+    return '/onboarding';
+  }
+
+  return '/dashboard';
 }
 
 export interface AuthResult {
@@ -58,10 +75,13 @@ export async function login(
     password,
     mfaCode: mfaCode || undefined,
   });
+
   const result = res.data.data;
+
   if (!result.mfaRequired) {
     setTokens(result.accessToken, result.refreshToken);
   }
+
   return result;
 }
 
@@ -73,21 +93,28 @@ export async function register(dto: {
 }): Promise<AuthResult> {
   const res = await api.post<{ data: AuthResult }>('/auth/register', dto);
   const result = res.data.data;
+
   setTokens(result.accessToken, result.refreshToken);
+
   return result;
 }
 
 export async function logout(refreshToken?: string): Promise<void> {
   const token = refreshToken ?? getRefreshToken();
+
   if (token) {
     await api.post('/auth/logout', { refreshToken: token }).catch(() => null);
   }
+
   clearTokens();
 }
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
   const token = getAccessToken();
+
   if (!token) return null;
+
   const res = await api.get<{ data: AuthUser }>('/auth/me');
+
   return res.data.data;
 }

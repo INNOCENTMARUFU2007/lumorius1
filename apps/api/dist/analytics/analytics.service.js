@@ -19,20 +19,36 @@ let AnalyticsService = class AnalyticsService {
         this.db = db;
         this.aiService = aiService;
     }
-    async getFounderDashboard(organizationId, userId) {
+    async getFounderDashboard(organizationId, userId, days = 30, includeAiInsights = true) {
+        const rangeDays = [7, 30, 90].includes(days) ? days : 30;
         const [taskStats, docStats, meetingStats, kpiRes, goals] = await Promise.all([
-            this.getTaskStats(organizationId),
+            this.getTaskStats(organizationId, rangeDays),
             this.getDocumentStats(organizationId),
-            this.getMeetingStats(organizationId),
+            this.getMeetingStats(organizationId, userId),
             this.getKpiMetrics(organizationId),
             this.getGoals(organizationId),
         ]);
         const urgentTasks = await this.db.query(`SELECT id, title, priority, due_date, assignee_id
-       FROM tasks WHERE organization_id = $1 AND status != 'done'
-         AND (priority = 'urgent' OR (due_date IS NOT NULL AND due_date < NOW() + INTERVAL '3 days'))
-       ORDER BY priority DESC, due_date ASC LIMIT 5`, [organizationId]);
-        const context = { taskStats, docStats, meetingStats, urgentTasks: urgentTasks.rows };
-        const risksAndOpportunities = await this.aiService.detectRisksAndOpportunities(context);
+       FROM tasks
+       WHERE organization_id = $1
+         AND status != 'done'
+         AND (
+           priority = 'urgent'
+           OR (
+             due_date IS NOT NULL
+             AND due_date < NOW() + INTERVAL '3 days'
+           )
+         )
+       ORDER BY priority DESC, due_date ASC
+       LIMIT 5`, [organizationId]);
+        const risksAndOpportunities = includeAiInsights
+            ? await this.aiService.detectRisksAndOpportunities({
+                taskStats,
+                docStats,
+                meetingStats,
+                urgentTasks: urgentTasks.rows,
+            })
+            : { risks: [], opportunities: [] };
         return {
             summary: {
                 tasks: taskStats,
@@ -47,85 +63,282 @@ let AnalyticsService = class AnalyticsService {
             generatedAt: new Date().toISOString(),
         };
     }
-    async getTaskStats(organizationId) {
-        const res = await this.db.query(`SELECT
-         COUNT(*) as total,
-         COUNT(*) FILTER (WHERE status = 'done') as completed,
-         COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress,
-         COUNT(*) FILTER (WHERE status = 'todo') as todo,
-         COUNT(*) FILTER (WHERE priority = 'urgent' AND status != 'done') as urgent_open,
-         COUNT(*) FILTER (WHERE due_date < NOW() AND status != 'done') as overdue
-       FROM tasks WHERE organization_id = $1`, [organizationId]);
-        return res.rows[0];
+    async getTaskStats(organizationId, days = 30) {
+        const rangeDays = [7, 30, 90].includes(days) ? days : 30;
+        const [summary, trend] = await Promise.all([
+            this.db.query(`WITH bounds AS (
+           SELECT
+             date_trunc('day', NOW())
+               - (($2::int - 1) * INTERVAL '1 day') AS current_start,
+             date_trunc('day', NOW())
+               + INTERVAL '1 day' AS current_end
+         )
+         SELECT
+           COUNT(*)::int AS total,
+           COUNT(*) FILTER (
+             WHERE t.status = 'done'
+           )::int AS completed,
+           COUNT(*) FILTER (
+             WHERE t.status = 'in_progress'
+           )::int AS in_progress,
+           COUNT(*) FILTER (
+             WHERE t.status = 'todo'
+           )::int AS todo,
+           COUNT(*) FILTER (
+             WHERE t.priority = 'urgent'
+               AND t.status != 'done'
+           )::int AS urgent_open,
+           COUNT(*) FILTER (
+             WHERE t.due_date < NOW()
+               AND t.status != 'done'
+           )::int AS overdue,
+           COUNT(*) FILTER (
+             WHERE t.status = 'done'
+               AND t.completed_at >= bounds.current_start
+               AND t.completed_at < bounds.current_end
+           )::int AS completed_period,
+           COUNT(*) FILTER (
+             WHERE t.status = 'done'
+               AND t.completed_at >=
+                   bounds.current_start - ($2::int * INTERVAL '1 day')
+               AND t.completed_at < bounds.current_start
+           )::int AS completed_previous_period
+         FROM tasks t
+         CROSS JOIN bounds
+         WHERE t.organization_id = $1`, [organizationId, rangeDays]),
+            this.db.query(`SELECT
+           TO_CHAR(period.day, 'YYYY-MM-DD') AS date,
+           COUNT(t.id)::int AS value
+         FROM generate_series(
+           date_trunc('day', NOW())
+             - (($2::int - 1) * INTERVAL '1 day'),
+           date_trunc('day', NOW()),
+           INTERVAL '1 day'
+         ) AS period(day)
+         LEFT JOIN tasks t
+           ON t.organization_id = $1
+          AND t.status = 'done'
+          AND t.completed_at >= period.day
+          AND t.completed_at < period.day + INTERVAL '1 day'
+         GROUP BY period.day
+         ORDER BY period.day`, [organizationId, rangeDays]),
+        ]);
+        const stats = summary.rows[0] ?? {
+            total: 0,
+            completed: 0,
+            in_progress: 0,
+            todo: 0,
+            urgent_open: 0,
+            overdue: 0,
+            completed_period: 0,
+            completed_previous_period: 0,
+        };
+        return {
+            ...stats,
+            completion_trend: trend.rows,
+        };
     }
     async getDocumentStats(organizationId) {
         const res = await this.db.query(`SELECT
-         COUNT(*) as total,
-         COUNT(*) FILTER (WHERE status = 'indexed') as indexed,
-         COUNT(*) FILTER (WHERE status = 'processing') as processing,
-         SUM(size_bytes) as total_size_bytes,
-         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as uploaded_this_week
-       FROM documents WHERE organization_id = $1`, [organizationId]);
-        return res.rows[0];
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (
+           WHERE status = 'indexed'
+         )::int AS indexed,
+         COUNT(*) FILTER (
+           WHERE status = 'processing'
+         )::int AS processing,
+         COUNT(*) FILTER (
+           WHERE status = 'failed'
+         )::int AS failed,
+         COUNT(*) FILTER (
+           WHERE status = 'uploading'
+         )::int AS uploading,
+         COALESCE(SUM(size_bytes), 0)::bigint AS total_size_bytes,
+         COUNT(*) FILTER (
+           WHERE created_at > NOW() - INTERVAL '7 days'
+         )::int AS uploaded_this_week
+       FROM documents
+       WHERE organization_id = $1`, [organizationId]);
+        return res.rows[0] ?? {
+            total: 0,
+            indexed: 0,
+            processing: 0,
+            failed: 0,
+            uploading: 0,
+            total_size_bytes: 0,
+            uploaded_this_week: 0,
+        };
     }
-    async getMeetingStats(organizationId) {
+    async getMeetingStats(organizationId, userId) {
         const res = await this.db.query(`SELECT
-         COUNT(*) as total,
-         COUNT(*) FILTER (WHERE status = 'completed') as completed,
-         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '30 days') as last_30_days,
-         AVG(duration_seconds) FILTER (WHERE status = 'completed') as avg_duration_seconds
-       FROM meetings WHERE organization_id = $1`, [organizationId]);
-        return res.rows[0];
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (
+           WHERE m.status = 'completed'
+         )::int AS completed,
+         COUNT(*) FILTER (
+           WHERE m.created_at > NOW() - INTERVAL '30 days'
+         )::int AS last_30_days,
+         COUNT(*) FILTER (
+           WHERE date_trunc(
+             'month',
+             m.created_at AT TIME ZONE viewer.timezone
+           ) = date_trunc(
+             'month',
+             NOW() AT TIME ZONE viewer.timezone
+           )
+         )::int AS this_month,
+         AVG(m.duration_seconds) FILTER (
+           WHERE m.status = 'completed'
+         ) AS avg_duration_seconds
+       FROM meetings m
+       CROSS JOIN (
+         SELECT COALESCE(NULLIF(timezone, ''), 'UTC') AS timezone
+         FROM users
+         WHERE id = $2
+           AND organization_id = $1
+       ) viewer
+       WHERE m.organization_id = $1`, [organizationId, userId]);
+        return res.rows[0] ?? {
+            total: 0,
+            completed: 0,
+            last_30_days: 0,
+            this_month: 0,
+            avg_duration_seconds: null,
+        };
     }
     async getKpiMetrics(organizationId) {
-        const metrics = await this.db.query(`SELECT km.*,
-              (SELECT value FROM kpi_values kv WHERE kv.metric_id = km.id ORDER BY recorded_at DESC LIMIT 1) as current_value,
-              (SELECT value FROM kpi_values kv WHERE kv.metric_id = km.id ORDER BY recorded_at DESC OFFSET 1 LIMIT 1) as previous_value,
-              (SELECT jsonb_agg(json_build_object('date', recorded_at, 'value', value) ORDER BY recorded_at DESC)
-               FROM (SELECT recorded_at, value FROM kpi_values kv WHERE kv.metric_id = km.id ORDER BY recorded_at DESC LIMIT 30) sub) as history
-       FROM kpi_metrics km WHERE km.organization_id = $1`, [organizationId]);
+        const metrics = await this.db.query(`SELECT
+         km.*,
+         (
+           SELECT value
+           FROM kpi_values kv
+           WHERE kv.metric_id = km.id
+           ORDER BY recorded_at DESC
+           LIMIT 1
+         ) AS current_value,
+         (
+           SELECT value
+           FROM kpi_values kv
+           WHERE kv.metric_id = km.id
+           ORDER BY recorded_at DESC
+           OFFSET 1
+           LIMIT 1
+         ) AS previous_value,
+         (
+           SELECT jsonb_agg(
+             json_build_object(
+               'date', recorded_at,
+               'value', value
+             )
+             ORDER BY recorded_at DESC
+           )
+           FROM (
+             SELECT recorded_at, value
+             FROM kpi_values kv
+             WHERE kv.metric_id = km.id
+             ORDER BY recorded_at DESC
+             LIMIT 30
+           ) sub
+         ) AS history
+       FROM kpi_metrics km
+       WHERE km.organization_id = $1`, [organizationId]);
         return metrics.rows;
     }
     async getGoals(organizationId) {
-        const res = await this.db.query(`SELECT g.*, u.name as owner_name FROM goals g
+        const res = await this.db.query(`SELECT g.*, u.name AS owner_name
+       FROM goals g
        LEFT JOIN users u ON g.owner_id = u.id
-       WHERE g.organization_id = $1 AND g.status = 'active'
+       WHERE g.organization_id = $1
+         AND g.status = 'active'
        ORDER BY g.due_date ASC NULLS LAST`, [organizationId]);
         return res.rows;
     }
     async createKpiMetric(organizationId, userId, dto) {
         const id = (0, uuid_1.v4)();
-        await this.db.query(`INSERT INTO kpi_metrics (id, name, description, unit, target, organization_id, created_by_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`, [id, dto.name, dto.description ?? null, dto.unit ?? null, dto.target ?? null, organizationId, userId]);
+        await this.db.query(`INSERT INTO kpi_metrics (
+         id, name, description, unit, target, organization_id, created_by_id
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`, [
+            id,
+            dto.name,
+            dto.description ?? null,
+            dto.unit ?? null,
+            dto.target ?? null,
+            organizationId,
+            userId,
+        ]);
         return this.db.findOne('kpi_metrics', { id });
     }
     async recordKpiValue(metricId, organizationId, value, date) {
+        const metric = await this.db.query(`SELECT id
+       FROM kpi_metrics
+       WHERE id = $1 AND organization_id = $2`, [metricId, organizationId]);
+        if (metric.rows.length === 0) {
+            throw new Error('KPI metric not found for this organisation');
+        }
         const recordDate = date ?? new Date().toISOString().split('T')[0];
         await this.db.query(`INSERT INTO kpi_values (id, metric_id, value, recorded_at)
        VALUES (gen_random_uuid(), $1, $2, $3)
-       ON CONFLICT (metric_id, recorded_at) DO UPDATE SET value = EXCLUDED.value`, [metricId, value, recordDate]);
-        return { recorded: true, date: recordDate, value };
+       ON CONFLICT (metric_id, recorded_at)
+       DO UPDATE SET value = EXCLUDED.value`, [metricId, value, recordDate]);
+        return {
+            recorded: true,
+            date: recordDate,
+            value,
+        };
     }
     async createGoal(organizationId, userId, dto) {
         const id = (0, uuid_1.v4)();
-        await this.db.query(`INSERT INTO goals (id, title, description, target_value, unit, due_date, organization_id, owner_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, dto.title, dto.description ?? null, dto.targetValue ?? null,
-            dto.unit ?? null, dto.dueDate ?? null, organizationId, userId]);
+        await this.db.query(`INSERT INTO goals (
+         id, title, description, target_value, unit,
+         due_date, organization_id, owner_id
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [
+            id,
+            dto.title,
+            dto.description ?? null,
+            dto.targetValue ?? null,
+            dto.unit ?? null,
+            dto.dueDate ?? null,
+            organizationId,
+            userId,
+        ]);
         return this.db.findOne('goals', { id });
     }
     async getTeamDashboard(organizationId) {
         const [members, tasks, meetings] = await Promise.all([
-            this.db.query(`SELECT u.id, u.name, u.role, u.avatar_url,
-                COUNT(t.id) FILTER (WHERE t.status != 'done') as open_tasks,
-                COUNT(t.id) FILTER (WHERE t.status = 'done' AND t.updated_at > NOW() - INTERVAL '7 days') as tasks_completed_this_week
+            this.db.query(`SELECT
+           u.id,
+           u.name,
+           u.role,
+           u.avatar_url,
+           COUNT(t.id) FILTER (
+             WHERE t.status != 'done'
+           )::int AS open_tasks,
+           COUNT(t.id) FILTER (
+             WHERE t.status = 'done'
+               AND t.updated_at > NOW() - INTERVAL '7 days'
+           )::int AS tasks_completed_this_week
          FROM users u
-         LEFT JOIN tasks t ON t.assignee_id = u.id AND t.organization_id = $1
-         WHERE u.organization_id = $1 AND u.is_active = TRUE
-         GROUP BY u.id ORDER BY u.name`, [organizationId]),
-            this.db.query(`SELECT status, COUNT(*) as count FROM tasks WHERE organization_id = $1 GROUP BY status`, [organizationId]),
-            this.db.query(`SELECT DATE_TRUNC('week', created_at) as week, COUNT(*) as count
-         FROM meetings WHERE organization_id = $1 AND created_at > NOW() - INTERVAL '90 days'
-         GROUP BY week ORDER BY week`, [organizationId]),
+         LEFT JOIN tasks t
+           ON t.assignee_id = u.id
+          AND t.organization_id = $1
+         WHERE u.organization_id = $1
+           AND u.is_active = TRUE
+         GROUP BY u.id
+         ORDER BY u.name`, [organizationId]),
+            this.db.query(`SELECT status, COUNT(*)::int AS count
+         FROM tasks
+         WHERE organization_id = $1
+         GROUP BY status`, [organizationId]),
+            this.db.query(`SELECT
+           DATE_TRUNC('week', created_at) AS week,
+           COUNT(*)::int AS count
+         FROM meetings
+         WHERE organization_id = $1
+           AND created_at > NOW() - INTERVAL '90 days'
+         GROUP BY week
+         ORDER BY week`, [organizationId]),
         ]);
         return {
             members: members.rows,
@@ -149,8 +362,11 @@ let AnalyticsService = class AnalyticsService {
             opportunities: founder.opportunities,
             teamSize: team.members.length,
         };
-        const report = await this.aiService.generateWeeklyReport(organizationId, reportData);
-        return report;
+        return this.aiService.generateWeeklyReport(reportData, {
+            organizationId,
+            userId,
+            feature: 'weekly_report',
+        });
     }
 };
 exports.AnalyticsService = AnalyticsService;

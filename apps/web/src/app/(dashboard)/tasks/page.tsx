@@ -38,20 +38,56 @@ export default function TasksPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () => api.post('/tasks', { title: newTitle, priority: newPriority }),
-    onSuccess: () => {
-      toast.success('Task created');
-      setNewTitle('');
-      setShowNew(false);
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-    },
-  });
+  mutationFn: () =>
+    api.post('/tasks', {
+      title: newTitle.trim(),
+      priority: newPriority,
+    }),
+
+  onSuccess: async () => {
+    toast.success('Task created');
+    setNewTitle('');
+    setShowNew(false);
+
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ['tasks'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['analytics'],
+      }),
+    ]);
+  },
+
+  onError: (error: any) => {
+    const message =
+      error?.response?.data?.message ?? 'Failed to create task';
+
+    toast.error(
+      Array.isArray(message) ? message.join(', ') : message
+    );
+  },
+});
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
-      api.patch(`/tasks/${id}`, { status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-  });
+  mutationFn: ({ id, status }: { id: string; status: string }) =>
+    api.patch(`/tasks/${id}`, { status }),
+
+  onSuccess: async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ['tasks'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['analytics'],
+      }),
+    ]);
+  },
+
+  onError: () => {
+    toast.error('Failed to update task status');
+  },
+});
 
   const tasks: Record<string, unknown>[] = data?.data ?? [];
 
@@ -165,10 +201,10 @@ export default function TasksPage() {
                     {task.title as string}
                   </p>
                   <div className="flex items-center gap-2 mt-0.5">
-                    {task.project_name && (
+                    {Boolean(task.project_name) && (
                       <span className="text-xs text-muted-foreground">{task.project_name as string}</span>
                     )}
-                    {task.due_date && (
+                    {Boolean(task.due_date) && (
                       <span className={`text-xs ${new Date(task.due_date as string) < new Date() && !isDone ? 'text-red-500' : 'text-muted-foreground'}`}>
                         Due {formatDate(task.due_date as string)}
                       </span>
@@ -176,7 +212,7 @@ export default function TasksPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {task.assignee_name && (
+                  {Boolean(task.assignee_name) && (
                     <div className="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center text-xs text-brand-600 font-medium">
                       {(task.assignee_name as string).charAt(0).toUpperCase()}
                     </div>

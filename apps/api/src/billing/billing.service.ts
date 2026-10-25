@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import Stripe from 'stripe';
 import { DatabaseService } from '../database/database.service';
 
@@ -28,10 +29,9 @@ export class BillingService {
   constructor(
     private readonly db: DatabaseService,
     private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2,
   ) {
-    const key = this.configService.get<string>(
-      'stripe.secretKey',
-    );
+    const key = this.configService.get<string>('stripe.secretKey');
 
     if (key) {
       this.stripe = new Stripe(key, {
@@ -44,29 +44,55 @@ export class BillingService {
 
   async getPlans() {
     const res = await this.db.query(
-      `SELECT *
-       FROM billing_plans
-       WHERE is_active = TRUE
-       ORDER BY monthly_price_cents ASC`,
+      `SELECT
+         bp.*,
+         COALESCE(
+           NULLIF(bp.limits ->> 'users', '')::integer,
+           0
+         ) AS max_users,
+         COALESCE(
+           NULLIF(bp.limits ->> 'storage_gb', '')::numeric,
+           0
+         ) AS storage_gb,
+         COALESCE(
+           NULLIF(bp.limits ->> 'ai_tokens_monthly', '')::bigint,
+           0
+         ) AS ai_tokens_monthly
+       FROM billing_plans bp
+       WHERE bp.is_active = TRUE
+       ORDER BY bp.price_monthly ASC`,
     );
 
     return res.rows;
   }
 
-  // ── Subscription ─────────────────────────────────────────────
+  // ── Subscription ──────────────────────────────────────────────
 
   async getSubscription(organizationId: string) {
     const res = await this.db.query(
       `SELECT
          s.*,
          bp.name AS plan_name,
-         bp.max_users,
-         bp.storage_gb,
-         bp.ai_requests_per_month
+         bp.tier AS plan_tier,
+         bp.price_monthly,
+         bp.price_yearly,
+         COALESCE(
+           NULLIF(bp.limits ->> 'users', '')::integer,
+           0
+         ) AS max_users,
+         COALESCE(
+           NULLIF(bp.limits ->> 'storage_gb', '')::numeric,
+           0
+         ) AS storage_gb,
+         COALESCE(
+           NULLIF(bp.limits ->> 'ai_tokens_monthly', '')::bigint,
+           0
+         ) AS ai_tokens_monthly
        FROM subscriptions s
-       JOIN billing_plans bp
-         ON s.plan_id = bp.id
-       WHERE s.organization_id = $1`,
+       JOIN billing_plans bp ON s.plan_id = bp.id
+       WHERE s.organization_id = $1
+       ORDER BY s.created_at DESC
+       LIMIT 1`,
       [organizationId],
     );
 
@@ -83,9 +109,7 @@ export class BillingService {
     cancelUrl?: string,
   ) {
     if (!this.stripe) {
-      throw new BadRequestException(
-        'Stripe not configured',
-      );
+      throw new BadRequestException('Stripe not configured');
     }
 
     let organizationId: string;
@@ -93,131 +117,118 @@ export class BillingService {
     let resolvedInterval: BillingInterval;
     let resolvedSuccessUrl: string;
     let resolvedCancelUrl: string;
+    let userId: string | undefined;
 
-    // Explicitly narrow the union by checking for string first.
     if (typeof organizationIdOrInput === 'string') {
       organizationId = organizationIdOrInput;
       resolvedPlanId = planId ?? '';
       resolvedInterval = interval;
-
       resolvedSuccessUrl =
-        successUrl ??
-        this.getFrontendUrl('/billing/success');
-
+        successUrl ?? this.getFrontendUrl('/billing/success');
       resolvedCancelUrl =
-        cancelUrl ??
-        this.getFrontendUrl('/billing/cancel');
+        cancelUrl ?? this.getFrontendUrl('/billing/cancel');
     } else {
       organizationId =
         organizationIdOrInput.organizationId ??
         organizationIdOrInput.orgId ??
         '';
-
-      resolvedPlanId =
-        organizationIdOrInput.planId;
-
-      resolvedInterval =
-        organizationIdOrInput.interval ??
-        'monthly';
-
+      resolvedPlanId = organizationIdOrInput.planId;
+      resolvedInterval = organizationIdOrInput.interval ?? 'monthly';
       resolvedSuccessUrl =
         organizationIdOrInput.successUrl ??
         this.getFrontendUrl('/billing/success');
-
       resolvedCancelUrl =
         organizationIdOrInput.cancelUrl ??
         this.getFrontendUrl('/billing/cancel');
+      userId = organizationIdOrInput.userId;
     }
 
     if (!organizationId) {
-      throw new BadRequestException(
-        'Organization ID is required',
-      );
+      throw new BadRequestException('Organization ID is required');
     }
 
     if (!resolvedPlanId) {
-      throw new BadRequestException(
-        'Plan ID is required',
-      );
+      throw new BadRequestException('Plan ID is required');
     }
 
-    const plan =
-      await this.db.findOne<Record<string, unknown>>(
-        'billing_plans',
-        { id: resolvedPlanId },
-      );
+    if (!['monthly', 'annual'].includes(resolvedInterval)) {
+      throw new BadRequestException('Invalid billing interval');
+    }
 
-    if (!plan) {
-      throw new NotFoundException(
-        'Plan not found',
-      );
+    const plan = await this.db.findOne<Record<string, unknown>>(
+      'billing_plans',
+      { id: resolvedPlanId },
+    );
+
+    if (!plan || plan.is_active !== true) {
+      throw new NotFoundException('Active billing plan not found');
     }
 
     const priceId =
       resolvedInterval === 'annual'
-        ? (plan.stripe_price_id_annual as string)
-        : (plan.stripe_price_id_monthly as string);
+        ? (plan.stripe_price_yearly as string | null)
+        : (plan.stripe_price_monthly as string | null);
 
     if (!priceId) {
       throw new BadRequestException(
-        'Stripe price not configured for this plan',
+        `Stripe ${resolvedInterval} price is not configured for this plan`,
       );
     }
 
-    const org =
-      await this.db.findOne<Record<string, unknown>>(
-        'organizations',
-        { id: organizationId },
-      );
+    const org = await this.db.findOne<Record<string, unknown>>(
+      'organizations',
+      { id: organizationId },
+    );
 
     if (!org) {
-      throw new NotFoundException(
-        'Organization not found',
-      );
+      throw new NotFoundException('Organization not found');
     }
 
-    let customerId =
-      org.stripe_customer_id as
-        | string
-        | undefined;
+    let customerId = this.getStripeCustomerId(org.metadata);
 
     if (!customerId) {
-      const customer =
-        await this.stripe.customers.create({
-          metadata: {
-            organizationId,
-          },
-        });
+      const customer = await this.stripe.customers.create({
+        metadata: { organizationId },
+      });
 
       customerId = customer.id;
 
       await this.db.query(
         `UPDATE organizations
-         SET stripe_customer_id = $1
+         SET metadata = jsonb_set(
+           COALESCE(metadata, '{}'::jsonb),
+           '{stripe_customer_id}',
+           to_jsonb($1::text),
+           TRUE
+         ),
+         updated_at = NOW()
          WHERE id = $2`,
         [customerId, organizationId],
       );
     }
 
-    const session =
-      await this.stripe.checkout.sessions.create({
-        customer: customerId,
-        payment_method_types: ['card'],
-        line_items: [
-          {
-            price: priceId,
-            quantity: 1,
-          },
-        ],
-        mode: 'subscription',
-        success_url: resolvedSuccessUrl,
-        cancel_url: resolvedCancelUrl,
+    const session = await this.stripe.checkout.sessions.create({
+      customer: customerId,
+      payment_method_types: ['card'],
+      line_items: [{ price: priceId, quantity: 1 }],
+      mode: 'subscription',
+      success_url: resolvedSuccessUrl,
+      cancel_url: resolvedCancelUrl,
+      metadata: {
+        organizationId,
+        planId: resolvedPlanId,
+        interval: resolvedInterval,
+        ...(userId ? { userId } : {}),
+      },
+      subscription_data: {
         metadata: {
           organizationId,
           planId: resolvedPlanId,
           interval: resolvedInterval,
+          ...(userId ? { userId } : {}),
         },
-      });
+      },
+    });
 
     return {
       url: session.url,
@@ -232,33 +243,30 @@ export class BillingService {
     returnUrl: string,
   ) {
     if (!this.stripe) {
-      throw new BadRequestException(
-        'Stripe not configured',
-      );
+      throw new BadRequestException('Stripe not configured');
     }
 
-    const org =
-      await this.db.findOne<Record<string, unknown>>(
-        'organizations',
-        { id: organizationId },
-      );
+    const org = await this.db.findOne<Record<string, unknown>>(
+      'organizations',
+      { id: organizationId },
+    );
 
-    if (!org?.stripe_customer_id) {
-      throw new NotFoundException(
-        'No billing account found',
-      );
+    if (!org) {
+      throw new NotFoundException('Organization not found');
     }
 
-    const session =
-      await this.stripe.billingPortal.sessions.create({
-        customer:
-          org.stripe_customer_id as string,
-        return_url: returnUrl,
-      });
+    const customerId = this.getStripeCustomerId(org.metadata);
 
-    return {
-      url: session.url,
-    };
+    if (!customerId) {
+      throw new NotFoundException('No billing account found');
+    }
+
+    const session = await this.stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+
+    return { url: session.url };
   }
 
   async createBillingPortalSession(
@@ -267,27 +275,19 @@ export class BillingService {
   ) {
     return this.createPortalSession(
       organizationId,
-      returnUrl ??
-        this.getFrontendUrl('/billing'),
+      returnUrl ?? this.getFrontendUrl('/billing'),
     );
   }
 
   // ── Webhooks ──────────────────────────────────────────────────
 
-  async handleWebhook(
-    payload: Buffer,
-    signature: string,
-  ) {
+  async handleWebhook(payload: Buffer, signature: string) {
     if (!this.stripe) {
-      throw new BadRequestException(
-        'Stripe not configured',
-      );
+      throw new BadRequestException('Stripe not configured');
     }
 
     const webhookSecret =
-      this.configService.get<string>(
-        'stripe.webhookSecret',
-      );
+      this.configService.get<string>('stripe.webhookSecret');
 
     if (!webhookSecret) {
       throw new BadRequestException(
@@ -298,26 +298,21 @@ export class BillingService {
     let event: Stripe.Event;
 
     try {
-      event =
-        this.stripe.webhooks.constructEvent(
-          payload,
-          signature,
-          webhookSecret,
-        );
+      event = this.stripe.webhooks.constructEvent(
+        payload,
+        signature,
+        webhookSecret,
+      );
     } catch (err) {
       this.logger.error(
         'Webhook signature verification failed',
-        err,
+        err instanceof Error ? err.stack : String(err),
       );
 
-      throw new BadRequestException(
-        'Invalid webhook signature',
-      );
+      throw new BadRequestException('Invalid webhook signature');
     }
 
-    this.logger.log(
-      `Webhook: ${event.type}`,
-    );
+    this.logger.log(`Webhook: ${event.type}`);
 
     switch (event.type) {
       case 'checkout.session.completed':
@@ -330,6 +325,15 @@ export class BillingService {
       case 'customer.subscription.deleted':
         await this.handleSubscriptionChange(
           event.data.object as Stripe.Subscription,
+          event.id,
+          event.type,
+        );
+        break;
+
+      case 'invoice.payment_failed':
+        await this.handleInvoicePaymentFailed(
+          event.data.object as Stripe.Invoice,
+          event.id,
         );
         break;
 
@@ -343,16 +347,12 @@ export class BillingService {
         break;
     }
 
-    return {
-      received: true,
-    };
+    return { received: true };
   }
 
   // ── Invoices ──────────────────────────────────────────────────
 
-  async getInvoices(
-    organizationId: string,
-  ) {
+  async getInvoices(organizationId: string) {
     const res = await this.db.query(
       `SELECT *
        FROM invoices
@@ -370,62 +370,109 @@ export class BillingService {
   private async handleCheckoutComplete(
     session: Stripe.Checkout.Session,
   ) {
-    const {
-      organizationId,
-      planId,
-      interval,
-    } = session.metadata ?? {};
+    const { organizationId, planId, interval } = session.metadata ?? {};
 
-    if (!organizationId || !planId) {
+    if (!organizationId || !planId || !session.subscription) {
       return;
     }
 
-    if (session.subscription) {
-      const sub =
-        await this.stripe!.subscriptions.retrieve(
-          session.subscription as string,
-        );
+    const sub = await this.stripe!.subscriptions.retrieve(
+      session.subscription as string,
+    );
 
-      await this.upsertSubscription(
-        organizationId,
-        planId,
-        (interval ??
-          'monthly') as BillingInterval,
-        sub,
+    await this.upsertSubscription(
+      organizationId,
+      planId,
+      (interval ?? 'monthly') as BillingInterval,
+      sub,
+    );
+
+    if (sub.status === 'active' || sub.status === 'trialing') {
+      await this.db.query(
+        `UPDATE organizations
+         SET plan_id = $1, updated_at = NOW()
+         WHERE id = $2`,
+        [planId, organizationId],
       );
     }
   }
 
   private async handleSubscriptionChange(
     sub: Stripe.Subscription,
+    eventId: string,
+    eventType: string,
   ) {
-    const orgRes =
-      await this.db.query(
-        `SELECT id
-         FROM organizations
-         WHERE stripe_customer_id = $1`,
-        [sub.customer as string],
-      );
+    const customerId =
+      typeof sub.customer === 'string'
+        ? sub.customer
+        : sub.customer.id;
+
+    const orgRes = await this.db.query(
+      `SELECT id
+       FROM organizations
+       WHERE metadata ->> 'stripe_customer_id' = $1`,
+      [customerId],
+    );
 
     if (!orgRes.rows[0]) {
+      this.logger.warn(
+        `No organization found for Stripe customer ${customerId}`,
+      );
       return;
     }
 
-    const organizationId =
-      (
-        orgRes.rows[0] as Record<
-          string,
-          unknown
-        >
-      ).id as string;
+    const organizationId = orgRes.rows[0].id as string;
 
-    const planId =
-      (sub.metadata?.planId ??
-        'starter') as string;
+    const existingPlanRes = await this.db.query<{ plan_id: string }>(
+      `SELECT plan_id
+       FROM subscriptions
+       WHERE stripe_subscription_id = $1
+         AND organization_id = $2
+       LIMIT 1`,
+      [sub.id, organizationId],
+    );
 
-    const interval =
-      (sub.metadata?.interval ??
-        'monthly') as BillingInterval;
+    const stripePriceId = sub.items.data[0]?.price.id;
+    let planId: string | undefined;
+
+    if (stripePriceId) {
+      const pricePlanRes = await this.db.query<{ id: string }>(
+        `SELECT id
+         FROM billing_plans
+         WHERE stripe_price_monthly = $1
+            OR stripe_price_yearly = $1
+         ORDER BY is_active DESC
+         LIMIT 1`,
+        [stripePriceId],
+      );
+
+      planId = pricePlanRes.rows[0]?.id;
+    }
+
+    planId =
+      planId ||
+      sub.metadata?.planId?.trim() ||
+      existingPlanRes.rows[0]?.plan_id;
+
+    if (!planId) {
+      this.logger.error(
+        `Cannot resolve a billing plan for Stripe subscription ${sub.id}. The organisation plan was not changed.`,
+      );
+
+      await this.eventEmitter.emitAsync(
+        'billing.subscription_attention',
+        {
+          organizationId,
+          eventKey: eventId,
+          status: sub.status,
+          eventType,
+        },
+      );
+
+      return;
+    }
+
+    const interval = sub.metadata?.interval ?? 'monthly';
 
     await this.upsertSubscription(
       organizationId,
@@ -434,15 +481,44 @@ export class BillingService {
       sub,
     );
 
-    if (
-      sub.status === 'active' ||
-      sub.status === 'trialing'
-    ) {
+    if (sub.status === 'active' || sub.status === 'trialing') {
       await this.db.query(
         `UPDATE organizations
-         SET plan_id = $1
+         SET plan_id = $1, updated_at = NOW()
          WHERE id = $2`,
         [planId, organizationId],
+      );
+    } else if (
+      eventType === 'customer.subscription.deleted' ||
+      sub.status === 'canceled'
+    ) {
+      await this.db.query(
+        `UPDATE organizations o
+         SET plan_id = 'free'::plan_tier,
+             updated_at = NOW()
+         WHERE o.id = $1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM subscriptions s
+             WHERE s.organization_id = o.id
+               AND s.status IN ('active', 'trialing')
+           )`,
+        [organizationId],
+      );
+    }
+
+    if (
+      eventType === 'customer.subscription.deleted' ||
+      !['active', 'trialing'].includes(sub.status)
+    ) {
+      await this.eventEmitter.emitAsync(
+        'billing.subscription_attention',
+        {
+          organizationId,
+          eventKey: eventId,
+          status: sub.status,
+          eventType,
+        },
       );
     }
   }
@@ -453,140 +529,258 @@ export class BillingService {
     interval: string,
     sub: Stripe.Subscription,
   ) {
+    const customerId =
+      typeof sub.customer === 'string'
+        ? sub.customer
+        : sub.customer.id;
+
+    const currentPeriodStart = sub.current_period_start
+      ? new Date(sub.current_period_start * 1000)
+      : null;
+
+    const currentPeriodEnd = sub.current_period_end
+      ? new Date(sub.current_period_end * 1000)
+      : null;
+
+    const cancelAt = sub.cancel_at
+      ? new Date(sub.cancel_at * 1000)
+      : null;
+
+    const canceledAt = sub.canceled_at
+      ? new Date(sub.canceled_at * 1000)
+      : null;
+
     await this.db.query(
       `INSERT INTO subscriptions (
          id,
          organization_id,
          plan_id,
          status,
-         interval,
+         stripe_customer_id,
          stripe_subscription_id,
          stripe_price_id,
          current_period_start,
          current_period_end,
-         cancel_at_period_end
+         cancel_at,
+         canceled_at,
+         metadata,
+         created_at,
+         updated_at
        )
        VALUES (
          gen_random_uuid(),
-         $1,
-         $2,
-         $3,
-         $4,
-         $5,
-         $6,
-         $7,
-         $8,
-         $9
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9, $10, $11::jsonb,
+         NOW(), NOW()
        )
-       ON CONFLICT (organization_id)
+       ON CONFLICT (stripe_subscription_id)
        DO UPDATE SET
-         plan_id = $2,
-         status = $3,
-         interval = $4,
-         stripe_subscription_id = $5,
-         stripe_price_id = $6,
-         current_period_start = $7,
-         current_period_end = $8,
-         cancel_at_period_end = $9,
+         organization_id = EXCLUDED.organization_id,
+         plan_id = EXCLUDED.plan_id,
+         status = EXCLUDED.status,
+         stripe_customer_id = EXCLUDED.stripe_customer_id,
+         stripe_price_id = EXCLUDED.stripe_price_id,
+         current_period_start = EXCLUDED.current_period_start,
+         current_period_end = EXCLUDED.current_period_end,
+         cancel_at = EXCLUDED.cancel_at,
+         canceled_at = EXCLUDED.canceled_at,
+         metadata = EXCLUDED.metadata,
          updated_at = NOW()`,
       [
         organizationId,
         planId,
         sub.status,
-        interval,
+        customerId,
         sub.id,
-        sub.items.data[0]?.price.id,
-        new Date(
-          (sub.current_period_start ?? 0) *
-            1000,
-        ),
-        new Date(
-          (sub.current_period_end ?? 0) *
-            1000,
-        ),
-        sub.cancel_at_period_end,
+        sub.items.data[0]?.price.id ?? null,
+        currentPeriodStart,
+        currentPeriodEnd,
+        cancelAt,
+        canceledAt,
+        JSON.stringify({
+          interval,
+          cancelAtPeriodEnd: sub.cancel_at_period_end,
+          stripeStatus: sub.status,
+        }),
       ],
     );
   }
 
-  private async handleInvoicePaid(
+  private async handleInvoicePaymentFailed(
     invoice: Stripe.Invoice,
+    eventId: string,
   ) {
-    const orgRes =
-      await this.db.query(
-        `SELECT id
-         FROM organizations
-         WHERE stripe_customer_id = $1`,
-        [invoice.customer as string],
-      );
+    const customerId =
+      typeof invoice.customer === 'string'
+        ? invoice.customer
+        : invoice.customer?.id;
 
-    if (!orgRes.rows[0]) {
+    if (!customerId) {
+      this.logger.warn(
+        `Failed invoice ${invoice.id} has no customer ID`,
+      );
       return;
     }
 
-    const organizationId =
-      (
-        orgRes.rows[0] as Record<
-          string,
-          unknown
-        >
-      ).id as string;
+    const result = await this.db.query<{ id: string }>(
+      `SELECT id
+       FROM organizations
+       WHERE metadata ->> 'stripe_customer_id' = $1
+       LIMIT 1`,
+      [customerId],
+    );
+
+    const organization = result.rows[0];
+
+    if (!organization) {
+      this.logger.warn(
+        `No organization found for failed invoice ${invoice.id}`,
+      );
+      return;
+    }
+
+    await this.eventEmitter.emitAsync(
+      'billing.payment_failed',
+      {
+        organizationId: organization.id,
+        eventKey: eventId,
+        invoiceId: invoice.id,
+        currency: invoice.currency,
+      },
+    );
+  }
+  private async handleInvoicePaid(invoice: Stripe.Invoice) {
+    const customerId =
+      typeof invoice.customer === 'string'
+        ? invoice.customer
+        : invoice.customer?.id;
+
+    if (!customerId) {
+      this.logger.warn(`Invoice ${invoice.id} has no customer ID`);
+      return;
+    }
+
+    const orgRes = await this.db.query(
+      `SELECT id
+       FROM organizations
+       WHERE metadata ->> 'stripe_customer_id' = $1`,
+      [customerId],
+    );
+
+    if (!orgRes.rows[0]) {
+      this.logger.warn(
+        `No organization found for paid invoice ${invoice.id}`,
+      );
+      return;
+    }
+
+    const organizationId = orgRes.rows[0].id as string;
+
+    // Stripe amounts are in minor currency units.
+    const amountDue = (invoice.amount_due ?? 0) / 100;
+    const amountPaid = (invoice.amount_paid ?? 0) / 100;
+
+    const periodStart = invoice.period_start
+      ? new Date(invoice.period_start * 1000)
+      : null;
+
+    const periodEnd = invoice.period_end
+      ? new Date(invoice.period_end * 1000)
+      : null;
+
+    const dueDate = invoice.due_date
+      ? new Date(invoice.due_date * 1000)
+      : null;
 
     await this.db.query(
       `INSERT INTO invoices (
          id,
          organization_id,
          stripe_invoice_id,
-         amount_cents,
+         amount_due,
+         amount_paid,
          currency,
          status,
-         invoice_url,
-         pdf_url,
-         paid_at
+         invoice_pdf,
+         period_start,
+         period_end,
+         due_date,
+         paid_at,
+         metadata,
+         created_at
        )
        VALUES (
          gen_random_uuid(),
-         $1,
-         $2,
-         $3,
-         $4,
-         'paid',
-         $5,
-         $6,
-         NOW()
+         $1, $2, $3, $4, $5, 'paid',
+         $6, $7, $8, $9, NOW(), $10::jsonb, NOW()
        )
        ON CONFLICT (stripe_invoice_id)
        DO UPDATE SET
+         amount_due = EXCLUDED.amount_due,
+         amount_paid = EXCLUDED.amount_paid,
+         currency = EXCLUDED.currency,
          status = 'paid',
-         paid_at = NOW()`,
+         invoice_pdf = EXCLUDED.invoice_pdf,
+         period_start = EXCLUDED.period_start,
+         period_end = EXCLUDED.period_end,
+         due_date = EXCLUDED.due_date,
+         paid_at = NOW(),
+         metadata = EXCLUDED.metadata`,
       [
         organizationId,
         invoice.id,
-        invoice.amount_paid,
+        amountDue,
+        amountPaid,
         invoice.currency,
-        invoice.hosted_invoice_url,
         invoice.invoice_pdf,
+        periodStart,
+        periodEnd,
+        dueDate,
+        JSON.stringify({
+          hostedInvoiceUrl: invoice.hosted_invoice_url,
+          stripeStatus: invoice.status,
+        }),
       ],
     );
   }
 
-  // ── Configuration Helpers ────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────
 
-  private getFrontendUrl(
-    path: string,
-  ): string {
+  private getStripeCustomerId(metadata: unknown): string | undefined {
+    if (!metadata) {
+      return undefined;
+    }
+
+    let parsed: Record<string, unknown>;
+
+    if (typeof metadata === 'string') {
+      try {
+        parsed = JSON.parse(metadata) as Record<string, unknown>;
+      } catch {
+        return undefined;
+      }
+    } else if (
+      typeof metadata === 'object' &&
+      !Array.isArray(metadata)
+    ) {
+      parsed = metadata as Record<string, unknown>;
+    } else {
+      return undefined;
+    }
+
+    const value = parsed.stripe_customer_id;
+
+    return typeof value === 'string' && value.length > 0
+      ? value
+      : undefined;
+  }
+
+  private getFrontendUrl(path: string): string {
     const baseUrl =
-      this.configService.get<string>(
-        'app.frontendUrl',
-      ) ??
-      this.configService.get<string>(
-        'frontendUrl',
-      ) ??
+      this.configService.get<string>('app.frontendUrl') ??
+      this.configService.get<string>('frontendUrl') ??
       'http://localhost:3000';
 
-    return `${baseUrl.replace(
-      /\/$/,
-      '',
-    )}${path}`;
+    return `${baseUrl.replace(/\/$/, '')}${path}`;
   }
 }

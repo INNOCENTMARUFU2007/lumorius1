@@ -1,10 +1,10 @@
-import { Test, TestingModule } from '@nestjs/testing';
+﻿import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { AiService } from './ai.service';
 import { DatabaseService } from '../database/database.service';
 import { createMockDatabaseService } from '../test/helpers';
 
-// ── Mocks ─────────────────────────────────────────────────────
+// â”€â”€ Mocks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const mockOpenAI = {
   chat: {
@@ -25,15 +25,15 @@ jest.mock('openai', () => ({
 const mockConfigService = {
   get: jest.fn((key: string) => {
     const config: Record<string, string | number> = {
-      'OPENAI_API_KEY': 'sk-test-key',
-      'OPENAI_MODEL':   'gpt-4o',
+      'ai.openai.apiKey': 'sk-test-key',
+      'ai.embeddingModel': 'text-embedding-3-small',
       'MAX_TOKENS':     2048,
     };
     return config[key];
   }),
 };
 
-// ── Fixtures ──────────────────────────────────────────────────
+// â”€â”€ Fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const mockChunks = [
   {
@@ -73,7 +73,7 @@ const mockEmbeddingResponse = {
   usage: { prompt_tokens: 10, total_tokens: 10 },
 };
 
-// ── Tests ─────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('AiService', () => {
   let service: AiService;
@@ -95,18 +95,16 @@ describe('AiService', () => {
     service = module.get<AiService>(AiService);
   });
 
-  // ── chat ─────────────────────────────────────────────────────
+  // â”€â”€ chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('chat()', () => {
     it('calls OpenAI with correct messages and returns response', async () => {
       mockOpenAI.chat.completions.create.mockResolvedValue(mockChatResponse);
 
-      const result = await service.chat({
-        userId:  'user-1',
-        orgId:   'org-1',
-        message: 'What is Lumorius?',
-        history: [],
-      } as any);
+      const result = await service.chat(
+        [{ role: 'user', content: 'What is Lumorius?' }],
+        { userId: 'user-1', organizationId: 'org-1', model: 'gpt-4o' },
+      );
 
       expect(mockOpenAI.chat.completions.create).toHaveBeenCalledTimes(1);
       const call = mockOpenAI.chat.completions.create.mock.calls[0][0];
@@ -118,15 +116,14 @@ describe('AiService', () => {
     it('includes conversation history in messages array', async () => {
       mockOpenAI.chat.completions.create.mockResolvedValue(mockChatResponse);
 
-      await service.chat({
-        userId:  'user-1',
-        orgId:   'org-1',
-        message: 'Follow-up question',
-        history: [
+      await service.chat(
+        [
           { role: 'user', content: 'First question' },
           { role: 'assistant', content: 'First answer' },
+          { role: 'user', content: 'Follow-up question' },
         ],
-      } as any);
+        { userId: 'user-1', organizationId: 'org-1', model: 'gpt-4o' },
+      );
 
       const call = mockOpenAI.chat.completions.create.mock.calls[0][0];
       const contents = call.messages.map((m: any) => m.content);
@@ -140,12 +137,12 @@ describe('AiService', () => {
       );
 
       await expect(
-        service.chat({ userId: 'u1', orgId: 'o1', message: 'test', history: [] } as any),
+        service.chat([{ role: 'user', content: 'test' }], { userId: 'u1', organizationId: 'o1' }),
       ).rejects.toThrow();
     });
   });
 
-  // ── generateEmbedding ─────────────────────────────────────────
+  // â”€â”€ generateEmbedding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('generateEmbedding()', () => {
     it('returns a 1536-dimension embedding vector', async () => {
@@ -171,7 +168,7 @@ describe('AiService', () => {
     });
   });
 
-  // ── searchSimilarChunks ───────────────────────────────────────
+  // â”€â”€ searchSimilarChunks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('searchSimilarChunks()', () => {
     it('queries DB with embedding and returns ranked chunks', async () => {
@@ -186,7 +183,11 @@ describe('AiService', () => {
       } as any);
 
       expect(mockOpenAI.embeddings.create).toHaveBeenCalledTimes(1);
-      expect(db.query).toHaveBeenCalledTimes(1);
+      expect(
+        db.query.mock.calls.some(([sql]) =>
+          String(sql).includes('FROM document_chunks dc'),
+        ),
+      ).toBe(true);
       expect(results).toHaveLength(2);
       expect(results[0].similarity).toBeGreaterThan(results[1].similarity);
     });
@@ -206,7 +207,7 @@ describe('AiService', () => {
     });
   });
 
-  // ── answerQuestion (RAG) ──────────────────────────────────────
+  // â”€â”€ answerQuestion (RAG) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('answerQuestion()', () => {
     it('retrieves context and generates grounded answer', async () => {
@@ -245,3 +246,6 @@ describe('AiService', () => {
     });
   });
 });
+
+
+

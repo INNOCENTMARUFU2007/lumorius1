@@ -3,9 +3,11 @@ import { JwtPayload } from '../common/decorators/current-user.decorator';
 export declare class AnalyticsController {
     private readonly analyticsService;
     constructor(analyticsService: AnalyticsService);
-    getFounderDashboard(user: JwtPayload): Promise<{
+    getFounderDashboard(user: JwtPayload, days?: string): Promise<{
         summary: {
-            tasks: Record<string, unknown>;
+            tasks: {
+                completion_trend: Record<string, unknown>[];
+            };
             documents: Record<string, unknown>;
             meetings: Record<string, unknown>;
         };

@@ -39,7 +39,11 @@ let AiController = class AiController {
         return this.aiService.detectRisksAndOpportunities(body.data);
     }
     generateWeeklyReport(user, body) {
-        return this.aiService.generateWeeklyReport(user.organizationId, body.data);
+        return this.aiService.generateWeeklyReport(body.data, {
+            organizationId: user.organizationId,
+            userId: user.sub,
+            feature: 'weekly_report',
+        });
     }
 };
 exports.AiController = AiController;

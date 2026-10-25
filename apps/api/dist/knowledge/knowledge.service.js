@@ -26,47 +26,130 @@ let KnowledgeService = class KnowledgeService {
             const text = `${dto.name} ${dto.description ?? ''} ${JSON.stringify(dto.properties ?? {})}`;
             embedding = await this.aiService.createEmbedding(text);
         }
-        catch { }
-        await this.db.query(`INSERT INTO knowledge_nodes (id, name, type, description, properties, embedding, organization_id, source_type, source_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [
-            id, dto.name, dto.type, dto.description ?? null,
+        catch {
+        }
+        await this.db.query(`INSERT INTO knowledge_nodes (
+         id, organization_id, label, type, description,
+         source_type, source_id, properties, embedding
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [
+            id,
+            organizationId,
+            dto.name,
+            dto.type,
+            dto.description ?? null,
+            dto.sourceType ?? null,
+            dto.sourceId ?? null,
             JSON.stringify(dto.properties ?? {}),
             embedding ? `[${embedding.join(',')}]` : null,
-            organizationId, dto.sourceType ?? null, dto.sourceId ?? null,
         ]);
         return this.findNodeById(id, organizationId);
     }
     async findNodeById(id, organizationId) {
-        const res = await this.db.query('SELECT id, name, type, description, properties, organization_id, source_type, source_id, created_at FROM knowledge_nodes WHERE id = $1 AND organization_id = $2', [id, organizationId]);
-        if (!res.rows[0])
-            throw new common_1.NotFoundException('Node not found');
+        const res = await this.db.query(`SELECT
+         id,
+         label,
+         label AS name,
+         type,
+         description,
+         properties,
+         organization_id,
+         source_type,
+         source_id,
+         created_at,
+         updated_at
+       FROM knowledge_nodes
+       WHERE id = $1 AND organization_id = $2`, [id, organizationId]);
+        if (!res.rows[0]) {
+            throw new common_1.NotFoundException('Knowledge node not found');
+        }
         return res.rows[0];
     }
     async createRelation(organizationId, dto) {
-        const id = (0, uuid_1.v4)();
-        await this.db.query(`INSERT INTO knowledge_relations (id, from_node_id, to_node_id, relation_type, strength, organization_id)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (from_node_id, to_node_id, relation_type) DO UPDATE SET strength = EXCLUDED.strength`, [id, dto.fromNodeId, dto.toNodeId, dto.relationType, dto.strength ?? 1.0, organizationId]);
-        return { id, ...dto };
+        const nodeIds = [...new Set([dto.fromNodeId, dto.toNodeId])];
+        const nodes = await this.db.query(`SELECT id
+       FROM knowledge_nodes
+       WHERE organization_id = $1 AND id = ANY($2::uuid[])`, [organizationId, nodeIds]);
+        if (nodes.rows.length !== nodeIds.length) {
+            throw new common_1.NotFoundException('Source or target knowledge node not found');
+        }
+        const strength = dto.strength ?? 1.0;
+        const existing = await this.db.query(`SELECT id
+       FROM knowledge_edges
+       WHERE organization_id = $1
+         AND source_id = $2
+         AND target_id = $3
+         AND relationship = $4
+       ORDER BY created_at DESC
+       LIMIT 1`, [organizationId, dto.fromNodeId, dto.toNodeId, dto.relationType]);
+        let relationId;
+        if (existing.rows[0]) {
+            relationId = String(existing.rows[0].id);
+            await this.db.query(`UPDATE knowledge_edges
+         SET weight = $1
+         WHERE id = $2 AND organization_id = $3`, [strength, relationId, organizationId]);
+        }
+        else {
+            relationId = (0, uuid_1.v4)();
+            await this.db.query(`INSERT INTO knowledge_edges (
+           id, organization_id, source_id, target_id,
+           relationship, weight, metadata
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb)`, [
+                relationId,
+                organizationId,
+                dto.fromNodeId,
+                dto.toNodeId,
+                dto.relationType,
+                strength,
+            ]);
+        }
+        return {
+            id: relationId,
+            fromNodeId: dto.fromNodeId,
+            toNodeId: dto.toNodeId,
+            relationType: dto.relationType,
+            strength,
+        };
     }
     async getGraph(organizationId, query) {
         let nodeIds = [];
         if (query.nodeId) {
-            nodeIds = [query.nodeId];
-            const depth = query.depth ?? 2;
-            for (let d = 0; d < depth; d++) {
-                const res = await this.db.query(`SELECT DISTINCT CASE WHEN from_node_id = ANY($1) THEN to_node_id ELSE from_node_id END as id
-           FROM knowledge_relations
-           WHERE (from_node_id = ANY($1) OR to_node_id = ANY($1)) AND organization_id = $2`, [nodeIds, organizationId]);
-                const newIds = res.rows.map((r) => r.id);
-                nodeIds = [...new Set([...nodeIds, ...newIds])];
+            const seen = new Set([query.nodeId]);
+            let frontier = [query.nodeId];
+            const parsedDepth = Number(query.depth ?? 2);
+            const depth = Number.isFinite(parsedDepth)
+                ? Math.max(0, Math.min(5, Math.floor(parsedDepth)))
+                : 2;
+            for (let level = 0; level < depth && frontier.length > 0; level += 1) {
+                const res = await this.db.query(`SELECT DISTINCT
+             CASE
+               WHEN source_id = ANY($1::uuid[]) THEN target_id
+               ELSE source_id
+             END AS id
+           FROM knowledge_edges
+           WHERE organization_id = $2
+             AND (
+               source_id = ANY($1::uuid[])
+               OR target_id = ANY($1::uuid[])
+             )`, [frontier, organizationId]);
+                const nextFrontier = [];
+                for (const row of res.rows) {
+                    const id = String(row.id);
+                    if (!seen.has(id)) {
+                        seen.add(id);
+                        nextFrontier.push(id);
+                    }
+                }
+                frontier = nextFrontier;
             }
+            nodeIds = [...seen];
         }
         const nodeConditions = ['organization_id = $1'];
         const nodeValues = [organizationId];
         let idx = 2;
         if (nodeIds.length > 0) {
-            nodeConditions.push(`id = ANY($${idx++})`);
+            nodeConditions.push(`id = ANY($${idx++}::uuid[])`);
             nodeValues.push(nodeIds);
         }
         if (query.nodeType) {
@@ -74,45 +157,90 @@ let KnowledgeService = class KnowledgeService {
             nodeValues.push(query.nodeType);
         }
         if (query.search) {
-            nodeConditions.push(`name ILIKE $${idx++}`);
+            nodeConditions.push(`label ILIKE $${idx++}`);
             nodeValues.push(`%${query.search}%`);
         }
-        const nodesRes = await this.db.query(`SELECT id, name, type, description, properties, created_at
-       FROM knowledge_nodes WHERE ${nodeConditions.join(' AND ')} LIMIT 200`, nodeValues);
+        const nodesRes = await this.db.query(`SELECT
+         id,
+         label,
+         label AS name,
+         type,
+         description,
+         properties,
+         source_type,
+         source_id,
+         created_at,
+         updated_at
+       FROM knowledge_nodes
+       WHERE ${nodeConditions.join(' AND ')}
+       ORDER BY label ASC
+       LIMIT 200`, nodeValues);
         const nodes = nodesRes.rows;
-        if (nodes.length === 0)
+        if (nodes.length === 0) {
             return { nodes: [], relations: [] };
-        const allNodeIds = nodes.map((n) => n.id);
-        const relationsRes = await this.db.query(`SELECT id, from_node_id, to_node_id, relation_type, strength
-       FROM knowledge_relations
-       WHERE from_node_id = ANY($1) AND to_node_id = ANY($1) AND organization_id = $2`, [allNodeIds, organizationId]);
+        }
+        const allNodeIds = nodes.map((node) => String(node.id));
+        const relationsRes = await this.db.query(`SELECT
+         id,
+         source_id,
+         target_id,
+         relationship,
+         weight,
+         source_id AS from_node_id,
+         target_id AS to_node_id,
+         relationship AS relation_type,
+         weight AS strength
+       FROM knowledge_edges
+       WHERE organization_id = $2
+         AND source_id = ANY($1::uuid[])
+         AND target_id = ANY($1::uuid[])
+       ORDER BY created_at ASC`, [allNodeIds, organizationId]);
         return { nodes, relations: relationsRes.rows };
     }
     async semanticSearch(organizationId, query) {
         const embedding = await this.aiService.createEmbedding(query);
-        const res = await this.db.query(`SELECT id, name, type, description, properties,
-              1 - (embedding <=> $2::vector) as score
+        if (!embedding.length)
+            return [];
+        const res = await this.db.query(`SELECT
+         id,
+         label,
+         label AS name,
+         type,
+         description,
+         properties,
+         1 - (embedding <=> $2::vector) AS score
        FROM knowledge_nodes
-       WHERE organization_id = $1 AND embedding IS NOT NULL
-       ORDER BY score DESC LIMIT 20`, [organizationId, `[${embedding.join(',')}]`]);
+       WHERE organization_id = $1
+         AND embedding IS NOT NULL
+       ORDER BY score DESC
+       LIMIT 20`, [organizationId, `[${embedding.join(',')}]`]);
         return res.rows;
     }
     async syncFromDocuments(organizationId) {
         const docs = await this.db.query(`SELECT id, name, type, created_at, uploaded_by_id
-       FROM documents WHERE organization_id = $1 AND status = 'indexed'`, [organizationId]);
+       FROM documents
+       WHERE organization_id = $1 AND status = 'indexed'`, [organizationId]);
         let created = 0;
         for (const doc of docs.rows) {
-            const d = doc;
-            const existing = await this.db.query(`SELECT id FROM knowledge_nodes WHERE source_type = 'document' AND source_id = $1`, [d.id]);
+            const existing = await this.db.query(`SELECT id
+         FROM knowledge_nodes
+         WHERE organization_id = $1
+           AND source_type = 'document'
+           AND source_id = $2
+         LIMIT 1`, [organizationId, doc.id]);
             if (existing.rows.length === 0) {
                 await this.createNode(organizationId, {
-                    name: d.name,
+                    name: String(doc.name),
                     type: 'document',
-                    description: `${d.type} document`,
+                    description: `${String(doc.type)} document`,
+                    properties: {
+                        uploadedById: doc.uploaded_by_id ?? null,
+                        createdAt: doc.created_at ?? null,
+                    },
                     sourceType: 'document',
-                    sourceId: d.id,
+                    sourceId: String(doc.id),
                 });
-                created++;
+                created += 1;
             }
         }
         return { synced: created };

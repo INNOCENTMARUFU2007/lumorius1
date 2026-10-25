@@ -1,3 +1,4 @@
+﻿import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
@@ -5,7 +6,7 @@ import { BillingService } from './billing.service';
 import { DatabaseService } from '../database/database.service';
 import { createMockDatabaseService } from '../test/helpers';
 
-// ── Mock Stripe ───────────────────────────────────────────────
+// â”€â”€ Mock Stripe â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const mockStripe = {
   customers: {
@@ -38,7 +39,7 @@ jest.mock('stripe', () => ({
   default: jest.fn().mockImplementation(() => mockStripe),
 }));
 
-// ── Fixtures ──────────────────────────────────────────────────
+// â”€â”€ Fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const mockOrg = {
   id:                'org-1',
@@ -66,7 +67,7 @@ const mockSubscription = {
   current_period_end:    new Date('2026-07-01'),
 };
 
-// ── Tests ─────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 describe('BillingService', () => {
   let service: BillingService;
@@ -75,9 +76,9 @@ describe('BillingService', () => {
   const mockConfigService = {
     get: jest.fn((key: string) => {
       const config: Record<string, string> = {
-        STRIPE_SECRET_KEY:       'sk_test_key',
-        STRIPE_WEBHOOK_SECRET:   'whsec_test',
-        APP_URL:                 'https://lumorius.com',
+        'stripe.secretKey':   'sk_test_key',
+        'stripe.webhookSecret': 'whsec_test',
+        'app.frontendUrl':     'https://lumorius.com',
       };
       return config[key];
     }),
@@ -88,10 +89,12 @@ describe('BillingService', () => {
     Object.values(mockStripe.customers).forEach(fn => (fn as jest.Mock).mockReset());
     Object.values(mockStripe.subscriptions).forEach(fn => (fn as jest.Mock).mockReset());
     Object.values(mockStripe.checkout.sessions).forEach(fn => (fn as jest.Mock).mockReset());
+    Object.values(mockStripe.billingPortal.sessions).forEach(fn => (fn as jest.Mock).mockReset());
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BillingService,
+        { provide: EventEmitter2, useValue: { emit: jest.fn() } },
         { provide: DatabaseService, useValue: db },
         { provide: ConfigService,   useValue: mockConfigService },
       ],
@@ -100,27 +103,42 @@ describe('BillingService', () => {
     service = module.get<BillingService>(BillingService);
   });
 
-  // ── getPlans ──────────────────────────────────────────────────
+  // â”€â”€ getPlans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('getPlans()', () => {
-    it('returns all active billing plans', async () => {
-      db.query.mockResolvedValue({
-        rows: [mockPlan, { ...mockPlan, id: 'enterprise', name: 'Enterprise' }],
-      });
+    it('queries active plans ordered by ascending monthly price', async () => {
+      const orderedPlans = [
+        { ...mockPlan, id: 'free', name: 'Free', price_monthly: 0 },
+        { ...mockPlan, id: 'starter', name: 'Starter', price_monthly: 149 },
+        { ...mockPlan, id: 'professional', name: 'Professional', price_monthly: 499 },
+        { ...mockPlan, id: 'enterprise', name: 'Enterprise', price_monthly: 1499 },
+      ];
+
+      db.query.mockResolvedValue({ rows: orderedPlans });
 
       const plans = await service.getPlans();
 
-      expect(plans).toHaveLength(2);
-      expect(plans[0].id).toBe('professional');
+      expect(plans.map((plan: { id: string }) => plan.id)).toEqual([
+        'free',
+        'starter',
+        'professional',
+        'enterprise',
+      ]);
+
+      const sql = String(db.query.mock.calls[0]?.[0] ?? '');
+      expect(sql).toContain('WHERE bp.is_active = TRUE');
+      expect(sql).toContain('ORDER BY bp.price_monthly ASC');
     });
   });
 
-  // ── createCheckoutSession ─────────────────────────────────────
+  // â”€â”€ createCheckoutSession â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('createCheckoutSession()', () => {
     it('creates Stripe checkout session and returns URL', async () => {
-      db.findOne.mockResolvedValue(mockOrg);
-      db.query.mockResolvedValue({ rows: [mockPlan] });
+      db.findOne
+        .mockResolvedValueOnce({ ...mockPlan, is_active: true, stripe_price_monthly: 'price_prof_monthly' })
+        .mockResolvedValueOnce(mockOrg);
+      mockStripe.customers.create.mockResolvedValue({ id: 'cus_test123' });
       mockStripe.checkout.sessions.create.mockResolvedValue({
         id:  'cs_test123',
         url: 'https://checkout.stripe.com/pay/cs_test123',
@@ -137,37 +155,38 @@ describe('BillingService', () => {
     });
 
     it('throws NotFoundException if org not found', async () => {
-      db.findOne.mockResolvedValue(null);
+      db.findOne
+        .mockResolvedValueOnce({ ...mockPlan, is_active: true, stripe_price_monthly: 'price_prof_monthly' })
+        .mockResolvedValueOnce(null);
 
       await expect(
         service.createCheckoutSession({ orgId: 'bad-org', planId: 'professional', userId: 'u1' } as any),
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('throws BadRequestException if plan not found', async () => {
-      db.findOne.mockResolvedValue(mockOrg);
-      db.query.mockResolvedValue({ rows: [] });
+    it('throws NotFoundException if plan not found', async () => {
+      db.findOne.mockResolvedValue(null);
 
       await expect(
         service.createCheckoutSession({ orgId: 'org-1', planId: 'bad-plan', userId: 'u1' } as any),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
-  // ── getSubscription ───────────────────────────────────────────
+  // â”€â”€ getSubscription â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('getSubscription()', () => {
     it('returns active subscription for org', async () => {
-      db.findOne.mockResolvedValue(mockSubscription);
+      db.query.mockResolvedValue({ rows: [mockSubscription] });
 
       const result = await service.getSubscription('org-1');
 
       expect(result).toEqual(mockSubscription);
-      expect(db.findOne).toHaveBeenCalledTimes(1);
+      expect(db.query).toHaveBeenCalledTimes(1);
     });
 
     it('returns null when no subscription found', async () => {
-      db.findOne.mockResolvedValue(null);
+      db.query.mockResolvedValue({ rows: [] });
 
       const result = await service.getSubscription('org-no-sub');
 
@@ -175,11 +194,11 @@ describe('BillingService', () => {
     });
   });
 
-  // ── createBillingPortalSession ────────────────────────────────
+  // â”€â”€ createBillingPortalSession â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   describe('createBillingPortalSession()', () => {
     it('creates portal session for org with Stripe customer', async () => {
-      db.findOne.mockResolvedValue(mockOrg);
+      db.findOne.mockResolvedValue({ ...mockOrg, metadata: { stripe_customer_id: mockOrg.stripe_customer_id } });
       mockStripe.billingPortal.sessions.create.mockResolvedValue({
         url: 'https://billing.stripe.com/p/session/test123',
       });
@@ -194,7 +213,7 @@ describe('BillingService', () => {
     });
 
     it('throws NotFoundException if org has no Stripe customer', async () => {
-      db.findOne.mockResolvedValue({ ...mockOrg, stripe_customer_id: null });
+      db.findOne.mockResolvedValue({ ...mockOrg, stripe_customer_id: null, metadata: {} });
 
       await expect(
         service.createBillingPortalSession('org-no-stripe'),
@@ -202,3 +221,6 @@ describe('BillingService', () => {
     });
   });
 });
+
+
+

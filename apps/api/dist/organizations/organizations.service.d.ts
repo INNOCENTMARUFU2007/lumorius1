@@ -1,16 +1,21 @@
 import { DatabaseService } from '../database/database.service';
 import { EmailService } from '../common/email/email.service';
-import { ConfigService } from '@nestjs/config';
 export declare class OrganizationsService {
     private readonly db;
     private readonly emailService;
-    private readonly configService;
-    constructor(db: DatabaseService, emailService: EmailService, configService: ConfigService);
+    constructor(db: DatabaseService, emailService: EmailService);
     findById(id: string): Promise<Record<string, unknown>>;
     update(id: string, dto: {
         name?: string;
         settings?: Record<string, unknown>;
     }): Promise<Record<string, unknown>>;
+    getMembers(organizationId: string): Promise<{
+        status: string;
+    }[]>;
+    removeMember(organizationId: string, userIdToRemove: string, requestedById: string): Promise<{
+        removed: boolean;
+        userId: string;
+    }>;
     getTeams(organizationId: string): Promise<Record<string, unknown>[]>;
     createTeam(organizationId: string, userId: string, dto: {
         name: string;
@@ -27,9 +32,10 @@ export declare class OrganizationsService {
         description?: string;
         headUserId?: string;
     }): Promise<Record<string, unknown>>;
+    getInvitationHistory(organizationId: string): Promise<Record<string, unknown>[]>;
     invite(organizationId: string, invitedById: string, dto: {
         email: string;
-        role: string;
+        role?: string;
         teamId?: string;
     }): Promise<{
         sent: boolean;
@@ -41,16 +47,27 @@ export declare class OrganizationsService {
     getUsage(organizationId: string): Promise<{
         users: {
             used: number;
-            limit: unknown;
+            limit: number;
         };
         storage: {
             usedGb: number;
-            limitGb: unknown;
+            limitGb: number;
         };
         aiRequests: {
-            used: unknown;
-            limit: unknown;
+            used: number;
+            limit: number;
         };
+    }>;
+    completeOnboarding(userId: string, dto: {
+        orgName?: string;
+        orgSize?: string;
+        industry?: string;
+        invites?: string;
+        brainDesc?: string;
+        goalTitle?: string;
+    }): Promise<{
+        completed: boolean;
+        onboardingCompleted: boolean;
     }>;
 }
 //# sourceMappingURL=organizations.service.d.ts.map

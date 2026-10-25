@@ -24,8 +24,10 @@ let AnalyticsController = class AnalyticsController {
     constructor(analyticsService) {
         this.analyticsService = analyticsService;
     }
-    getFounderDashboard(user) {
-        return this.analyticsService.getFounderDashboard(user.organizationId, user.sub);
+    getFounderDashboard(user, days) {
+        const requestedDays = Number(days);
+        const rangeDays = [7, 30, 90].includes(requestedDays) ? requestedDays : 30;
+        return this.analyticsService.getFounderDashboard(user.organizationId, user.sub, rangeDays, false);
     }
     getTeamDashboard(user) {
         return this.analyticsService.getTeamDashboard(user.organizationId);
@@ -54,8 +56,9 @@ __decorate([
     (0, common_1.Get)('founder-dashboard'),
     (0, swagger_1.ApiOperation)({ summary: 'Founder OS — AI-powered daily focus dashboard' }),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Query)('days')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", void 0)
 ], AnalyticsController.prototype, "getFounderDashboard", null);
 __decorate([

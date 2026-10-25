@@ -36,8 +36,9 @@ export declare class AuthController {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     }>;
     login(dto: LoginDto, req?: Request, ip?: string): Promise<{
@@ -50,8 +51,9 @@ export declare class AuthController {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     } | {
         mfaRequired: boolean;
@@ -66,8 +68,9 @@ export declare class AuthController {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     }>;
     refreshTokens(dto: RefreshTokenDto): Promise<{
@@ -80,8 +83,9 @@ export declare class AuthController {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     }>;
     logout(dto: RefreshTokenDto, _user?: JwtPayload): Promise<void>;
@@ -118,8 +122,9 @@ export declare class AuthController {
             name: unknown;
             role: unknown;
             organizationId: unknown;
-            emailVerified: unknown;
-            mfaEnabled: unknown;
+            emailVerified: boolean;
+            mfaEnabled: boolean;
+            onboardingCompleted: boolean;
         };
     }>;
     setupMfa(user: JwtPayload): Promise<{
@@ -136,14 +141,28 @@ export declare class AuthController {
     getSessions(user: JwtPayload, _unused?: unknown): Promise<Record<string, unknown>[]>;
     revokeAll(user: JwtPayload): Promise<{
         revoked: boolean;
+        revokedCount: number;
     }>;
     revokeAllSessions(user: JwtPayload): Promise<{
         revoked: boolean;
+        revokedCount: number;
     }>;
-    revokeSession(user: JwtPayload, sessionId: string): Promise<void>;
+    revokeSession(user: JwtPayload, sessionId: string): Promise<{
+        revoked: boolean;
+    }>;
     googleAuth(): Promise<void>;
     googleCallback(req: Request): Promise<Express.User>;
-    me(user: JwtPayload): Promise<JwtPayload>;
+    me(user: JwtPayload): Promise<{
+        id: unknown;
+        email: unknown;
+        name: unknown;
+        avatarUrl: unknown;
+        role: unknown;
+        organizationId: string;
+        emailVerified: boolean;
+        mfaEnabled: boolean;
+        onboardingCompleted: boolean;
+    }>;
     getProfile(user: JwtPayload): Promise<JwtPayload>;
 }
 export {};

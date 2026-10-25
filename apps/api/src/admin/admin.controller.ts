@@ -19,15 +19,13 @@ import {
 } from '@nestjs/swagger';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AdminService } from './admin.service';
+import { PlatformOwnerGuard } from './platform-owner.guard';
 
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('admin')
+@UseGuards(JwtAuthGuard, PlatformOwnerGuard)
 @Controller({ path: 'admin', version: '1' })
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
@@ -61,15 +59,11 @@ export class AdminController {
     required: false,
   })
   listUsers(
-    @Query('page') page = '1',
     @Query('limit') limit = '25',
     @Query('search') search?: string,
+    @Query('cursor') cursor?: string,
   ) {
-    return this.adminService.listUsers(
-      Number(page),
-      Number(limit),
-      search,
-    );
+    return this.adminService.listUsersCursor(search, cursor, Number(limit));
   }
 
   @Get('users/:id')

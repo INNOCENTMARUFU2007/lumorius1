@@ -12,8 +12,9 @@ ALTER TABLE notifications RENAME COLUMN metadata TO data;
 ALTER TABLE notifications DROP COLUMN IF EXISTS is_read;
 
 -- Convert notification_type enum column → plain TEXT
+ALTER TABLE notifications ALTER COLUMN type DROP DEFAULT;
 ALTER TABLE notifications ALTER COLUMN type TYPE TEXT USING type::TEXT;
-DROP TYPE IF EXISTS notification_type;
+ALTER TABLE notifications ALTER COLUMN type SET DEFAULT 'system';
 
 -- ── PROJECTS ─────────────────────────────────────────────────
 -- Referenced by tasks.service.ts (project_id FK + SELECT)

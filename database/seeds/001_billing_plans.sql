@@ -1,42 +1,28 @@
--- ============================================================
--- Lumorius AI — Billing Plans Seed (USD)
--- INMARTECH PVT LTD
--- ============================================================
+-- Lumorius billing plans (USD).
+-- Prices are stored as decimal dollars, not cents.
+-- Do not execute this seed against an existing database without reviewing
+-- the intended effects of ON CONFLICT updates.
+
 INSERT INTO billing_plans
-  (id, name, description, monthly_price_cents, annual_price_cents,
-   max_users, storage_gb, ai_requests_per_month, features, is_active)
+  (id, name, tier, price_monthly, price_yearly, features, limits, is_active)
 VALUES
-  (
-    'starter', 'Starter', 'Perfect for solo founders and small teams.',
-    4900, 49980, 5, 10, 500,
-    '["5 team members","10 GB storage","500 AI requests/month","Company Brain (RAG)","Meeting transcription","Founder OS basics","Email support"]',
-    TRUE
-  ),
-  (
-    'growth', 'Growth', 'For growing teams that need more power.',
-    14900, 152880, 25, 50, 2000,
-    '["25 team members","50 GB storage","2,000 AI requests/month","Full Founder OS (OKRs, KPIs, health score)","Advanced Knowledge Graph","Workflow automation","API access","Priority support"]',
-    TRUE
-  ),
-  (
-    'professional', 'Professional', 'Full power for scaling businesses.',
-    49900, 508980, 100, 200, 10000,
-    '["100 team members","200 GB storage","10,000 AI requests/month","All Growth features","Advanced security & audit logs","API keys management","SSO / SAML","Custom AI models","Dedicated Slack support","SLA 99.9%"]',
-    TRUE
-  ),
-  (
-    'enterprise', 'Enterprise', 'Tailored for large organisations.',
-    149900, 1499880, NULL, NULL, NULL,
-    '["Unlimited team members","Unlimited storage","Unlimited AI requests","Custom on-premise / VPC deployment","AI model fine-tuning","Dedicated account manager","24/7 phone support","Custom SLA","Compliance & security audit","White-label options"]',
-    TRUE
-  )
-ON CONFLICT (id) DO UPDATE
-  SET name                  = EXCLUDED.name,
-      description           = EXCLUDED.description,
-      monthly_price_cents   = EXCLUDED.monthly_price_cents,
-      annual_price_cents    = EXCLUDED.annual_price_cents,
-      max_users             = EXCLUDED.max_users,
-      storage_gb            = EXCLUDED.storage_gb,
-      ai_requests_per_month = EXCLUDED.ai_requests_per_month,
-      features              = EXCLUDED.features,
-      updated_at            = NOW();
+  ('free', 'Free', 'free', 0.00, 0.00,
+   '{"ai_chat":true,"documents":true,"tasks":true}',
+   '{"users":1,"documents":10,"ai_tokens_monthly":25000,"storage_gb":1}', TRUE),
+  ('starter', 'Starter', 'starter', 149.00, 1490.00,
+   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true}',
+   '{"users":3,"documents":50,"ai_tokens_monthly":100000,"storage_gb":5}', TRUE),
+  ('professional', 'Professional', 'professional', 499.00, 4990.00,
+   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true,"analytics":true,"workflows":true,"founder_os":true}',
+   '{"users":25,"documents":500,"ai_tokens_monthly":1000000,"storage_gb":50}', TRUE),
+  ('enterprise', 'Enterprise', 'enterprise', 1499.00, 14990.00,
+   '{"ai_chat":true,"documents":true,"tasks":true,"meetings":true,"analytics":true,"workflows":true,"founder_os":true,"api_access":true,"sso":true,"custom_models":true}',
+   '{"users":-1,"documents":-1,"ai_tokens_monthly":-1,"storage_gb":-1}', TRUE)
+ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
+  tier = EXCLUDED.tier,
+  price_monthly = EXCLUDED.price_monthly,
+  price_yearly = EXCLUDED.price_yearly,
+  features = EXCLUDED.features,
+  limits = EXCLUDED.limits,
+  is_active = EXCLUDED.is_active;
