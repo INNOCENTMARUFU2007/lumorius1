@@ -3,3 +3,8 @@ node_modules
 # Generated build output
 **/.next/
 **/dist/
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pre-*.bak

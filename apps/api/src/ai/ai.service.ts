@@ -1,4 +1,4 @@
-﻿import {
+import {
   Injectable,
   Logger,
   BadRequestException,
@@ -49,6 +49,7 @@ interface SimilarChunk {
 export class AiService {
   private readonly logger = new Logger(AiService.name);
   private openai: OpenAI | null = null;
+  private openrouter: OpenAI | null = null;
   private anthropic: Anthropic | null = null;
 
   constructor(
@@ -56,43 +57,95 @@ export class AiService {
     private readonly db: DatabaseService,
   ) {
     const openaiKey =
-      this.configService.get<string>('ai.openai.apiKey');
+      this.configService.get<string>('ai.openai.apiKey') ??
+      process.env.OPENAI_API_KEY;
+
+    const openrouterKey =
+      this.configService.get<string>('ai.openrouter.apiKey') ??
+      process.env.OPENROUTER_API_KEY;
 
     const anthropicKey =
-      this.configService.get<string>('ai.anthropic.apiKey');
+      this.configService.get<string>('ai.anthropic.apiKey') ??
+      process.env.ANTHROPIC_API_KEY;
 
     if (openaiKey) {
       this.openai = new OpenAI({ apiKey: openaiKey });
+    }
+
+    if (openrouterKey) {
+      const baseURL =
+        this.configService.get<string>('ai.openrouter.baseURL') ??
+        process.env.OPENROUTER_BASE_URL ??
+        'https://openrouter.ai/api/v1';
+
+      this.openrouter = new OpenAI({
+        apiKey: openrouterKey,
+        baseURL,
+      });
     }
 
     if (anthropicKey) {
       this.anthropic = new Anthropic({ apiKey: anthropicKey });
     }
   }
-
   async chat(
     messages: ChatMessage[],
     opts: ChatOptions = {},
   ): Promise<string> {
-    const provider =
+    const provider = (
       opts.provider ??
-      this.configService.get<string>(
-        'ai.defaultProvider',
-        'openai',
-      );
+      this.configService.get<string>('ai.defaultProvider') ??
+      process.env.AI_DEFAULT_PROVIDER ??
+      (this.openrouter && !this.openai ? 'openrouter' : 'openai')
+    ).toLowerCase();
 
     let result: ProviderResult;
 
-    if (provider === 'anthropic' && this.anthropic) {
+    if (provider === 'anthropic') {
+      const client = this.anthropic;
+      if (!client) {
+        throw new BadRequestException(
+          'Anthropic selected but ANTHROPIC_API_KEY is not configured.',
+        );
+      }
       result = await this.chatWithAnthropic(messages, opts);
-    } else if (this.openai) {
-      result = await this.chatWithOpenAI(messages, opts);
+    } else if (provider === 'openrouter') {
+      const client = this.openrouter;
+      if (!client) {
+        throw new BadRequestException(
+          'OpenRouter selected but OPENROUTER_API_KEY is not configured.',
+        );
+      }
+
+      const requestedModel =
+        opts.model ??
+        this.configService.get<string>('ai.openrouter.model') ??
+        process.env.AI_OPENROUTER_MODEL ??
+        'openai/gpt-4o-mini';
+
+      const model = requestedModel.includes('/')
+        ? requestedModel
+        : `openai/${requestedModel}`;
+
+      result = await this.chatWithOpenAI(
+        messages,
+        { ...opts, model },
+        client,
+      );
+    } else if (provider === 'openai') {
+      const client = this.openai;
+      if (!client) {
+        throw new BadRequestException(
+          'OpenAI selected but OPENAI_API_KEY is not configured.',
+        );
+      }
+
+      result = await this.chatWithOpenAI(messages, opts, client);
     } else {
       throw new BadRequestException(
-        'No AI provider configured. Set valid OPENAI_API_KEY or ANTHROPIC_API_KEY credentials in your .env file.',
+        `Unsupported AI provider "${provider}". Use openai, openrouter, or anthropic.`,
       );
     }
-
     await this.recordUsage({
       organizationId: opts.organizationId,
       userId: opts.userId,
@@ -170,22 +223,63 @@ export class AiService {
     );
   }
 
+  private getEmbeddingClientAndModel(): {
+    client: OpenAI;
+    model: string;
+  } {
+    const configuredProvider =
+      this.configService.get<string>('ai.embeddingProvider') ??
+      process.env.AI_EMBEDDING_PROVIDER ??
+      this.configService.get<string>('ai.defaultProvider') ??
+      process.env.AI_DEFAULT_PROVIDER;
+
+    const provider =
+      configuredProvider === 'openrouter'
+        ? 'openrouter'
+        : configuredProvider === 'openai'
+          ? 'openai'
+          : this.openai
+            ? 'openai'
+            : 'openrouter';
+
+    const client =
+      provider === 'openrouter'
+        ? this.openrouter
+        : this.openai;
+
+    if (!client) {
+      throw new BadRequestException(
+        provider === 'openrouter'
+          ? 'OpenRouter API key required for embeddings.'
+          : 'OpenAI API key required for embeddings.',
+      );
+    }
+
+    const configuredModel =
+      this.configService.get<string>('ai.embeddingModel') ??
+      process.env.AI_EMBEDDING_MODEL;
+
+    const selectedModel =
+      configuredModel ??
+      (provider === 'openrouter'
+        ? 'openai/text-embedding-3-small'
+        : 'text-embedding-3-small');
+
+    const model =
+      provider === 'openrouter' && !selectedModel.includes('/')
+        ? `openai/${selectedModel}`
+        : selectedModel;
+
+    return { client, model };
+  }
+
   async createEmbedding(
     text: string,
     usageContext: UsageContext = {},
   ): Promise<number[]> {
-    if (!this.openai) {
-      throw new BadRequestException(
-        'OpenAI API key required for embeddings. Set OPENAI_API_KEY in your .env file.',
-      );
-    }
+    const { client, model } = this.getEmbeddingClientAndModel();
 
-    const model = this.configService.get<string>(
-      'ai.embeddingModel',
-      'text-embedding-3-small',
-    );
-
-    const response = await this.openai.embeddings.create({
+    const response = await client.embeddings.create({
       model,
       input: text.substring(0, 8000),
     });
@@ -205,18 +299,9 @@ export class AiService {
     texts: string[],
     usageContext: UsageContext = {},
   ): Promise<number[][]> {
-    if (!this.openai) {
-      throw new BadRequestException(
-        'OpenAI API key required for embeddings.',
-      );
-    }
+    const { client, model } = this.getEmbeddingClientAndModel();
 
-    const model = this.configService.get<string>(
-      'ai.embeddingModel',
-      'text-embedding-3-small',
-    );
-
-    const response = await this.openai.embeddings.create({
+    const response = await client.embeddings.create({
       model,
       input: texts.map((text) => text.substring(0, 8000)),
     });
@@ -231,10 +316,8 @@ export class AiService {
 
     return response.data.map((item) => item.embedding);
   }
-
   /**
-   * Retrieve the closest indexed document chunks for a question.
-   * Results are always scoped to the requested organization.
+   * Retrieve relevant indexed document chunks within one organization.
    */
   async searchSimilarChunks(input: {
     query: string;
@@ -242,21 +325,15 @@ export class AiService {
     organizationId?: string;
     userId?: string;
     limit?: number;
-    embedding?: number[];
   }): Promise<SimilarChunk[]> {
     const organizationId = input.organizationId ?? input.orgId;
     const query = input.query?.trim();
 
     if (!organizationId) {
-      throw new BadRequestException(
-        'Organization ID is required for document search.',
-      );
+      throw new BadRequestException('Organization ID is required for document search.');
     }
-
     if (!query) {
-      throw new BadRequestException(
-        'A search query is required.',
-      );
+      throw new BadRequestException('A search query is required.');
     }
 
     const requestedLimit = input.limit ?? 5;
@@ -275,7 +352,6 @@ export class AiService {
     }
 
     const vector = `[${embedding.join(',')}]`;
-
     const result = await this.db.query<Record<string, unknown>>(
       `SELECT
          dc.id AS chunk_id,
@@ -284,8 +360,7 @@ export class AiService {
          d.name AS document_name,
          1 - (dc.embedding <=> $2::vector) AS score
        FROM document_chunks dc
-       JOIN documents d
-         ON dc.document_id = d.id
+       JOIN documents d ON dc.document_id = d.id
        WHERE d.organization_id = $1
          AND d.status = 'indexed'
          AND dc.embedding IS NOT NULL
@@ -296,19 +371,14 @@ export class AiService {
 
     return result.rows
       .map((row): SimilarChunk => {
-        const rawDocument = row.document;
+        const nestedDocument = row.document;
         const nestedName =
-          rawDocument &&
-          typeof rawDocument === 'object' &&
-          'name' in rawDocument &&
-          typeof rawDocument.name === 'string'
-            ? rawDocument.name
+          nestedDocument &&
+          typeof nestedDocument === 'object' &&
+          'name' in nestedDocument &&
+          typeof nestedDocument.name === 'string'
+            ? nestedDocument.name
             : undefined;
-
-        const documentName =
-          typeof row.document_name === 'string'
-            ? row.document_name
-            : nestedName;
 
         const chunkId =
           typeof row.chunk_id === 'string'
@@ -317,33 +387,30 @@ export class AiService {
               ? row.id
               : undefined;
 
-        const similarity = Number(
-          row.similarity ?? row.score ?? 0,
-        );
+        const documentName =
+          typeof row.document_name === 'string'
+            ? row.document_name
+            : nestedName;
+
+        const rawScore = Number(row.similarity ?? row.score ?? 0);
 
         return {
           ...row,
           id: typeof row.id === 'string' ? row.id : chunkId,
           chunk_id: chunkId,
-          content:
-            typeof row.content === 'string' ? row.content : '',
+          content: typeof row.content === 'string' ? row.content : '',
           document_id:
-            typeof row.document_id === 'string'
-              ? row.document_id
-              : undefined,
+            typeof row.document_id === 'string' ? row.document_id : undefined,
           document_name: documentName,
-          document: documentName
-            ? { name: documentName }
-            : undefined,
-          similarity: Number.isFinite(similarity) ? similarity : 0,
+          document: documentName ? { name: documentName } : undefined,
+          similarity: Number.isFinite(rawScore) ? rawScore : 0,
         };
       })
       .sort((a, b) => b.similarity - a.similarity);
   }
 
   /**
-   * Generate an answer grounded in indexed document content.
-   * When no context is available, do not invent an answer.
+   * Answer using retrieved document context and return source references.
    */
   async answerQuestion(input: {
     question: string;
@@ -368,11 +435,8 @@ export class AiService {
         'Organization ID is required to answer a document question.',
       );
     }
-
     if (!question) {
-      throw new BadRequestException(
-        'A question is required.',
-      );
+      throw new BadRequestException('A question is required.');
     }
 
     const chunks = await this.searchSimilarChunks({
@@ -386,9 +450,7 @@ export class AiService {
       id: chunk.chunk_id ?? chunk.id,
       documentId: chunk.document_id,
       documentName:
-        chunk.document_name ??
-        chunk.document?.name ??
-        'Unknown document',
+        chunk.document_name ?? chunk.document?.name ?? 'Unknown document',
       similarity: chunk.similarity,
     }));
 
@@ -402,12 +464,9 @@ export class AiService {
 
     const context = chunks
       .map((chunk, index) => {
-        const documentName =
-          chunk.document_name ??
-          chunk.document?.name ??
-          'Unknown document';
-
-        return `[Source ${index + 1}: ${documentName}]\n${chunk.content}`;
+        const name =
+          chunk.document_name ?? chunk.document?.name ?? 'Unknown document';
+        return `[Source ${index + 1}: ${name}]\n${chunk.content}`;
       })
       .join('\n\n');
 
@@ -416,16 +475,11 @@ export class AiService {
         {
           role: 'system',
           content:
-            'Answer the user using only the supplied document context. ' +
-            'Do not invent facts or claim that a source supports something it does not. ' +
-            'If the context is insufficient, clearly state that limitation. ' +
-            'When useful, identify the source document by name.\n\n' +
+            'Answer using only the supplied document context. Do not invent facts. ' +
+            'If the context is insufficient, state that limitation. Identify source documents when useful.\n\n' +
             `DOCUMENT CONTEXT:\n${context}`,
         },
-        {
-          role: 'user',
-          content: question,
-        },
+        { role: 'user', content: question },
       ],
       {
         organizationId,
@@ -732,35 +786,24 @@ ${context ? `Context: ${JSON.stringify(context)}` : ''}`,
   private async chatWithOpenAI(
     messages: ChatMessage[],
     opts: ChatOptions,
+    client: OpenAI,
   ): Promise<ProviderResult> {
-    if (!this.openai) {
-      throw new BadRequestException(
-        'OpenAI is not configured.',
-      );
-    }
+    const requestedModel = opts.model ?? 'gpt-4o-mini';
 
-    const requestedModel =
-      opts.model ?? 'gpt-4o-mini';
-
-    const response =
-      await this.openai.chat.completions.create({
-        model: requestedModel,
-        messages,
-        temperature: opts.temperature ?? 0.7,
-        max_tokens: 4096,
-      });
+    const response = await client.chat.completions.create({
+      model: requestedModel,
+      messages,
+      temperature: opts.temperature ?? 0.7,
+      max_tokens: 4096,
+    });
 
     return {
-      content:
-        response.choices[0]?.message?.content ?? '',
+      content: response.choices[0]?.message?.content ?? '',
       model: response.model || requestedModel,
-      promptTokens:
-        response.usage?.prompt_tokens ?? 0,
-      completionTokens:
-        response.usage?.completion_tokens ?? 0,
+      promptTokens: response.usage?.prompt_tokens ?? 0,
+      completionTokens: response.usage?.completion_tokens ?? 0,
     };
   }
-
   private async chatWithAnthropic(
     messages: ChatMessage[],
     opts: ChatOptions,
@@ -818,4 +861,3 @@ ${context ? `Context: ${JSON.stringify(context)}` : ''}`,
     };
   }
 }
-

@@ -1,5 +1,6 @@
-﻿import { Test, TestingModule } from '@nestjs/testing';
+import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
+import OpenAI from 'openai';
 import { AiService } from './ai.service';
 import { DatabaseService } from '../database/database.service';
 import { createMockDatabaseService } from '../test/helpers';
@@ -26,6 +27,10 @@ const mockConfigService = {
   get: jest.fn((key: string) => {
     const config: Record<string, string | number> = {
       'ai.openai.apiKey': 'sk-test-key',
+      'ai.openrouter.apiKey': 'sk-or-test-key',
+      'ai.openrouter.baseURL': 'https://openrouter.ai/api/v1',
+      'ai.openrouter.model': 'openai/gpt-4o-mini',
+      'ai.defaultProvider': 'openai',
       'ai.embeddingModel': 'text-embedding-3-small',
       'MAX_TOKENS':     2048,
     };
@@ -131,6 +136,32 @@ describe('AiService', () => {
       expect(contents).toContain('First answer');
     });
 
+    it('routes chat through OpenRouter when selected', async () => {
+      mockOpenAI.chat.completions.create.mockResolvedValue(mockChatResponse);
+
+      const result = await service.chat(
+        [{ role: 'user', content: 'OpenRouter test message' }],
+        {
+          provider: 'openrouter',
+          organizationId: 'org-1',
+          userId: 'user-1',
+        },
+      );
+
+      expect(OpenAI).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: 'sk-or-test-key',
+          baseURL: 'https://openrouter.ai/api/v1',
+        }),
+      );
+
+      const call = mockOpenAI.chat.completions.create.mock.calls[0][0];
+      expect(call.model).toBe('openai/gpt-4o-mini');
+      expect(call.messages).toEqual([
+        { role: 'user', content: 'OpenRouter test message' },
+      ]);
+      expect(result).toBe(mockChatResponse.choices[0].message.content);
+    });
     it('handles OpenAI API error gracefully', async () => {
       mockOpenAI.chat.completions.create.mockRejectedValue(
         new Error('OpenAI API rate limit exceeded'),
@@ -157,6 +188,26 @@ describe('AiService', () => {
       expect(result).toHaveLength(1536);
     });
 
+    it('uses the OpenRouter embedding model when configured', async () => {
+      mockOpenAI.embeddings.create.mockResolvedValue(mockEmbeddingResponse);
+      const previousProvider = process.env.AI_EMBEDDING_PROVIDER;
+      process.env.AI_EMBEDDING_PROVIDER = 'openrouter';
+
+      try {
+        await service.createEmbedding('OpenRouter embedding test');
+
+        expect(mockOpenAI.embeddings.create).toHaveBeenCalledWith({
+          model: 'openai/text-embedding-3-small',
+          input: 'OpenRouter embedding test',
+        });
+      } finally {
+        if (previousProvider === undefined) {
+          delete process.env.AI_EMBEDDING_PROVIDER;
+        } else {
+          process.env.AI_EMBEDDING_PROVIDER = previousProvider;
+        }
+      }
+    });
     it('truncates very long text before embedding', async () => {
       mockOpenAI.embeddings.create.mockResolvedValue(mockEmbeddingResponse);
       const longText = 'a'.repeat(10000);
@@ -246,6 +297,3 @@ describe('AiService', () => {
     });
   });
 });
-
-
-
