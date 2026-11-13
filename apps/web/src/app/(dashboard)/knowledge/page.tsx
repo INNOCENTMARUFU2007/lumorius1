@@ -1,9 +1,12 @@
 
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
+  Activity,
+  FileCheck2,
+  GitBranch,
   Network,
   Search,
   RefreshCw,
@@ -16,6 +19,7 @@ import {
   Info,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { KnowledgeConflictPanel } from './knowledge-conflict-panel';
 import { toast } from 'sonner';
 
 type DataRecord = Record<string, unknown>;
@@ -36,9 +40,51 @@ type GraphEdge = DataRecord & {
   weight: number;
 };
 
+type KnowledgeEvidence = {
+  documentId: string;
+  documentName: string;
+  documentType?: string;
+  relationship?: string;
+  evidenceType?: string;
+  chunkId?: string | null;
+  chunkIndex?: number | string | null;
+  excerpt?: string | null;
+  confidence?: number | null;
+  firstSeenAt?: string | null;
+  lastSeenAt?: string | null;
+  supersededAt?: string | null;
+  status?: string;
+};
+
+type KnowledgeEvidenceResponse = {
+  nodeId: string;
+  total: number;
+  sources: KnowledgeEvidence[];
+};
 type GraphData = {
   nodes: GraphNode[];
   relations: GraphEdge[];
+};
+
+type KnowledgeAnalytics = {
+  indexedDocuments: number;
+  entities: number;
+  relationships: number;
+  evidenceRecords: number;
+  activeEvidence: number;
+  disputedEvidence: number;
+  supersededEvidence: number;
+  entityAliases: number;
+  completedExtractions: number;
+  pendingExtractions: number;
+  failedExtractions: number;
+  extractionCoveragePercent: number;
+  evidenceLast7Days: number;
+  evidenceLast30Days: number;
+  entityTypes: Array<{
+    type: string;
+    count: number;
+  }>;
 };
 
 type PositionedNode = {
@@ -309,6 +355,16 @@ function readableRelationship(value: string): string {
   return value.replace(/[_-]+/g, ' ').toLowerCase();
 }
 
+function formatEvidenceDate(value?: string | null): string {
+  if (!value) return 'Not recorded';
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? 'Not recorded'
+    : date.toLocaleString();
+}
+
 function getErrorMessage(
   error: unknown,
   fallback: string,
@@ -348,6 +404,19 @@ export default function KnowledgePage() {
     string | null
   >(null);
 
+  const [requestedNodeId, setRequestedNodeId] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const nodeId = params.get('nodeId');
+
+    if (nodeId) {
+      setRequestedNodeId(nodeId);
+    }
+  }, []);
+
   const {
     data,
     isLoading,
@@ -356,10 +425,18 @@ export default function KnowledgePage() {
     refetch,
     isFetching,
   } = useQuery<GraphData, Error>({
-    queryKey: ['knowledge', 'graph'],
+    queryKey: ['knowledge', 'graph', requestedNodeId],
     queryFn: async () => {
       const response = await api.get<unknown>(
         '/knowledge/graph',
+        {
+          params: requestedNodeId
+            ? {
+                nodeId: requestedNodeId,
+                depth: 2,
+              }
+            : undefined,
+        },
       );
 
       return normalizeGraph(response.data);
@@ -367,22 +444,70 @@ export default function KnowledgePage() {
     retry: 1,
   });
 
+  const analyticsQuery = useQuery<KnowledgeAnalytics, Error>({
+    queryKey: ['knowledge', 'analytics'],
+    queryFn: async () => {
+      const response = await api.get<unknown>(
+        '/knowledge/analytics',
+      );
+
+      const payload = unwrapResponse(response.data);
+
+      if (!isRecord(payload)) {
+        throw new Error('Invalid Knowledge Analytics response.');
+      }
+
+      const toNumber = (value: unknown) => {
+        const parsed = Number(value ?? 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+
+      const entityTypes = Array.isArray(payload.entityTypes)
+        ? payload.entityTypes
+            .filter(isRecord)
+            .map((entry) => ({
+              type: stringValue(entry.type, 'unknown'),
+              count: toNumber(entry.count),
+            }))
+        : [];
+
+      return {
+        indexedDocuments: toNumber(payload.indexedDocuments),
+        entities: toNumber(payload.entities),
+        relationships: toNumber(payload.relationships),
+        evidenceRecords: toNumber(payload.evidenceRecords),
+        activeEvidence: toNumber(payload.activeEvidence),
+        disputedEvidence: toNumber(payload.disputedEvidence),
+        supersededEvidence: toNumber(payload.supersededEvidence),
+        entityAliases: toNumber(payload.entityAliases),
+        completedExtractions: toNumber(payload.completedExtractions),
+        pendingExtractions: toNumber(payload.pendingExtractions),
+        failedExtractions: toNumber(payload.failedExtractions),
+        extractionCoveragePercent: toNumber(payload.extractionCoveragePercent),
+        evidenceLast7Days: toNumber(payload.evidenceLast7Days),
+        evidenceLast30Days: toNumber(payload.evidenceLast30Days),
+        entityTypes,
+      };
+    },
+    retry: 1,
+    refetchOnWindowFocus: true,
+  });
   const syncMutation = useMutation({
     mutationFn: () => api.post('/knowledge/sync'),
 
     onSuccess: (response) => {
       const payload = unwrapResponse(response.data);
 
-      const synced =
+      const processed =
         isRecord(payload) &&
-        typeof payload.synced === 'number'
-          ? payload.synced
+        typeof payload.processed === 'number'
+          ? payload.processed
           : null;
 
       toast.success(
-        synced === null
+        processed === null
           ? 'Knowledge sync completed.'
-          : `${synced} nodes synced from documents.`,
+          : `Knowledge extraction attempted for ${processed} indexed documents.`,
       );
 
       queryClient.invalidateQueries({
@@ -402,6 +527,7 @@ export default function KnowledgePage() {
 
   const nodes = data?.nodes ?? [];
   const relations = data?.relations ?? [];
+  const analytics = analyticsQuery.data;
 
   const nodeById = useMemo(
     () => new Map(nodes.map((node) => [node.id, node])),
@@ -503,6 +629,18 @@ export default function KnowledgePage() {
     ? nodeById.get(selectedNodeId)
     : undefined;
 
+  useEffect(() => {
+    if (!requestedNodeId || !nodes.length) return;
+
+    const matchingNode = nodes.find(
+      (node) => node.id === requestedNodeId,
+    );
+
+    if (matchingNode) {
+      setSelectedNodeId(matchingNode.id);
+    }
+  }, [requestedNodeId, nodes]);
+
   const selectedRelations = selectedNode
     ? relations.filter(
         (edge) =>
@@ -511,6 +649,66 @@ export default function KnowledgePage() {
       )
     : [];
 
+  const evidenceQuery = useQuery<KnowledgeEvidenceResponse, Error>({
+    queryKey: ['knowledge', 'evidence', selectedNodeId],
+    queryFn: async () => {
+      if (!selectedNodeId) {
+        return { nodeId: '', total: 0, sources: [] };
+      }
+
+      const response = await api.get<unknown>(
+        `/knowledge/nodes/${selectedNodeId}/evidence`,
+      );
+
+      const payload = unwrapResponse(response.data);
+
+      if (!isRecord(payload)) {
+        throw new Error('Invalid evidence response.');
+      }
+
+      const sources = Array.isArray(payload.sources)
+        ? payload.sources.filter(isRecord).map((source) => ({
+            documentId: stringValue(source.documentId),
+            documentName: stringValue(source.documentName, 'Untitled document'),
+            documentType: stringValue(source.documentType),
+            relationship: stringValue(source.relationship),
+            evidenceType: stringValue(source.evidenceType),
+            chunkId: typeof source.chunkId === 'string' ? source.chunkId : null,
+            chunkIndex:
+              typeof source.chunkIndex === 'number' ||
+              typeof source.chunkIndex === 'string'
+                ? source.chunkIndex
+                : null,
+            excerpt: typeof source.excerpt === 'string' ? source.excerpt : null,
+            confidence:
+              typeof source.confidence === 'number'
+                ? source.confidence
+                : null,
+            firstSeenAt:
+              typeof source.firstSeenAt === 'string'
+                ? source.firstSeenAt
+                : null,
+            lastSeenAt:
+              typeof source.lastSeenAt === 'string'
+                ? source.lastSeenAt
+                : null,
+            supersededAt:
+              typeof source.supersededAt === 'string'
+                ? source.supersededAt
+                : null,
+            status: stringValue(source.status, 'active'),
+          }))
+        : [];
+
+      return {
+        nodeId: stringValue(payload.nodeId, selectedNodeId),
+        total: Number(payload.total ?? sources.length),
+        sources,
+      };
+    },
+    enabled: Boolean(selectedNodeId),
+    retry: 0,
+  });
   const selectedProperties = isRecord(selectedNode?.properties)
     ? Object.entries(selectedNode.properties).slice(0, 8)
     : [];
@@ -587,7 +785,7 @@ export default function KnowledgePage() {
           </p>
 
           <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? '—' : nodes.length}
+            {isLoading ? 'Ã¢â‚¬â€' : nodes.length}
           </p>
 
           <p className="text-xs text-muted-foreground">
@@ -601,7 +799,7 @@ export default function KnowledgePage() {
           </p>
 
           <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? '—' : relations.length}
+            {isLoading ? 'Ã¢â‚¬â€' : relations.length}
           </p>
 
           <p className="text-xs text-muted-foreground">
@@ -615,7 +813,7 @@ export default function KnowledgePage() {
           </p>
 
           <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? '—' : nodeTypes.length}
+            {isLoading ? 'Ã¢â‚¬â€' : nodeTypes.length}
           </p>
 
           <p className="text-xs text-muted-foreground">
@@ -629,7 +827,7 @@ export default function KnowledgePage() {
           </p>
 
           <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? '—' : connectedEntityCount}
+            {isLoading ? 'Ã¢â‚¬â€' : connectedEntityCount}
           </p>
 
           <p className="text-xs text-muted-foreground">
@@ -637,6 +835,247 @@ export default function KnowledgePage() {
           </p>
         </div>
       </div>
+
+      {/* Knowledge intelligence analytics */}
+      <section className="space-y-4 rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-3">
+            <span className="rounded-xl bg-brand-500/10 p-2.5 text-brand-500">
+              <Activity className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-brand-500">
+                Intelligence metrics
+              </p>
+              <h2 className="mt-0.5 text-lg font-semibold">
+                Knowledge health
+              </h2>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void analyticsQuery.refetch()}
+            disabled={analyticsQuery.isFetching}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium transition hover:bg-muted disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${analyticsQuery.isFetching ? 'animate-spin' : ''}`} />
+            Refresh analytics
+          </button>
+        </div>
+
+        {analyticsQuery.isLoading ? (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div
+                key={index}
+                className="h-24 animate-pulse rounded-xl bg-muted/60"
+              />
+            ))}
+          </div>
+        ) : analyticsQuery.isError ? (
+          <div className="rounded-xl border border-rose-500/20 bg-rose-500/[0.04] p-4">
+            <p className="text-sm font-medium text-rose-600">
+              Knowledge analytics unavailable
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {analyticsQuery.error.message}
+            </p>
+            <button
+              type="button"
+              onClick={() => void analyticsQuery.refetch()}
+              className="mt-3 rounded-lg bg-brand-500 px-3 py-2 text-xs font-semibold text-white"
+            >
+              Retry
+            </button>
+          </div>
+        ) : analytics ? (
+          <>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+              {[
+                {
+                  label: 'Indexed documents',
+                  value: analytics.indexedDocuments,
+                  detail: 'Accessible documents',
+                  icon: FileCheck2,
+                },
+                {
+                  label: 'Entities',
+                  value: analytics.entities,
+                  detail: 'Evidence-supported nodes',
+                  icon: Network,
+                },
+                {
+                  label: 'Relationships',
+                  value: analytics.relationships,
+                  detail: 'Supported connections',
+                  icon: GitBranch,
+                },
+                {
+                  label: 'Evidence records',
+                  value: analytics.evidenceRecords,
+                  detail: `${analytics.activeEvidence} active`,
+                  icon: Database,
+                },
+                {
+                  label: 'Extraction coverage',
+                  value: `${analytics.extractionCoveragePercent.toFixed(1)}%`,
+                  detail: `${analytics.completedExtractions} completed`,
+                  icon: Activity,
+                },
+              ].map((metric) => {
+                const MetricIcon = metric.icon;
+
+                return (
+                  <div
+                    key={metric.label}
+                    className="min-w-0 rounded-xl border border-border bg-background p-3 sm:p-4"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium text-muted-foreground">
+                        {metric.label}
+                      </span>
+                      <MetricIcon className="h-4 w-4 shrink-0 text-brand-500" />
+                    </div>
+                    <p className="mt-3 break-words text-2xl font-semibold tabular-nums">
+                      {metric.value}
+                    </p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {metric.detail}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-border bg-background p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">
+                    Entity distribution
+                  </h3>
+                  <span className="text-[10px] text-muted-foreground">
+                    {analytics.entityAliases} registered aliases
+                  </span>
+                </div>
+
+                {analytics.entityTypes.length === 0 ? (
+                  <p className="mt-4 text-xs text-muted-foreground">
+                    No evidence-supported entities are available yet.
+                  </p>
+                ) : (
+                  <div className="mt-4 space-y-3">
+                    {analytics.entityTypes.slice(0, 8).map((item) => {
+                      const maxCount = Math.max(
+                        1,
+                        ...analytics.entityTypes.map((entry) => entry.count),
+                      );
+
+                      const width = Math.max(
+                        2,
+                        (item.count / maxCount) * 100,
+                      );
+
+                      return (
+                        <div key={item.type}>
+                          <div className="mb-1 flex items-center justify-between gap-3">
+                            <span className="text-xs capitalize text-muted-foreground">
+                              {item.type}
+                            </span>
+                            <span className="text-xs font-semibold tabular-nums">
+                              {item.count}
+                            </span>
+                          </div>
+                          <div className="h-2 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-brand-500 transition-all"
+                              style={{ width: `${width}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-border bg-background p-4">
+                <h3 className="text-sm font-semibold">
+                  Extraction and evidence health
+                </h3>
+
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-[10px] text-muted-foreground">
+                      Pending or processing
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.pendingExtractions}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-[10px] text-muted-foreground">
+                      Failed extractions
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.failedExtractions}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-[10px] text-muted-foreground">
+                      Disputed evidence
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.disputedEvidence}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-[10px] text-muted-foreground">
+                      Superseded evidence
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.supersededEvidence}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="text-xs font-medium">
+                    Knowledge freshness
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-4">
+                    <div>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {analytics.evidenceLast7Days}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Observed in 7 days
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {analytics.evidenceLast30Days}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Observed in 30 days
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <p className="flex items-start gap-2 text-[10px] leading-5 text-muted-foreground">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Metrics reflect evidence and documents accessible to the current account. Extraction coverage measures completed extraction runs against accessible indexed documents; it does not measure factual correctness.
+            </p>
+          </>
+        ) : null}
+      </section>
+      <KnowledgeConflictPanel />
 
       {/* Search and filtering */}
       <section className="space-y-4 rounded-xl border border-border bg-card p-4">
@@ -647,7 +1086,7 @@ export default function KnowledgePage() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search people, projects, documents or goals…"
+              placeholder="Search people, projects, documents or goalsÃ¢â‚¬Â¦"
               aria-label="Search graph nodes"
               className="w-full rounded-lg border border-border bg-background py-2.5 pl-9 pr-10 text-sm outline-none focus:ring-2 focus:ring-brand-500"
             />
@@ -726,7 +1165,7 @@ export default function KnowledgePage() {
           <div className="text-center">
             <Loader2 className="mx-auto h-8 w-8 animate-spin text-brand-500" />
             <p className="mt-3 text-sm text-muted-foreground">
-              Loading your knowledge graph…
+              Loading your knowledge graphÃ¢â‚¬Â¦
             </p>
           </div>
         </div>
@@ -778,7 +1217,7 @@ export default function KnowledgePage() {
                 </h2>
 
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {visibleNodes.length} nodes · {visibleRelations.length}{' '}
+                  {visibleNodes.length} nodes Ã‚Â· {visibleRelations.length}{' '}
                   relationships
                 </p>
               </div>
@@ -884,7 +1323,7 @@ export default function KnowledgePage() {
                           <title>
                             {nodeById.get(edge.sourceId)?.name ??
                               edge.sourceId}{' '}
-                            — {edge.relationship} →{' '}
+                            Ã¢â‚¬â€ {edge.relationship} Ã¢â€ â€™{' '}
                             {nodeById.get(edge.targetId)?.name ??
                               edge.targetId}
                           </title>
@@ -954,7 +1393,7 @@ export default function KnowledgePage() {
 
                       const label =
                         node.name.length > 20
-                          ? `${node.name.slice(0, 18)}…`
+                          ? `${node.name.slice(0, 18)}Ã¢â‚¬Â¦`
                           : node.name;
 
                       const labelOnRight =
@@ -1038,10 +1477,10 @@ export default function KnowledgePage() {
                           </text>
 
                           <title>
-                            {node.name} ({node.type}) — {degree}{' '}
+                            {node.name} ({node.type}) Ã¢â‚¬â€ {degree}{' '}
                             connections
                             {node.description
-                              ? ` — ${node.description}`
+                              ? ` Ã¢â‚¬â€ ${node.description}`
                               : ''}
                           </title>
                         </g>
@@ -1196,8 +1635,8 @@ export default function KnowledgePage() {
 
                                 <span className="mt-1 block text-xs capitalize text-muted-foreground">
                                   {isOutgoing
-                                    ? `Outgoing · ${readableRelationship(edge.relationship)}`
-                                    : `Incoming · ${readableRelationship(edge.relationship)}`}
+                                    ? `Outgoing Ã‚Â· ${readableRelationship(edge.relationship)}`
+                                    : `Incoming Ã‚Â· ${readableRelationship(edge.relationship)}`}
                                 </span>
                               </span>
 
@@ -1217,6 +1656,114 @@ export default function KnowledgePage() {
                   )}
                 </div>
 
+                <section className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">
+                      Evidence & Sources
+                    </h3>
+
+                    <span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                      {evidenceQuery.data?.total ?? 0} records
+                    </span>
+                  </div>
+
+                  {evidenceQuery.isLoading ? (
+                    <div className="rounded-lg border border-border p-4 text-sm text-muted-foreground">
+                      Loading supporting evidence...
+                    </div>
+                  ) : evidenceQuery.isError ? (
+                    <div className="rounded-lg border border-red-500/30 p-4 text-sm text-red-500">
+                      Could not retrieve evidence:
+                      {' '}
+                      {evidenceQuery.error.message}
+                    </div>
+                  ) : evidenceQuery.data?.sources.length ? (
+                    <div className="space-y-3">
+                      {evidenceQuery.data.sources.map((source, index) => (
+                        <article
+                          key={`${source.documentId}-${source.chunkId ?? index}-${source.relationship ?? ''}`}
+                          className="rounded-lg border border-border bg-background p-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="break-words text-sm font-medium">
+                                {source.documentName}
+                              </p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {source.documentType || 'Document'}
+                                {source.chunkIndex !== null &&
+                                source.chunkIndex !== undefined
+                                  ? ` · Chunk ${source.chunkIndex}`
+                                  : ''}
+                              </p>
+                            </div>
+
+                            {source.relationship && (
+                              <span className="shrink-0 rounded-md bg-brand-500/10 px-2 py-1 text-xs text-brand-500">
+                                {readableRelationship(source.relationship)}
+                              </span>
+                            )}
+                          </div>
+
+                          {source.excerpt ? (
+                            <blockquote className="mt-3 border-l-2 border-brand-500/50 pl-3 text-sm leading-6 text-muted-foreground">
+                              {source.excerpt}
+                            </blockquote>
+                          ) : (
+                            <p className="mt-3 text-xs italic text-muted-foreground">
+                              Source document identified; no matching chunk excerpt was retained.
+                            </p>
+                          )}
+
+                          {source.evidenceType && (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              Evidence: {readableRelationship(source.evidenceType)}
+                            </p>
+                          )}
+
+                          <div className="mt-3 space-y-1 border-t border-border/60 pt-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs text-muted-foreground">
+                                Evidence status
+                              </span>
+
+                              <span
+                                className={`rounded-md px-2 py-0.5 text-xs font-medium ${
+                                  source.status === 'active'
+                                    ? 'bg-emerald-500/10 text-emerald-600'
+                                    : source.status === 'disputed'
+                                      ? 'bg-amber-500/10 text-amber-600'
+                                      : 'bg-muted text-muted-foreground'
+                                }`}
+                              >
+                                {source.status ?? 'active'}
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-muted-foreground">
+                              First observed: {formatEvidenceDate(source.firstSeenAt)}
+                            </p>
+
+                            <p className="text-xs text-muted-foreground">
+                              Last observed: {formatEvidenceDate(source.lastSeenAt)}
+                            </p>
+
+                            {source.supersededAt && (
+                              <p className="text-xs text-amber-600">
+                                Superseded: {formatEvidenceDate(source.supersededAt)}
+                              </p>
+                            )}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                      No supporting document excerpts have been recorded for this node yet.
+                      Re-index its source document to generate evidence.
+                    </div>
+                  )}
+                </section>
                 {typeof selectedNode.source_type === 'string' &&
                   selectedNode.source_type && (
                     <div>
@@ -1249,7 +1796,7 @@ export default function KnowledgePage() {
                           <dd className="break-words text-sm">
                             {typeof value === 'object'
                               ? JSON.stringify(value)
-                              : String(value ?? '—')}
+                              : String(value ?? 'Ã¢â‚¬â€')}
                           </dd>
                         </div>
                       ))}

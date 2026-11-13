@@ -189,3 +189,5 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   echo ""
 fi
 echo ""
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  ".\Executive-Intelligence-PDF-Engine.ps1"

@@ -206,6 +206,19 @@ export class OrganizationsService {
           'Member could not be removed from this organization.',
         );
       }
+
+      await client.query(
+        `INSERT INTO audit_logs (
+           organization_id, user_id, action, resource_type, resource_id, metadata
+         )
+         VALUES ($1, $2, 'organization.member.removed', 'user', $3, $4)`,
+        [
+          organizationId,
+          requestedById,
+          userIdToRemove,
+          JSON.stringify({ previousRole: target.role }),
+        ],
+      );
     });
 
     return {
@@ -723,6 +736,21 @@ export class OrganizationsService {
           'This invitation has already been used.',
         );
       }
+
+      await client.query(
+        `INSERT INTO audit_logs (
+           organization_id, user_id, action, resource_type, resource_id, metadata
+         )
+         VALUES ($1, $2, 'organization.member.joined', 'user', $2, $3)`,
+        [
+          lockedInvite.organization_id,
+          userId,
+          JSON.stringify({
+            previousOrganizationId: null,
+            assignedRole: lockedInvite.role,
+          }),
+        ],
+      );
 
       if (lockedInvite.team_id) {
         await client.query(

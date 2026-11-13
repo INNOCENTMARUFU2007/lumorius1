@@ -27,10 +27,17 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
+  const express = require('express');
   const app = await NestFactory.create(AppModule, {
+    bodyParser: false,
     logger: ['error', 'warn', 'log', 'debug'],
     bufferLogs: true,
   });
+
+  // Transcript/notes imports are capped at 1,000,000 characters by the
+  // meeting service. Eight MB accommodates UTF-8 and JSON escaping overhead.
+  app.use(express.json({ limit: '8mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
   const configService = app.get(ConfigService);
 
@@ -39,15 +46,18 @@ async function bootstrap() {
     3001,
   );
 
-  const appUrl = configService.get<string>(
-    'APP_URL',
-    'http://localhost:3000',
-  );
-
   const nodeEnv = configService.get<string>(
     'NODE_ENV',
     'development',
   );
+
+  const appUrl = configService.get<string>(
+    'APP_URL',
+    nodeEnv === 'production' ? '' : 'http://localhost:3000',
+  );
+  if (nodeEnv === 'production' && !appUrl) {
+    throw new Error('APP_URL must be configured in production.');
+  }
 
   const sentryDsn = configService.get<string>(
     'SENTRY_DSN',
@@ -121,11 +131,10 @@ async function bootstrap() {
 
   // ── CORS ────────────────────────────────────────────────────
 
-  const allowedOrigins = [
-    appUrl,
-    'http://localhost:3000',
-    'http://localhost:3001',
-  ];
+  const allowedOrigins = [new URL(appUrl).origin];
+  if (nodeEnv !== 'production') {
+    allowedOrigins.push('http://localhost:3000', 'http://localhost:3001');
+  }
 
   app.enableCors({
     origin: (

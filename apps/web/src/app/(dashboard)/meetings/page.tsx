@@ -20,6 +20,8 @@ import { toast } from 'sonner';
 import Link from 'next/link';
 
 const STATUS_STYLES: Record<string, string> = {
+  recording: 'bg-yellow-100 text-yellow-700',
+  processing: 'bg-blue-100 text-blue-700',
   uploading: 'bg-yellow-100 text-yellow-700',
   transcribing: 'bg-blue-100 text-blue-700',
   analyzing: 'bg-purple-100 text-purple-700',
@@ -44,6 +46,9 @@ interface MeetingsResponse {
 export default function MeetingsPage() {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
+  const [textContent, setTextContent] = useState('');
+  const [textSourceType, setTextSourceType] = useState<'transcript' | 'notes'>('transcript');
 
   const { data, isLoading, isError } = useQuery<MeetingsResponse>({
     queryKey: ['meetings'],
@@ -59,7 +64,11 @@ export default function MeetingsPage() {
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
       const form = new FormData();
+      if (!consentConfirmed) {
+        throw new Error('Confirm the required participant consent before uploading a recording.');
+      }
       form.append('file', file);
+      form.append('consentConfirmed', 'true');
 
       const meetingTitle = title.trim();
       if (meetingTitle) {
@@ -75,6 +84,7 @@ export default function MeetingsPage() {
     onSuccess: () => {
       toast.success('Meeting uploaded — transcription in progress');
       setTitle('');
+      setConsentConfirmed(false);
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
     },
     onError: () => {
@@ -82,6 +92,27 @@ export default function MeetingsPage() {
     },
   });
 
+
+  const textImportMutation = useMutation({
+    mutationFn: async () => {
+      const endpoint = textSourceType === 'notes' ? '/meetings/notes' : '/meetings/transcripts';
+      const res = await api.post(endpoint, {
+        title: title.trim() || undefined,
+        content: textContent,
+      });
+      return res.data.data;
+    },
+    onSuccess: () => {
+      toast.success('Meeting content submitted — intelligence processing started');
+      setTextContent('');
+      setTitle('');
+      queryClient.invalidateQueries({ queryKey: ['meetings'] });
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Text import failed';
+      toast.error(message);
+    },
+  });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/meetings/${id}`),
     onSuccess: () => {
@@ -100,7 +131,7 @@ export default function MeetingsPage() {
         uploadMutation.mutate(file);
       }
     },
-    [uploadMutation],
+    [uploadMutation, consentConfirmed],
   );
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
@@ -111,7 +142,7 @@ export default function MeetingsPage() {
     },
     maxFiles: 1,
     maxSize: 500 * 1024 * 1024,
-    disabled: uploadMutation.isPending,
+    disabled: uploadMutation.isPending || !consentConfirmed,
     noClick: true,
   });
 
@@ -145,6 +176,19 @@ export default function MeetingsPage() {
           disabled={uploadMutation.isPending}
         />
 
+
+        <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <input
+            type="checkbox"
+            checked={consentConfirmed}
+            onChange={(event) => setConsentConfirmed(event.target.checked)}
+            disabled={uploadMutation.isPending}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            I confirm that I have obtained the necessary consent from all meeting participants for this recording to be uploaded and processed using AI, and that this upload complies with my organisation's policies.
+          </span>
+        </label>
         <div
           {...getRootProps()}
           className={`rounded-xl border-2 border-dashed p-6 text-center transition-all ${
@@ -178,6 +222,7 @@ export default function MeetingsPage() {
               <button
                 type="button"
                 onClick={open}
+                 disabled={!consentConfirmed || uploadMutation.isPending}
                 className="mt-3 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
               >
                 Browse files
@@ -187,6 +232,36 @@ export default function MeetingsPage() {
         </div>
       </section>
 
+      <section className="space-y-3 rounded-xl border border-border bg-card p-5">
+        <div>
+          <h2 className="font-semibold">Import transcript or meeting notes</h2>
+          <p className="text-xs text-muted-foreground">Paste source material. Imported text is indexed without inventing timestamps or speaker identities.</p>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setTextSourceType('transcript')} className={`rounded-lg border px-3 py-1.5 text-sm ${textSourceType === 'transcript' ? 'border-brand-500 bg-brand-500/10' : 'border-border'}`}>Transcript</button>
+          <button type="button" onClick={() => setTextSourceType('notes')} className={`rounded-lg border px-3 py-1.5 text-sm ${textSourceType === 'notes' ? 'border-brand-500 bg-brand-500/10' : 'border-border'}`}>Meeting notes</button>
+        </div>
+        <textarea
+          value={textContent}
+          onChange={(event) => setTextContent(event.target.value)}
+          rows={7}
+          maxLength={1000000}
+          placeholder={textSourceType === 'notes' ? 'Paste meeting notes…' : 'Paste transcript text…'}
+          disabled={textImportMutation.isPending}
+          className="w-full rounded-lg border border-border bg-muted px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-muted-foreground">Maximum 1,000,000 characters · Source evidence is retained</span>
+          <button
+            type="button"
+            onClick={() => textImportMutation.mutate()}
+            disabled={!textContent.trim() || textImportMutation.isPending}
+            className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {textImportMutation.isPending ? 'Submitting…' : 'Import and analyse'}
+          </button>
+        </div>
+      </section>
       {/* Meetings list */}
       <section className="space-y-2">
         {isLoading ? (
@@ -210,7 +285,7 @@ export default function MeetingsPage() {
           </div>
         ) : (
           meetings.map((meeting) => {
-            const status = meeting.status || 'uploading';
+            const status = meeting.status || 'recording';
             const duration = Number(meeting.duration_seconds);
             const hasDuration =
               meeting.duration_seconds !== null &&

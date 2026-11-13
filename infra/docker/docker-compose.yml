@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   # ── PostgreSQL ─────────────────────────────────────────────
   postgres:
@@ -8,10 +6,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: lumorius
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lumorius_secret}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
       POSTGRES_DB: lumorius_db
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d
@@ -26,13 +24,15 @@ services:
     image: redis:7-alpine
     container_name: lumorius_redis
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_secret} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:-redis_secret}", "ping"]
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -44,15 +44,15 @@ services:
     restart: unless-stopped
     environment:
       discovery.type: single-node
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD:-Admin_123!}
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "${OPENSEARCH_PASSWORD:?Set OPENSEARCH_PASSWORD in .env}"
       plugins.security.disabled: "false"
       JAVA_OPTS: "-Xms512m -Xmx512m"
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     volumes:
       - opensearch_data:/usr/share/opensearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sk https://localhost:9200 -u admin:${OPENSEARCH_PASSWORD:-Admin_123!} | grep cluster_name"]
+      test: ["CMD-SHELL", "curl -skf -u admin:$$OPENSEARCH_INITIAL_ADMIN_PASSWORD https://localhost:9200 | grep cluster_name"]
       interval: 30s
       timeout: 10s
       retries: 10
@@ -68,20 +68,20 @@ services:
       - ../../.env
     environment:
       PORT: 3001
-      DATABASE_URL: postgresql://lumorius:${POSTGRES_PASSWORD:-lumorius_secret}@postgres:5432/lumorius_db
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      DATABASE_URL: postgresql://lumorius:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/lumorius_db
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
       OPENSEARCH_URL: https://opensearch:9200
       OPENSEARCH_USER: admin
-      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD:-Admin_123!}
+      OPENSEARCH_PASSWORD: "${OPENSEARCH_PASSWORD:?Set OPENSEARCH_PASSWORD in .env}"
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/health/live"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -94,9 +94,9 @@ services:
     container_name: lumorius_web
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: ${APP_URL:-http://localhost:3001}
+      NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:3001/api}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - api
 

@@ -94,6 +94,14 @@ describe('NotificationEmailService', () => {
       expect(notificationsService.create).not.toHaveBeenCalled();
     });
 
+    it('does not send an assignment notification when a task is unassigned', async () => {
+      await service.handleTaskAssigned({ ...payload, assigneeId: null });
+
+      expect(db.findOne).not.toHaveBeenCalled();
+      expect(emailService.sendTaskAssigned).not.toHaveBeenCalled();
+      expect(notificationsService.create).not.toHaveBeenCalled();
+    });
+
     it('handles email failure gracefully without throwing', async () => {
       db.findOne.mockResolvedValueOnce(defaultUser);
       emailService.sendTaskAssigned.mockRejectedValueOnce(new Error('SMTP timeout'));

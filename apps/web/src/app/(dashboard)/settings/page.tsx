@@ -13,6 +13,8 @@ import {
   Building2,
   Shield,
   Mail,
+  LifeBuoy,
+  ExternalLink,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuth } from '@/hooks/use-auth';
@@ -517,6 +519,29 @@ export default function SettingsPage() {
             {inviteMutation.isPending ? 'Sending…' : 'Invite'}
           </button>
         </form>
+      </section>
+
+      {/* Contact support */}
+      <section className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-brand-500/10 p-2">
+            <LifeBuoy className="h-4 w-4 text-brand-500" aria-hidden="true" />
+          </div>
+          <div>
+            <h2 className="font-semibold">Need help?</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Contact Lumorius Support for account or workspace assistance.
+            </p>
+          </div>
+        </div>
+        <a
+          href="mailto:support@lumorius.com?subject=Lumorius%20support%20request"
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium transition hover:bg-muted"
+        >
+          <Mail className="h-4 w-4" aria-hidden="true" />
+          Contact support
+          <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+        </a>
       </section>
 
       {/* Profile */}

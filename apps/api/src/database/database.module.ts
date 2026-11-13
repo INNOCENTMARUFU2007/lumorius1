@@ -51,14 +51,12 @@ const logger = new Logger('DatabaseModule');
           idleTimeoutMillis: 30_000,
           connectionTimeoutMillis: 5_000,
 
-          ssl:
-            config.get<string>(
-              'nodeEnv',
-            ) === 'production'
-              ? {
-                  rejectUnauthorized: false,
-                }
-              : undefined,
+          ssl: config.get<string>('nodeEnv') === 'production'
+            ? {
+                rejectUnauthorized: true,
+                ca: config.get<string>('database.sslCa') || undefined,
+              }
+            : undefined,
         });
 
         // Verify database connection
@@ -90,43 +88,15 @@ const logger = new Logger('DatabaseModule');
               true;
 
             if (!installed) {
-              logger.warn(
-                'pgvector extension not found — attempting CREATE EXTENSION',
+              throw new Error(
+                'pgvector is not installed. Apply database migrations with a database owner before starting the API.',
               );
-
-              try {
-                await client.query(
-                  'CREATE EXTENSION IF NOT EXISTS vector',
-                );
-
-                logger.log(
-                  'pgvector extension created successfully',
-                );
-              } catch (extErr: unknown) {
-                const msg =
-                  extErr instanceof Error
-                    ? extErr.message
-                    : String(extErr);
-
-                logger.error(
-                  `pgvector extension could not be created: ${msg}. ` +
-                    'Semantic search will be unavailable until the extension is installed by a superuser.',
-                );
-              }
             } else {
               logger.log(
                 'pgvector extension verified ✓',
               );
             }
 
-            // Verify UUID support
-            await client.query(
-              'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"',
-            );
-
-            logger.log(
-              'uuid-ossp extension verified ✓',
-            );
           } finally {
             client.release();
           }

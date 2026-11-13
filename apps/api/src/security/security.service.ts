@@ -8,6 +8,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import type { PoolClient } from 'pg';
 
 const ALLOWED_API_KEY_SCOPES = ['documents:read', 'tasks:read', 'projects:read'] as const;
 
@@ -37,36 +38,49 @@ export class SecurityService {
   // ── Audit Logs ──────────────────────────────────────────────
 
   async logAudit(entry: AuditLogEntry) {
-    try {
-      await this.db.query(
-        `INSERT INTO audit_logs (
-           organization_id,
-           user_id,
-           action,
-           resource_type,
-           resource_id,
-           metadata,
-           ip_address,
-           user_agent
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          entry.organizationId ?? null,
-          entry.userId ?? null,
-          entry.action,
-          entry.resourceType ?? null,
-          entry.resourceId ?? null,
-          JSON.stringify(entry.metadata ?? {}),
-          entry.ipAddress ?? null,
-          entry.userAgent ?? null,
-        ],
-      );
-    } catch (error) {
-      this.logger.error(
-        'Failed to write audit log',
-        error instanceof Error ? error.stack : String(error),
-      );
-    }
+    await this.db.query(
+      `INSERT INTO audit_logs (
+         organization_id,
+         user_id,
+         action,
+         resource_type,
+         resource_id,
+         metadata,
+         ip_address,
+         user_agent
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        entry.organizationId ?? null,
+        entry.userId ?? null,
+        entry.action,
+        entry.resourceType ?? null,
+        entry.resourceId ?? null,
+        JSON.stringify(entry.metadata ?? {}),
+        entry.ipAddress ?? null,
+        entry.userAgent ?? null,
+      ],
+    );
+  }
+
+  private async insertAuditLog(client: PoolClient, entry: AuditLogEntry) {
+    await client.query(
+      `INSERT INTO audit_logs (
+         organization_id, user_id, action, resource_type, resource_id,
+         metadata, ip_address, user_agent
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        entry.organizationId ?? null,
+        entry.userId ?? null,
+        entry.action,
+        entry.resourceType ?? null,
+        entry.resourceId ?? null,
+        JSON.stringify(entry.metadata ?? {}),
+        entry.ipAddress ?? null,
+        entry.userAgent ?? null,
+      ],
+    );
   }
 
   async getAuditLogs(
@@ -126,7 +140,22 @@ export class SecurityService {
       params,
     );
 
-    return res.rows;
+    return res.rows.map((row) => this.removeAuditSecrets(row as Record<string, unknown>));
+  }
+
+  private removeAuditSecrets(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.removeAuditSecrets(item));
+    }
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !/(?:secret|token|password|authorization|credential|key.?hash|raw.?key|api.?key)/i.test(key))
+        .map(([key, item]) => [key, this.removeAuditSecrets(item)]),
+    );
   }
 
   // ── API Keys ────────────────────────────────────────────────
@@ -143,6 +172,11 @@ export class SecurityService {
       expiresAt?: string;
     },
   ) {
+    const name = typeof dto.name === 'string' ? dto.name.trim() : '';
+    if (!name || name.length > 100) {
+      throw new BadRequestException('API key name must be between 1 and 100 characters.');
+    }
+
     if (dto.expiresAt) {
       const expiryTimestamp = new Date(dto.expiresAt).getTime();
       if (!Number.isFinite(expiryTimestamp) || expiryTimestamp <= Date.now()) {
@@ -150,7 +184,11 @@ export class SecurityService {
       }
     }
 
-    const requestedScopes = Array.from(new Set(dto.scopes ?? []));
+    const suppliedScopes: unknown = dto.scopes ?? [];
+    if (!Array.isArray(suppliedScopes) || suppliedScopes.some((scope) => typeof scope !== 'string')) {
+      throw new BadRequestException('API key scopes must be a list of supported scopes.');
+    }
+    const requestedScopes = Array.from(new Set(suppliedScopes as string[]));
     if (requestedScopes.length === 0) {
       throw new BadRequestException('Select at least one API key scope.');
     }
@@ -166,51 +204,32 @@ export class SecurityService {
     const keyHash = await bcrypt.hash(rawKey, 10);
     const id = uuidv4();
 
-    await this.db.query(
-      `INSERT INTO api_keys (
-         id,
-         organization_id,
-         created_by_id,
-         name,
-         key_hash,
-         key_prefix,
-         scopes,
-         expires_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [
-        id,
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO api_keys (
+           id, organization_id, created_by_id, name, key_hash,
+           key_prefix, scopes, expires_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          id,
+          organizationId,
+          userId,
+          name,
+          keyHash,
+          prefix,
+          requestedScopes,
+          dto.expiresAt ?? null,
+        ],
+      );
+      await this.insertAuditLog(client, {
         organizationId,
         userId,
-        dto.name,
-        keyHash,
-        prefix,
-        requestedScopes,
-        dto.expiresAt ?? null,
-      ],
-    );
-
-    await this.logAudit({
-      organizationId,
-      userId,
-      action: 'security.api_key.created',
-      resourceType: 'api_key',
-      resourceId: id,
-      metadata: { name: dto.name, prefix, scopes: requestedScopes },
-    });
-
-        await this.logAudit({
-      organizationId,
-      userId,
-      action: 'security.api_key.created',
-      resourceType: 'api_key',
-      resourceId: id,
-      metadata: {
-        name: dto.name,
-        keyPrefix: prefix,
-        scopes: dto.scopes ?? [],
-        expiresAt: dto.expiresAt ?? null,
-      },
+        action: 'security.api_key.created',
+        resourceType: 'api_key',
+        resourceId: id,
+        metadata: { name, prefix, scopes: requestedScopes, expiresAt: dto.expiresAt ?? null },
+      });
     });
     // Notify the user; a mail failure must not undo key creation.
     try {
@@ -224,7 +243,7 @@ export class SecurityService {
           .sendApiKeyCreated(
             String(user.email),
             String(user.name ?? ''),
-            dto.name,
+            name,
             prefix,
           )
           .catch((error: unknown) => {
@@ -248,9 +267,11 @@ export class SecurityService {
     // Return the plaintext key once only. Never persist it.
     return {
       id,
-      name: dto.name,
+      name,
       key: rawKey,
       prefix,
+      scopes: requestedScopes,
+      expiresAt: dto.expiresAt ?? null,
       createdAt: new Date().toISOString(),
     };
   }
@@ -283,31 +304,33 @@ export class SecurityService {
     keyId: string,
     actorUserId?: string,
   ) {
-    const result = await this.db.query(
-      `UPDATE api_keys
-       SET is_active = FALSE
-       WHERE id = $1
-         AND organization_id = $2
-         AND is_active = TRUE
-       RETURNING name, key_prefix`,
-      [keyId, organizationId],
-    );
+    await this.db.transaction(async (client) => {
+      const result = await client.query(
+        `UPDATE api_keys
+         SET is_active = FALSE
+         WHERE id = $1
+           AND organization_id = $2
+           AND is_active = TRUE
+         RETURNING name, key_prefix`,
+        [keyId, organizationId],
+      );
 
-    const revokedKey = result.rows?.[0] as Record<string, unknown> | undefined;
-    if (!revokedKey) {
-      throw new NotFoundException('API key not found or already revoked');
-    }
+      const revokedKey = result.rows?.[0] as Record<string, unknown> | undefined;
+      if (!revokedKey) {
+        throw new NotFoundException('API key not found or already revoked');
+      }
 
-    await this.logAudit({
-      organizationId,
-      userId: actorUserId,
-      action: 'security.api_key.revoked',
-      resourceType: 'api_key',
-      resourceId: keyId,
-      metadata: {
-        name: String(revokedKey.name ?? ''),
-        keyPrefix: String(revokedKey.key_prefix ?? ''),
-      },
+      await this.insertAuditLog(client, {
+        organizationId,
+        userId: actorUserId,
+        action: 'security.api_key.revoked',
+        resourceType: 'api_key',
+        resourceId: keyId,
+        metadata: {
+          name: String(revokedKey.name ?? ''),
+          keyPrefix: String(revokedKey.key_prefix ?? ''),
+        },
+      });
     });
 
     return { revoked: true };
@@ -349,11 +372,13 @@ export class SecurityService {
         await this.db.query(
           `UPDATE api_keys
            SET last_used_at = NOW()
-           WHERE id = $1`,
-          [candidate.id],
+           WHERE id = $1 AND organization_id = $2 AND is_active = TRUE`,
+          [candidate.id, candidate.organization_id],
         );
 
-        return candidate;
+        const safeCandidate = { ...candidate };
+        delete safeCandidate.key_hash;
+        return safeCandidate;
       }
     }
 

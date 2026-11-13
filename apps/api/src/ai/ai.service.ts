@@ -32,6 +32,7 @@ interface ProviderResult {
   model: string;
   promptTokens: number;
   completionTokens: number;
+  usageReported: boolean;
 }
 
 interface SimilarChunk {
@@ -151,8 +152,11 @@ export class AiService {
       userId: opts.userId,
       feature: opts.feature ?? 'chat',
       model: result.model,
+      provider,
+      operationType: 'chat',
       promptTokens: result.promptTokens,
       completionTokens: result.completionTokens,
+      tokenUsageReported: result.usageReported,
     });
 
     return result.content;
@@ -167,6 +171,11 @@ export class AiService {
     userId?: string;
     feature?: string;
     model: string;
+    provider?: string;
+    operationType?: string;
+    operationKey?: string;
+    audioDurationSeconds?: number | null;
+    tokenUsageReported?: boolean;
     promptTokens: number;
     completionTokens: number;
   }): Promise<void> {
@@ -187,45 +196,161 @@ export class AiService {
     );
 
     const totalTokens = promptTokens + completionTokens;
+    const audioDuration = input.audioDurationSeconds;
+    const audioDurationSeconds =
+      typeof audioDuration === 'number' && Number.isFinite(audioDuration) && audioDuration > 0
+        ? Math.ceil(audioDuration)
+        : null;
+    const operationType = input.operationType ?? 'chat';
 
-    if (totalTokens <= 0) {
+    if (totalTokens <= 0 && operationType !== 'transcription') {
       this.logger.warn(
-        `Provider returned no token usage for model ${input.model}; usage was not recorded for organization ${organizationId}.`,
+        `Provider returned no token usage for model ${input.model}; recording the completed operation with token_usage_reported=false.`,
       );
-      return;
     }
 
     await this.db.query(
       `INSERT INTO ai_usage (
          organization_id,
          user_id,
+         provider,
          model,
          prompt_tokens,
          completion_tokens,
          total_tokens,
          cost_usd,
-         feature
+         feature,
+         operation_type,
+         audio_duration_seconds,
+         operation_key,
+         token_usage_reported,
+         pricing_id,
+         pricing_status,
+         input_usd_per_1m_tokens,
+         output_usd_per_1m_tokens,
+         audio_usd_per_minute,
+         input_cost_usd,
+         output_cost_usd,
+         audio_cost_usd,
+         priced_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, 0, $7)`,
+       SELECT
+         $1, $2, $3, $4, $5, $6, $7,
+         calculated.input_cost_usd + calculated.output_cost_usd + calculated.audio_cost_usd,
+         $8, $9, $10, $11, $12,
+         pricing.id,
+         CASE
+           WHEN pricing.id IS NULL THEN 'unpriced'
+           WHEN $9 = 'transcription' AND $10::integer IS NULL THEN 'incomplete'
+           WHEN $9 <> 'transcription' AND $12::boolean = FALSE THEN 'incomplete'
+           ELSE 'priced'
+         END,
+         pricing.input_usd_per_1m_tokens,
+         pricing.output_usd_per_1m_tokens,
+         pricing.audio_usd_per_minute,
+         calculated.input_cost_usd,
+         calculated.output_cost_usd,
+         calculated.audio_cost_usd,
+         CASE
+           WHEN pricing.id IS NULL THEN NULL
+           WHEN $9 = 'transcription' AND $10::integer IS NULL THEN NULL
+           WHEN $9 <> 'transcription' AND $12::boolean = FALSE THEN NULL
+           ELSE NOW()
+         END
+       FROM (SELECT 1) AS seed
+       LEFT JOIN LATERAL (
+         SELECT
+           p.id,
+           p.input_usd_per_1m_tokens,
+           p.output_usd_per_1m_tokens,
+           p.audio_usd_per_minute
+         FROM ai_model_pricing p
+         WHERE p.provider = $3
+           AND p.model = $4
+           AND p.operation_type = $9
+           AND p.effective_from <= NOW()
+         ORDER BY p.effective_from DESC, p.created_at DESC, p.id DESC
+         LIMIT 1
+       ) AS pricing ON TRUE
+       CROSS JOIN LATERAL (
+         SELECT
+           CASE
+             WHEN pricing.id IS NOT NULL
+               AND $9 <> 'transcription'
+               AND $12::boolean = TRUE
+             THEN ($5::numeric * COALESCE(pricing.input_usd_per_1m_tokens, 0)) / 1000000
+             ELSE 0::numeric
+           END AS input_cost_usd,
+           CASE
+             WHEN pricing.id IS NOT NULL
+               AND $9 = 'chat'
+               AND $12::boolean = TRUE
+             THEN ($6::numeric * COALESCE(pricing.output_usd_per_1m_tokens, 0)) / 1000000
+             ELSE 0::numeric
+           END AS output_cost_usd,
+           CASE
+             WHEN pricing.id IS NOT NULL
+               AND $9 = 'transcription'
+               AND $10::integer IS NOT NULL
+             THEN ($10::numeric / 60) * COALESCE(pricing.audio_usd_per_minute, 0)
+             ELSE 0::numeric
+           END AS audio_cost_usd
+       ) AS calculated
+       ON CONFLICT DO NOTHING`,
       [
         organizationId,
         input.userId ?? null,
+        input.provider ?? 'unknown',
         input.model,
         promptTokens,
         completionTokens,
         totalTokens,
         input.feature ?? 'chat',
+        operationType,
+        audioDurationSeconds,
+        input.operationKey ?? null,
+        input.tokenUsageReported ?? (totalTokens > 0),
       ],
     );
 
     this.logger.debug(
-      `Recorded ${totalTokens} AI tokens for organization ${organizationId}.`,
+      `Recorded AI operation ${operationType} for organization ${organizationId} (${totalTokens} tokens).`,
     );
+  }
+
+  /** Records a completed Whisper transcription as duration-based usage. */
+  async recordAudioTranscriptionUsage(input: {
+    meetingId: string;
+    organizationId: string;
+    userId?: string;
+    audioDurationSeconds?: number | null;
+    operationKey?: string;
+  }): Promise<void> {
+    if (!input.meetingId || !input.organizationId) {
+      throw new BadRequestException(
+        'Meeting transcription usage requires meetingId and organizationId.',
+      );
+    }
+
+    await this.recordUsage({
+      organizationId: input.organizationId,
+      userId: input.userId,
+      provider: 'openai',
+      model: 'whisper-1',
+      feature: 'meeting_transcription',
+      operationType: 'transcription',
+      operationKey: input.operationKey ?? `meeting.transcription:${input.meetingId}`,
+      audioDurationSeconds: input.audioDurationSeconds,
+      promptTokens: 0,
+      completionTokens: 0,
+      tokenUsageReported: false,
+    });
   }
 
   private getEmbeddingClientAndModel(): {
     client: OpenAI;
     model: string;
+    provider: string;
   } {
     const configuredProvider =
       this.configService.get<string>('ai.embeddingProvider') ??
@@ -270,14 +395,14 @@ export class AiService {
         ? `openai/${selectedModel}`
         : selectedModel;
 
-    return { client, model };
+    return { client, model, provider };
   }
 
   async createEmbedding(
     text: string,
     usageContext: UsageContext = {},
   ): Promise<number[]> {
-    const { client, model } = this.getEmbeddingClientAndModel();
+    const { client, model, provider } = this.getEmbeddingClientAndModel();
 
     const response = await client.embeddings.create({
       model,
@@ -288,8 +413,11 @@ export class AiService {
       ...usageContext,
       feature: usageContext.feature ?? 'embedding',
       model: response.model || model,
+      provider,
+      operationType: 'embedding',
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: 0,
+      tokenUsageReported: response.usage != null,
     });
 
     return response.data[0]?.embedding ?? [];
@@ -299,7 +427,7 @@ export class AiService {
     texts: string[],
     usageContext: UsageContext = {},
   ): Promise<number[][]> {
-    const { client, model } = this.getEmbeddingClientAndModel();
+    const { client, model, provider } = this.getEmbeddingClientAndModel();
 
     const response = await client.embeddings.create({
       model,
@@ -310,8 +438,11 @@ export class AiService {
       ...usageContext,
       feature: usageContext.feature ?? 'document_embeddings',
       model: response.model || model,
+      provider,
+      operationType: 'embedding',
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: 0,
+      tokenUsageReported: response.usage != null,
     });
 
     return response.data.map((item) => item.embedding);
@@ -323,7 +454,8 @@ export class AiService {
     query: string;
     orgId?: string;
     organizationId?: string;
-    userId?: string;
+    userId: string;
+    role?: string;
     limit?: number;
   }): Promise<SimilarChunk[]> {
     const organizationId = input.organizationId ?? input.orgId;
@@ -334,6 +466,9 @@ export class AiService {
     }
     if (!query) {
       throw new BadRequestException('A search query is required.');
+    }
+    if (!input.userId) {
+      throw new BadRequestException('Authenticated user context is required for document search.');
     }
 
     const requestedLimit = input.limit ?? 5;
@@ -352,6 +487,9 @@ export class AiService {
     }
 
     const vector = `[${embedding.join(',')}]`;
+    const canAccessAllTeams = ['owner', 'admin', 'super_admin'].includes(
+      String(input.role ?? '').toLowerCase(),
+    );
     const result = await this.db.query<Record<string, unknown>>(
       `SELECT
          dc.id AS chunk_id,
@@ -364,9 +502,18 @@ export class AiService {
        WHERE d.organization_id = $1
          AND d.status = 'indexed'
          AND dc.embedding IS NOT NULL
+         AND (
+           d.team_id IS NULL
+           OR $3::boolean = TRUE
+           OR EXISTS (
+             SELECT 1 FROM team_members member
+              WHERE member.team_id = d.team_id
+                AND member.user_id = $4::uuid
+           )
+         )
        ORDER BY dc.embedding <=> $2::vector ASC
-       LIMIT $3`,
-      [organizationId, vector, limit],
+       LIMIT $5`,
+      [organizationId, vector, canAccessAllTeams, input.userId, limit],
     );
 
     return result.rows
@@ -417,6 +564,7 @@ export class AiService {
     userId: string;
     orgId?: string;
     organizationId?: string;
+    role?: string;
     limit?: number;
   }): Promise<{
     answer: string;
@@ -443,6 +591,7 @@ export class AiService {
       query: question,
       organizationId,
       userId: input.userId,
+      role: input.role,
       limit: input.limit ?? 5,
     });
 
@@ -494,6 +643,7 @@ export class AiService {
     organizationId: string,
     question: string,
     context: Record<string, unknown>,
+    userId?: string,
   ) {
     const systemPrompt =
       `You are the AI Strategy Advisor for Lumorius AI, acting as a CEO/COO advisor.
@@ -508,6 +658,7 @@ Organization context: ${JSON.stringify(context)}`;
       ],
       {
         organizationId,
+        userId,
         feature: 'strategy_advisor',
       },
     );
@@ -680,7 +831,9 @@ Return a JSON object with keys "risks" and "opportunities".`;
         content:
           `You are an AI assistant for Lumorius AI, an AI Operating System for businesses.
 You help teams with strategy, decision-making, data analysis, and operations.
-${context ? `Context: ${JSON.stringify(context)}` : ''}`,
+When retrieved sources are supplied, use them as the factual basis for company-specific answers.
+Do not treat missing evidence as proof. Cite supporting sources using their citation IDs (for example [S1]).
+${context ? `Authorized company intelligence sources: ${JSON.stringify(context)}` : ''}`,
       },
       ...historyResult.rows
         .filter(
@@ -724,6 +877,7 @@ ${context ? `Context: ${JSON.stringify(context)}` : ''}`,
       conversationId: convId,
       response,
       role: 'assistant',
+      sources: Array.isArray(context?.sources) ? context.sources : [],
     };
   }
 
@@ -802,6 +956,7 @@ ${context ? `Context: ${JSON.stringify(context)}` : ''}`,
       model: response.model || requestedModel,
       promptTokens: response.usage?.prompt_tokens ?? 0,
       completionTokens: response.usage?.completion_tokens ?? 0,
+      usageReported: response.usage != null,
     };
   }
   private async chatWithAnthropic(
@@ -858,6 +1013,7 @@ ${context ? `Context: ${JSON.stringify(context)}` : ''}`,
         response.usage?.input_tokens ?? 0,
       completionTokens:
         response.usage?.output_tokens ?? 0,
+      usageReported: response.usage != null,
     };
   }
 }

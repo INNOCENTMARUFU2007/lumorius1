@@ -1,6 +1,7 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bull';
 import { EventEmitterModule } from '@nestjs/event-emitter';
@@ -15,6 +16,7 @@ import { MeetingsModule } from './meetings/meetings.module';
 import { TasksModule } from './tasks/tasks.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { ExecutiveIntelligenceModule } from './executive-intelligence/executive-intelligence.module';
 import { AiModule } from './ai/ai.module';
 import { BillingModule } from './billing/billing.module';
 import { IntegrationsModule } from './integrations/integrations.module';
@@ -28,17 +30,21 @@ import { AdminModule } from './admin/admin.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { GdprModule } from './gdpr/gdpr.module';
 import { SecurityMiddleware } from './common/middleware/security.middleware';
-import configuration from './common/config/configuration';
+import configuration, { validateEnvironment } from './common/config/configuration';
+import { LuieModule } from './luie/luie.module';
+
 
 @Module({
   imports: [
+    LuieModule,
    ConfigModule.forRoot({
   isGlobal: true,
   envFilePath: '../../.env',
   load: [configuration],
+  validate: validateEnvironment,
   expandVariables: true,
 }),
-    // Global event emitter — enables @OnEvent() decorators across all modules
+    // Global event emitter â€” enables @OnEvent() decorators across all modules
     EventEmitterModule.forRoot({
       wildcard: false,
       delimiter: '.',
@@ -80,6 +86,7 @@ import configuration from './common/config/configuration';
     TasksModule,
     KnowledgeModule,
     AnalyticsModule,
+    ExecutiveIntelligenceModule,
     FounderOsModule,
     AiModule,
     BillingModule,
@@ -90,6 +97,9 @@ import configuration from './common/config/configuration';
     AdminModule,
     MetricsModule,
     GdprModule,
+  ],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule implements NestModule {

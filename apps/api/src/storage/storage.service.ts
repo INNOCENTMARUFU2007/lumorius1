@@ -17,13 +17,14 @@ export class StorageService {
 
   constructor(private readonly configService: ConfigService) {
     this.bucket = this.configService.get<string>('s3.bucket', 'lumorius-uploads');
+    const accessKeyId = this.configService.get<string>('s3.accessKey');
+    const secretAccessKey = this.configService.get<string>('s3.secretKey');
     this.s3 = new S3Client({
       endpoint: this.configService.get<string>('s3.endpoint'),
       region: this.configService.get<string>('s3.region', 'us-east-1'),
-      credentials: {
-        accessKeyId: this.configService.get<string>('s3.accessKey', ''),
-        secretAccessKey: this.configService.get<string>('s3.secretKey', ''),
-      },
+      credentials: accessKeyId && secretAccessKey
+        ? { accessKeyId, secretAccessKey }
+        : undefined,
       forcePathStyle: true,
     });
   }
@@ -35,7 +36,6 @@ export class StorageService {
         Key: key,
         Body: body,
         ContentType: contentType,
-        ServerSideEncryption: 'AES256',
       }),
     );
     this.logger.log(`Uploaded ${key} to S3`);

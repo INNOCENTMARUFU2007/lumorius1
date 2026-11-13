@@ -1,4 +1,4 @@
-
+﻿
 'use client';
 
 import Image from 'next/image';
@@ -12,6 +12,7 @@ import {
   CheckSquare,
   Network,
   BarChart3,
+  Gauge,
   Workflow,
   Sparkles,
   CreditCard,
@@ -43,7 +44,9 @@ const navGroups = [
     label: 'Intelligence',
     items: [
       { href: '/founder-os', label: 'Founder OS', icon: TrendingUp },
+      { href: '/decisions', label: 'Decision Intelligence', icon: Network },
       { href: '/analytics', label: 'Analytics', icon: BarChart3 },
+      { href: '/executive-intelligence', label: 'Executive Intelligence', icon: Gauge },
       { href: '/workflows', label: 'Workflows', icon: Workflow },
       { href: '/ai', label: 'AI Advisor', icon: Sparkles },
     ],
@@ -114,7 +117,7 @@ export function Sidebar() {
         >
           <Image
             src="/logo-horizontal.svg"
-            alt="Lumorius AI — INMARTECH"
+            alt="Lumorius AI Ã¢â‚¬â€ INMARTECH"
             width={320}
             height={80}
             priority
@@ -234,14 +237,63 @@ export function Sidebar() {
         })}
 
         {/* GDPR data export */}
-        <a
-          href="/api/v1/gdpr/export"
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const response = await api.get('/gdpr/export', {
+                responseType: 'blob',
+              });
+
+              const url = window.URL.createObjectURL(
+                new Blob([response.data], { type: 'application/json' }),
+              );
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = 'lumorius-data-export.json';
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+              window.URL.revokeObjectURL(url);
+            } catch (error) {
+              const failure = error as {
+                message?: string;
+                response?: {
+                  status?: number;
+                  data?: Blob;
+                };
+              };
+
+              let details = failure.message || 'Unknown error';
+
+              if (failure.response?.data instanceof Blob) {
+                const body = await failure.response.data.text();
+
+                try {
+                  const parsed = JSON.parse(body);
+                  details = parsed.message || body || details;
+                } catch {
+                  details = body || details;
+                }
+              }
+
+              console.error('GDPR data export failed:', {
+                status: failure.response?.status,
+                details,
+                error,
+              });
+
+              window.alert(
+                `Data export failed (HTTP ${failure.response?.status || 'network error'}): ${details}`,
+              );
+            }
+
+          }}
           className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-all"
-          download
         >
           <Download className="w-4 h-4 shrink-0" />
           Export My Data
-        </a>
+        </button>
       </div>
     </aside>
   );

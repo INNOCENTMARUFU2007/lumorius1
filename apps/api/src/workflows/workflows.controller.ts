@@ -46,7 +46,7 @@ export class WorkflowsController {
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
   ) {
-    return this.workflowsService.trigger(id, user.organizationId, body);
+    return this.workflowsService.trigger(id, user.organizationId, body, user.sub);
   }
 
   @Get(':id/runs')

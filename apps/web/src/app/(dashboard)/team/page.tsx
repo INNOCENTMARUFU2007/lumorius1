@@ -20,10 +20,12 @@ import {
   Clock,
   RefreshCw,
   CalendarDays,
+  Copy,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { formatRelative } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
+import { toast } from 'sonner';
 
 type TeamMember = Record<string, unknown> & {
   user_id: string;
@@ -117,6 +119,15 @@ function formatDate(value?: string | null): string {
   }
 
   return date.toLocaleString();
+}
+
+async function copyUserId(userId: string) {
+  try {
+    await navigator.clipboard.writeText(userId);
+    toast.success('User ID copied');
+  } catch {
+    toast.error('Clipboard access is unavailable. Select the ID to copy it manually.');
+  }
 }
 
 function normalizeMembers(payload: unknown): TeamData {
@@ -548,6 +559,20 @@ export default function TeamPage() {
                     <p className="text-xs text-muted-foreground break-all">
                       {member.email}
                     </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                      <code className="min-w-0 break-all text-[10px] leading-4 text-muted-foreground">
+                        ID: {member.user_id}
+                      </code>
+                      <button
+                        type="button"
+                        aria-label={`Copy user ID for ${displayName}`}
+                        title="Copy user ID"
+                        onClick={() => void copyUserId(member.user_id)}
+                        className="shrink-0 rounded p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                      >
+                        <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-3">

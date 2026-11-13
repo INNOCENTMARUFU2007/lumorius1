@@ -1,224 +1,295 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, LayoutDashboard, Brain, Mic, CheckSquare, Network,
-  TrendingUp, BarChart3, Workflow, Sparkles, CreditCard,
+  TrendingUp, BarChart3, Gauge, Workflow, Sparkles, CreditCard,
   Settings, ShieldCheck, Users, Bell, Puzzle, ShieldAlert,
-  ExternalLink, Hash, ArrowRight,
+  ExternalLink, Hash, ArrowRight, X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface Command {
-  id:       string;
-  label:    string;
-  group:    string;
-  href?:    string;
-  icon:     React.ElementType;
+  id: string;
+  label: string;
+  group: string;
+  href?: string;
+  icon: typeof Gauge;
   shortcut?: string;
-  action?:  () => void;
+  action?: () => void;
+  keywords?: string[];
 }
 
+// Keep every destination aligned with an existing Lumorius route. Related
+// intelligence capabilities may intentionally point to their owning workspace.
 const NAV_COMMANDS: Command[] = [
-  { id: 'dashboard',     label: 'Dashboard',        group: 'Navigate', href: '/dashboard',     icon: LayoutDashboard },
-  { id: 'brain',         label: 'Company Brain',     group: 'Navigate', href: '/brain',         icon: Brain           },
-  { id: 'meetings',      label: 'Meetings',          group: 'Navigate', href: '/meetings',      icon: Mic             },
-  { id: 'tasks',         label: 'Tasks & Projects',  group: 'Navigate', href: '/tasks',         icon: CheckSquare     },
-  { id: 'knowledge',     label: 'Knowledge Graph',   group: 'Navigate', href: '/knowledge',     icon: Network         },
-  { id: 'founder-os',    label: 'Founder OS',        group: 'Navigate', href: '/founder-os',    icon: TrendingUp      },
-  { id: 'analytics',     label: 'Analytics',         group: 'Navigate', href: '/analytics',     icon: BarChart3       },
-  { id: 'workflows',     label: 'Workflows',         group: 'Navigate', href: '/workflows',     icon: Workflow        },
-  { id: 'ai',            label: 'AI Advisor',        group: 'Navigate', href: '/ai',            icon: Sparkles        },
-  { id: 'team',          label: 'Team Members',      group: 'Navigate', href: '/team',          icon: Users           },
-  { id: 'notifications', label: 'Notifications',     group: 'Navigate', href: '/notifications', icon: Bell            },
-  { id: 'integrations',  label: 'Integrations',      group: 'Navigate', href: '/integrations',  icon: Puzzle          },
-  { id: 'security',      label: 'Security',          group: 'Navigate', href: '/security',      icon: ShieldCheck     },
-  { id: 'billing',       label: 'Billing',           group: 'Navigate', href: '/billing',       icon: CreditCard      },
-  { id: 'settings',      label: 'Settings',          group: 'Navigate', href: '/settings',      icon: Settings        },
-  { id: 'admin',         label: 'Admin Panel',       group: 'Navigate', href: '/admin',         icon: ShieldAlert     },
+  { id: 'executive-intelligence', label: 'Executive Intelligence', group: 'Intelligence', href: '/executive-intelligence', icon: Gauge, keywords: ['executive', 'KPI', 'KPIs', 'financial intelligence', 'financial performance', 'targets', 'executive reports', 'management reporting', 'business performance'] },
+  { id: 'cross-meeting-intelligence', label: 'Cross-Meeting Intelligence', group: 'Intelligence', href: '/meetings', icon: Network, keywords: ['cross meeting', 'cross-meeting', 'meeting intelligence', 'transcripts', 'meeting search', 'recurring themes', 'unresolved commitments', 'meeting decisions', 'meeting timeline'] },
+  { id: 'meeting-review', label: 'Meeting Review Workspace', group: 'Intelligence', href: '/meetings', icon: Mic, keywords: ['meeting review', 'transcript review', 'action items', 'meeting analysis'] },
+  { id: 'decisions', label: 'Decision Intelligence', group: 'Intelligence', href: '/decisions', icon: Network, keywords: ['governance', 'approvals', 'decision register', 'decision portfolio', 'decision outcomes'] },
+  { id: 'founder-os', label: 'Founder OS', group: 'Intelligence', href: '/founder-os', icon: TrendingUp, keywords: ['strategy', 'goals', 'OKRs', 'objectives', 'founder dashboard', 'key results'] },
+  { id: 'analytics', label: 'Analytics', group: 'Intelligence', href: '/analytics', icon: BarChart3, keywords: ['business analytics', 'metrics', 'KPIs', 'performance analytics', 'weekly reports'] },
+  { id: 'workflows', label: 'Workflows', group: 'Intelligence', href: '/workflows', icon: Workflow, keywords: ['automation', 'workflow autopilot', 'orchestration', 'automated workflows'] },
+  { id: 'ai', label: 'AI Advisor', group: 'Intelligence', href: '/ai', icon: Sparkles, keywords: ['AI strategy advisor', 'AI assistant', 'strategy advisor', 'artificial intelligence'] },
+  { id: 'dashboard', label: 'Dashboard', group: 'Platform', href: '/dashboard', icon: LayoutDashboard, keywords: ['home', 'overview', 'workspace overview'] },
+  { id: 'brain', label: 'Company Brain', group: 'Platform', href: '/brain', icon: Brain, keywords: ['documents', 'knowledge base', 'company knowledge', 'knowledge engine', 'document intelligence', 'files'] },
+  { id: 'meetings', label: 'Meeting Intelligence', group: 'Platform', href: '/meetings', icon: Mic, keywords: ['meetings', 'transcripts', 'recordings', 'meeting notes', 'meeting workspace'] },
+  { id: 'tasks', label: 'Tasks & Projects', group: 'Platform', href: '/tasks', icon: CheckSquare, keywords: ['tasks', 'projects', 'execution', 'action items', 'commitments', 'delivery'] },
+  { id: 'knowledge', label: 'Knowledge Graph', group: 'Platform', href: '/knowledge', icon: Network, keywords: ['knowledge', 'entities', 'relationships', 'claims', 'evidence', 'knowledge graph'] },
+  { id: 'team', label: 'Team Members', group: 'Workspace', href: '/team', icon: Users, keywords: ['people', 'members', 'organisation members', 'team'] },
+  { id: 'notifications', label: 'Notifications', group: 'Workspace', href: '/notifications', icon: Bell, keywords: ['alerts', 'inbox', 'unread notifications'] },
+  { id: 'integrations', label: 'Integrations', group: 'Workspace', href: '/integrations', icon: Puzzle, keywords: ['connected apps', 'connectors', 'slack', 'linear', 'dropbox'] },
+  { id: 'security', label: 'Security', group: 'Workspace', href: '/security', icon: ShieldCheck, keywords: ['access', 'sessions', 'audit logs', 'security settings'] },
+  { id: 'billing', label: 'Billing', group: 'Workspace', href: '/billing', icon: CreditCard, keywords: ['subscription', 'plan', 'payments', 'invoices'] },
+  { id: 'settings', label: 'Settings', group: 'Workspace', href: '/settings', icon: Settings, keywords: ['preferences', 'profile', 'configuration'] },
 ];
 
 const QUICK_ACTIONS: Command[] = [
-  { id: 'upload-doc',   label: 'Upload document',    group: 'Actions', href: '/brain',         icon: Brain    },
-  { id: 'new-meeting',  label: 'Start new meeting',  group: 'Actions', href: '/meetings',      icon: Mic      },
-  { id: 'new-task',     label: 'Create task',        group: 'Actions', href: '/tasks',         icon: CheckSquare },
-  { id: 'view-docs',    label: 'API Documentation',  group: 'Actions', href: '/api/docs',      icon: ExternalLink, shortcut: '⌘D' },
+  { id: 'upload-doc', label: 'Upload document', group: 'Actions', href: '/brain', icon: Brain, keywords: ['import document', 'add file'] },
+  { id: 'new-meeting', label: 'Open meeting workspace', group: 'Actions', href: '/meetings', icon: Mic, keywords: ['new meeting', 'start meeting'] },
+  { id: 'new-task', label: 'Open tasks and projects', group: 'Actions', href: '/tasks', icon: CheckSquare, keywords: ['create task', 'new project'] },
+  { id: 'view-docs', label: 'API Documentation', group: 'Actions', href: '/api/docs', icon: ExternalLink, shortcut: 'API', keywords: ['swagger', 'developer docs'] },
 ];
 
 export function CommandPalette() {
-  const router  = useRouter();
-  const [open, setOpen]   = useState(false);
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [sel, setSel]     = useState(0);
-  const inputRef          = useRef<HTMLInputElement>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [portalReady, setPortalReady] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
 
   const allCommands = [...NAV_COMMANDS, ...QUICK_ACTIONS];
-
-  const filtered = query.trim()
-    ? allCommands.filter(
-        (c) =>
-          c.label.toLowerCase().includes(query.toLowerCase()) ||
-          c.group.toLowerCase().includes(query.toLowerCase()),
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = normalizedQuery
+    ? allCommands.filter((command) =>
+        [command.label, command.group, ...(command.keywords ?? [])].some((term) =>
+          term.toLowerCase().includes(normalizedQuery),
+        ),
       )
     : allCommands;
 
-  // Group filtered commands
-  const grouped = filtered.reduce<Record<string, Command[]>>((acc, cmd) => {
-    (acc[cmd.group] ??= []).push(cmd);
-    return acc;
+  const grouped = filtered.reduce<Record<string, Command[]>>((groups, command) => {
+    (groups[command.group] ??= []).push(command);
+    return groups;
   }, {});
-
   const flat = Object.values(grouped).flat();
 
-  const execute = useCallback(
-    (cmd: Command) => {
-      setOpen(false);
-      setQuery('');
-      if (cmd.action) {
-        cmd.action();
-      } else if (cmd.href) {
-        if (cmd.href.startsWith('http') || cmd.href.startsWith('/api')) {
-          window.open(cmd.href, '_blank');
-        } else {
-          router.push(cmd.href);
-        }
-      }
-    },
-    [router],
-  );
+  const closePalette = useCallback(() => {
+    setOpen(false);
+    setQuery('');
+    setSelectedIndex(0);
+  }, []);
 
-  // Keyboard shortcut — Cmd/Ctrl + K
+  const execute = useCallback((command: Command) => {
+    closePalette();
+    if (command.action) {
+      command.action();
+      return;
+    }
+    if (!command.href) return;
+    if (command.href.startsWith('http') || command.href.startsWith('/api')) {
+      window.open(command.href, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    router.push(command.href);
+  }, [closePalette, router]);
+
+  // Global shortcut works from every dashboard route, including Executive Intelligence.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setOpen((o) => !o);
-        setSel(0);
+    const handler = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setOpen((current) => !current);
         setQuery('');
+        setSelectedIndex(0);
+      } else if (event.key === 'Escape') {
+        setOpen(false);
+        setQuery('');
+        setSelectedIndex(0);
       }
-      if (e.key === 'Escape') setOpen(false);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 50);
+    if (!open) {
+      if (previousFocusRef.current) {
+        previousFocusRef.current.focus();
+        previousFocusRef.current = null;
+      }
+      return;
+    }
+    previousFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : triggerRef.current;
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
   }, [open]);
 
-  // Arrow key navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setSel((s) => Math.min(s + 1, flat.length - 1));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSel((s) => Math.max(s - 1, 0));
-    } else if (e.key === 'Enter' && flat[sel]) {
-      execute(flat[sel]);
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setSelectedIndex((current) => Math.min(current + 1, Math.max(flat.length - 1, 0)));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setSelectedIndex((current) => Math.max(current - 1, 0));
+    } else if (event.key === 'Enter' && flat[selectedIndex]) {
+      event.preventDefault();
+      execute(flat[selectedIndex]);
     }
   };
 
-  let globalIdx = -1;
+  let globalIndex = -1;
 
   return (
     <>
-      {/* Trigger button */}
       <button
-        onClick={() => { setOpen(true); setQuery(''); setSel(0); }}
-        className="flex items-center gap-2 px-3 py-1.5 bg-muted/60 hover:bg-muted border border-border rounded-lg text-sm text-muted-foreground transition-colors"
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          previousFocusRef.current = triggerRef.current;
+          setOpen(true);
+          setQuery('');
+          setSelectedIndex(0);
+        }}
+        className="flex min-h-10 items-center gap-2 rounded-lg border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6577ff]"
+        aria-label="Search all Lumorius modules"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="lumorius-command-palette"
+        title="Search all modules (Ctrl+K)"
       >
-        <Search className="w-3.5 h-3.5" />
-        <span className="hidden sm:inline">Search or jump to…</span>
-        <kbd className="hidden sm:inline text-[10px] bg-background border border-border rounded px-1 py-0.5 font-mono">⌘K</kbd>
+        <Search className="h-4 w-4 shrink-0" />
+        <span className="hidden sm:inline">Search or jump to...</span>
+        <kbd className="hidden rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground sm:inline">Ctrl K</kbd>
       </button>
 
-      {/* Palette overlay */}
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
-              onClick={() => setOpen(false)}
-            />
-            <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] px-4 pointer-events-none">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: -10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                transition={{ duration: 0.15, ease: 'easeOut' }}
-                className="w-full max-w-lg bg-card border border-border rounded-2xl shadow-2xl overflow-hidden pointer-events-auto"
-                onKeyDown={handleKeyDown}
-              >
-                {/* Search input */}
-                <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border">
-                  <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-                  <input
-                    ref={inputRef}
-                    value={query}
-                    onChange={(e) => { setQuery(e.target.value); setSel(0); }}
-                    placeholder="Search pages, actions, docs…"
-                    className="flex-1 bg-transparent text-sm focus:outline-none placeholder:text-muted-foreground"
-                  />
-                  <kbd className="text-[10px] text-muted-foreground bg-muted border border-border rounded px-1.5 py-0.5 font-mono">ESC</kbd>
-                </div>
+      {portalReady ? createPortal(
+        <AnimatePresence>
+          {open && (
+            <>
+              <motion.button
+                type="button"
+                aria-label="Close global search"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.12 }}
+                className="fixed inset-0 z-[1000] cursor-default bg-black/70 backdrop-blur-md"
+                onClick={closePalette}
+              />
+              <div className="pointer-events-none fixed inset-0 z-[1001] flex items-start justify-center overflow-y-auto px-4 py-[10vh]">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.97, y: -12 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.97, y: -12 }}
+                  transition={{ duration: 0.15, ease: 'easeOut' }}
+                  className="pointer-events-auto flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl ring-1 ring-white/10"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="lumorius-command-title"
+                  id="lumorius-command-palette"
+                  onKeyDown={handleKeyDown}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+                    <Search className="h-5 w-5 shrink-0 text-[#9ba7ff]" />
+                    <div className="min-w-0 flex-1">
+                      <label id="lumorius-command-title" htmlFor="lumorius-command-input" className="sr-only">Search Lumorius modules and actions</label>
+                      <input
+                        id="lumorius-command-input"
+                        ref={inputRef}
+                        value={query}
+                        onChange={(event) => {
+                          setQuery(event.target.value);
+                          setSelectedIndex(0);
+                        }}
+                        placeholder="Search modules, KPIs, documents, meetings or actions..."
+                        className="w-full bg-transparent py-1 text-base text-foreground outline-none placeholder:text-muted-foreground"
+                        autoComplete="off"
+                        spellCheck={false}
+                        aria-controls="lumorius-command-results"
+                        aria-activedescendant={flat[selectedIndex] ? `lumorius-command-${flat[selectedIndex].id}` : undefined}
+                      />
+                    </div>
+                    <kbd className="rounded-md border border-border bg-muted px-2 py-1 text-[12px] font-medium text-muted-foreground">ESC</kbd>
+                    <button type="button" onClick={closePalette} className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Close search"><X className="h-4 w-4" /></button>
+                  </div>
 
-                {/* Results */}
-                <div className="max-h-[340px] overflow-y-auto py-2">
-                  {filtered.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-8">No results for &quot;{query}&quot;</p>
-                  ) : (
-                    Object.entries(grouped).map(([group, cmds]) => (
-                      <div key={group}>
-                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-4 py-2 flex items-center gap-1.5">
-                          <Hash className="w-3 h-3" /> {group}
-                        </p>
-                        {cmds.map((cmd) => {
-                          globalIdx++;
-                          const idx = globalIdx;
-                          const Icon = cmd.icon;
-                          const isSelected = sel === idx;
-                          return (
-                            <button
-                              key={cmd.id}
-                              onClick={() => execute(cmd)}
-                              onMouseEnter={() => setSel(idx)}
-                              className={cn(
-                                'w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors text-left',
-                                isSelected ? 'bg-violet-500/10 text-violet-500' : 'text-foreground hover:bg-muted/50',
-                              )}
-                            >
-                              <Icon className={cn('w-4 h-4 shrink-0', isSelected ? 'text-violet-500' : 'text-muted-foreground')} />
-                              <span className="flex-1">{cmd.label}</span>
-                              {cmd.shortcut && (
-                                <kbd className="text-[10px] text-muted-foreground bg-muted border border-border rounded px-1.5 py-0.5 font-mono">
-                                  {cmd.shortcut}
-                                </kbd>
-                              )}
-                              {isSelected && <ArrowRight className="w-3.5 h-3.5 text-violet-500" />}
-                            </button>
-                          );
-                        })}
+                  <div id="lumorius-command-results" className="min-h-0 flex-1 overflow-y-auto py-3" role="listbox" aria-label="Search results">
+                    {filtered.length === 0 ? (
+                      <div className="px-6 py-12 text-center">
+                        <Search className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
+                        <p className="text-sm font-medium text-foreground">No matching modules or actions</p>
+                        <p className="mt-1 text-[13px] text-muted-foreground">Try "Executive Intelligenceâ€, "Meetingsâ€, "KPIâ€ or "Projectsâ€.</p>
                       </div>
-                    ))
-                  )}
-                </div>
+                    ) : (
+                      Object.entries(grouped).map(([group, commands]) => (
+                        <section key={group} aria-label={group}>
+                          <p className="flex items-center gap-2 px-5 pb-2 pt-2 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                            <Hash className="h-3.5 w-3.5" /> {group}
+                          </p>
+                          {commands.map((command) => {
+                            globalIndex += 1;
+                            const index = globalIndex;
+                            const Icon = command.icon;
+                            const selected = selectedIndex === index;
+                            return (
+                              <button
+                                key={command.id}
+                                id={`lumorius-command-${command.id}`}
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                onClick={() => execute(command)}
+                                onMouseEnter={() => setSelectedIndex(index)}
+                                onFocus={() => setSelectedIndex(index)}
+                                className={cn(
+                                  'flex min-h-12 w-full items-center gap-3 px-5 py-3 text-left text-[15px] transition-colors',
+                                  selected ? 'bg-[#4254f5]/15 text-foreground' : 'text-foreground hover:bg-muted/70',
+                                )}
+                              >
+                                <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border', selected ? 'border-[#6577ff]/30 bg-[#4254f5]/15 text-[#aab5ff]' : 'border-border bg-muted/60 text-muted-foreground')}>
+                                  <Icon className="h-4 w-4" />
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block break-words leading-5 font-medium">{command.label}</span>
+                                  {command.keywords?.length ? <span className="mt-0.5 block whitespace-normal break-words text-xs leading-5 text-muted-foreground">{command.keywords.slice(0, 3).join('  |  ')}</span> : null}
+                                </span>
+                                {command.shortcut ? <kbd className="rounded border border-border bg-muted px-2 py-1 text-[12px] font-mono text-muted-foreground">{command.shortcut}</kbd> : null}
+                                {selected ? <ArrowRight className="h-4 w-4 shrink-0 text-[#9ba7ff]" /> : null}
+                              </button>
+                            );
+                          })}
+                        </section>
+                      ))
+                    )}
+                  </div>
 
-                <div className="border-t border-border px-4 py-2 flex items-center gap-4 text-[10px] text-muted-foreground">
-                  <span className="flex items-center gap-1"><kbd className="bg-muted border border-border rounded px-1 py-0.5 font-mono">↑↓</kbd> navigate</span>
-                  <span className="flex items-center gap-1"><kbd className="bg-muted border border-border rounded px-1 py-0.5 font-mono">↵</kbd> open</span>
-                  <span className="flex items-center gap-1"><kbd className="bg-muted border border-border rounded px-1 py-0.5 font-mono">ESC</kbd> close</span>
-                </div>
-              </motion.div>
-            </div>
-          </>
-        )}
-      </AnimatePresence>
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-5 py-3 text-[12px] text-muted-foreground">
+                    <span><kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">UP</kbd> <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">DOWN</kbd> Navigate</span>
+                    <span><kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">Enter</kbd> Open</span>
+                    <span><kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">Esc</kbd> Close</span>
+                    <span className="ml-auto">{filtered.length} results</span>
+                  </div>
+                </motion.div>
+              </div>
+            </>
+          )}
+        </AnimatePresence>,
+        document.body,
+      ) : null}
     </>
   );
 }

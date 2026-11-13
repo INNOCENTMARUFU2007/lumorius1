@@ -8,7 +8,7 @@ import { NotificationsService } from './notifications.service';
 export interface TaskAssignedEvent {
   taskId: string;
   taskTitle: string;
-  assigneeId: string;
+  assigneeId: string | null;
   assignerName: string;
   organizationId: string;
   priority: string;
@@ -86,6 +86,7 @@ export class NotificationEmailService {
 
   @OnEvent('task.assigned', { async: true })
   async handleTaskAssigned(payload: TaskAssignedEvent) {
+    if (!payload.assigneeId) return;
     try {
       const assignee = await this.db.findOne<{ email: string; name: string }>(
         'users',

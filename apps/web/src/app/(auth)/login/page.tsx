@@ -4,10 +4,56 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Mail, Lock, Eye, EyeOff, Shield } from 'lucide-react';
+import {
+  Brain,
+  Gauge,
+  Lock,
+  Mail,
+  Mic,
+  Network,
+  Eye,
+  EyeOff,
+  Shield,
+  Sparkles,
+  TrendingUp,
+  Workflow,
+} from 'lucide-react';
 import api from '@/lib/api';
 import { setTokens, getAuthDestination } from '@/lib/auth';
 import { toast } from 'sonner';
+
+const PLATFORM_MODULES = [
+  {
+    name: 'Company Brain',
+    description: 'Search trusted workspace knowledge.',
+    icon: Brain,
+  },
+  {
+    name: 'Meeting Intelligence',
+    description: 'Turn meetings into decisions and actions.',
+    icon: Mic,
+  },
+  {
+    name: 'Decision Intelligence',
+    description: 'Track rationale, approvals, and outcomes.',
+    icon: Network,
+  },
+  {
+    name: 'Executive Intelligence',
+    description: 'Review financial and operational signals.',
+    icon: Gauge,
+  },
+  {
+    name: 'Founder OS & Analytics',
+    description: 'Monitor goals, KPIs, and progress.',
+    icon: TrendingUp,
+  },
+  {
+    name: 'Workflows & AI Advisor',
+    description: 'Automate work with grounded assistance.',
+    icon: Workflow,
+  },
+] as const;
 
 export default function LoginPage() {
   const router = useRouter();
@@ -66,51 +112,39 @@ export default function LoginPage() {
 <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-violet-900/50 to-indigo-900/30 border-r border-gray-800 items-center justify-center px-12 py-12">
   <div className="w-full flex flex-col items-center">
 
-    {/* LOGO + INFORMATION MASTER COLUMN */}
-    <div className="w-[430px] max-w-full flex flex-col items-center">
-
-    {/* Official Lumorius Logo */}
-<div className="w-full flex justify-center items-center mb-14 translate-x-8">
-  <img
-    src="/logo-horizontal.svg"
-    alt="Lumorius AI"
-    className="w-[420px] max-w-full h-auto object-contain block"
-  />
-</div>
-      {/* Brand description */}
-      <div className="w-full text-center mb-10">
-        <p className="text-gray-400 text-sm leading-7">
-          The AI Operating System for modern businesses.
-          <br />
-          10 modules. One unified platform.
-        </p>
-      </div>
-
-      {/* Feature information */}
-      <div className="w-[390px] max-w-full mx-auto space-y-4 text-left">
-        {[
-          'Company Brain — instant AI answers from your docs',
-          'Meeting Intelligence — transcription & insights',
-          'Founder OS — KPIs, OKRs, health scoring',
-          'AI Strategy Advisor — GPT-4o / Claude / Gemini',
-        ].map((f) => (
-          <div
-            key={f}
-            className="flex items-start gap-3 text-sm text-gray-400 leading-6"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 mt-[9px] shrink-0" />
-            <span>{f}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Copyright */}
-      <p className="text-xs text-gray-600 mt-14 text-center">
-        INMARTECH PVT LTD · All rights reserved
-      </p>
-
+  <div className="w-[460px] max-w-full flex flex-col items-center">
+    <div className="w-full flex justify-center items-center mb-10">
+      <img
+        src="/logo-horizontal.svg"
+        alt="Lumorius AI"
+        className="w-[420px] max-w-full h-auto object-contain block"
+      />
     </div>
+    <div className="w-full text-center mb-7">
+      <p className="text-gray-300 text-base font-semibold">
+        Business intelligence, connected.
+      </p>
+      <p className="mt-2 text-gray-400 text-sm leading-6">
+        One secure workspace for knowledge, decisions, and execution.
+      </p>
+    </div>
+    <div className="grid w-full grid-cols-2 gap-3">
+      {PLATFORM_MODULES.map(({ name, description, icon: Icon }) => (
+        <div
+          key={name}
+          className="min-h-24 rounded-xl border border-gray-800 bg-gray-900/60 p-3"
+        >
+          <Icon className="h-4 w-4 text-violet-300" aria-hidden="true" />
+          <p className="mt-2 text-xs font-semibold text-gray-100">{name}</p>
+          <p className="mt-1 text-[11px] leading-4 text-gray-400">{description}</p>
+        </div>
+      ))}
+    </div>
+    <p className="text-xs text-gray-600 mt-9 text-center">
+      INMARTECH PVT LTD · All rights reserved
+    </p>
   </div>
+</div>
 </div>
 
       {/* RIGHT — LOGIN FORM */}
@@ -129,6 +163,20 @@ export default function LoginPage() {
                 alt="Lumorius AI"
                 className="w-[210px] sm:w-[230px] h-auto max-w-full object-contain"
               />
+            </div>
+            <p className="mt-4 text-sm text-gray-400">
+              One secure workspace for your business intelligence.
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-left">
+              {PLATFORM_MODULES.map(({ name, icon: Icon }) => (
+                <div
+                  key={name}
+                  className="flex min-h-11 items-center gap-2 rounded-lg border border-gray-800 bg-gray-900/60 px-2.5 py-2"
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0 text-violet-300" aria-hidden="true" />
+                  <span className="text-[11px] leading-4 text-gray-300">{name}</span>
+                </div>
+              ))}
             </div>
           </div>
 

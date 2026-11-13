@@ -9,6 +9,7 @@ import { SecurityService } from './security.service';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { Throttle } from '@nestjs/throttler';
 import { IsString, IsOptional, IsArray, IsDateString, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -34,6 +35,7 @@ export class SecurityController {
   constructor(private readonly securityService: SecurityService) {}
 
   @Get('summary')
+  @Roles('owner', 'admin')
   @ApiOperation({ summary: 'Security dashboard summary' })
   async summary(@CurrentUser() user: JwtPayload) {
     return this.securityService.getSecuritySummary(user.organizationId!);
@@ -50,6 +52,8 @@ export class SecurityController {
   }
 
   @Post('api-keys')
+  @Roles('owner', 'admin')
+  @Throttle({ long: { ttl: 60_000, limit: 10 } })
   @ApiOperation({ summary: 'Create a new API key' })
   async createKey(
     @CurrentUser() user: JwtPayload,
@@ -59,12 +63,15 @@ export class SecurityController {
   }
 
   @Get('api-keys')
+  @Roles('owner', 'admin')
   @ApiOperation({ summary: 'List all active API keys' })
   async listKeys(@CurrentUser() user: JwtPayload) {
     return this.securityService.listApiKeys(user.organizationId!);
   }
 
   @Delete('api-keys/:id')
+  @Roles('owner', 'admin')
+  @Throttle({ long: { ttl: 60_000, limit: 10 } })
   @ApiOperation({ summary: 'Revoke an API key' })
   async revokeKey(
     @CurrentUser() user: JwtPayload,

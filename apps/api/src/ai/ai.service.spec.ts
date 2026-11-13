@@ -230,6 +230,8 @@ describe('AiService', () => {
         embedding: [0.1, 0.2, 0.3],
         query:  'What does Lumorius integrate with?',
         orgId:  'org-1',
+        userId: 'user-1',
+        role: 'member',
         limit:  5,
       } as any);
 
@@ -239,8 +241,29 @@ describe('AiService', () => {
           String(sql).includes('FROM document_chunks dc'),
         ),
       ).toBe(true);
+      const retrievalCall = db.query.mock.calls.find(([sql]) =>
+        String(sql).includes('FROM document_chunks dc'),
+      );
+      expect(retrievalCall?.[0]).toContain('team_members');
+      expect(retrievalCall?.[1]).toEqual([
+        'org-1',
+        expect.any(String),
+        false,
+        'user-1',
+        5,
+      ]);
       expect(results).toHaveLength(2);
       expect(results[0].similarity).toBeGreaterThan(results[1].similarity);
+    });
+
+    it('requires authenticated user context before requesting an embedding', async () => {
+      await expect(service.searchSimilarChunks({
+        query: 'restricted document query',
+        orgId: 'org-1',
+      } as any)).rejects.toThrow('Authenticated user context is required');
+
+      expect(mockOpenAI.embeddings.create).not.toHaveBeenCalled();
+      expect(db.query).not.toHaveBeenCalled();
     });
 
     it('returns empty array when no chunks found', async () => {
@@ -251,6 +274,8 @@ describe('AiService', () => {
         embedding: [0.1, 0.2, 0.3],
         query: 'unknown query',
         orgId: 'org-1',
+        userId: 'user-1',
+        role: 'member',
         limit: 5,
       } as any);
 

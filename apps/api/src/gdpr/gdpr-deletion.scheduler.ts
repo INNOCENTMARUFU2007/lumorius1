@@ -8,13 +8,8 @@ import { GdprService } from './gdpr.service';
  * Runs nightly at 02:00 UTC and purges every user account whose
  * 30-day deletion grace period has expired.
  *
- * Flow:
- *  1. User calls DELETE /api/v1/gdpr/me  → GdprService.requestDeletion()
- *     sets deletion_scheduled_at = NOW() + 30 days, is_active = false
- *  2. This cron wakes up, finds rows where deletion_scheduled_at <= NOW()
- *  3. GdprService.purgeScheduledDeletions() anonymises each account and
- *     removes sessions / API keys
- *  4. An audit_log row records the completion
+ * The nightly job processes due account and organization deletion requests,
+ * records per-request failures, and applies configured retention policies.
  */
 @Injectable()
 export class GdprDeletionScheduler {
@@ -32,12 +27,14 @@ export class GdprDeletionScheduler {
     try {
       const result = await this.gdprService.purgeScheduledDeletions();
 
-      if (result.purged === 0) {
-        this.logger.log('GDPR nightly deletion job — no accounts due for deletion');
-      } else {
-        this.logger.warn(
-          `GDPR nightly deletion job — purged ${result.purged} account(s)`,
+      if (result.purged || result.failed || result.organizations.purged || result.organizations.failed) {
+        this.logger.log(
+          `GDPR nightly job completed: accounts=${result.purged}, accountFailures=${result.failed}, ` +
+          `organizations=${result.organizations.purged}, organizationFailures=${result.organizations.failed}, ` +
+          `auditLogsExpired=${result.retention.auditLogs}, transcriptsExpired=${result.retention.meetingTranscripts}`,
         );
+      } else {
+        this.logger.log('GDPR nightly job completed with no due deletion requests');
       }
     } catch (err) {
       this.logger.error('GDPR nightly deletion job — unexpected error', err);

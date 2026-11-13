@@ -11,6 +11,8 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypt
 import { DatabaseService } from '../database/database.service';
 import { DocumentsService } from '../documents/documents.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { LuieEventPublisher } from '../luie/luie-event.publisher';
+import { v4 as uuidv4 } from 'uuid';
 
 type OAuthVendor =
   | 'google' | 'microsoft' | 'slack' | 'notion' | 'github' | 'jira'
@@ -120,6 +122,7 @@ export class IntegrationsService {
     private readonly db: DatabaseService,
     private readonly config: ConfigService,
     private readonly documents: DocumentsService,
+    private readonly luiePublisher: LuieEventPublisher,
   ) {}
 
   async listForUser(user: JwtPayload): Promise<IntegrationListItem[]> {
@@ -269,15 +272,22 @@ export class IntegrationsService {
     }
 
     const encrypted = this.encrypt(JSON.stringify(credentials));
-    await this.db.query(
-      `INSERT INTO integration_connections (organization_id, provider, status, account_email, encrypted_credentials, scopes, connected_by_user_id, updated_at, last_error)
-       VALUES ($1, $2, 'connected', $3, $4, ARRAY[]::text[], $5, NOW(), NULL)
-       ON CONFLICT (organization_id, provider) DO UPDATE SET
-         status = 'connected', account_email = EXCLUDED.account_email, encrypted_credentials = EXCLUDED.encrypted_credentials,
-         scopes = ARRAY[]::text[], connected_by_user_id = EXCLUDED.connected_by_user_id,
-         last_error = NULL, updated_at = NOW()`,
-      [user.organizationId, provider, accountName, encrypted, user.sub],
-    );
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO integration_connections (organization_id, provider, status, account_email, encrypted_credentials, scopes, connected_by_user_id, updated_at, last_error)
+         VALUES ($1, $2, 'connected', $3, $4, ARRAY[]::text[], $5, NOW(), NULL)
+         ON CONFLICT (organization_id, provider) DO UPDATE SET
+           status = 'connected', account_email = EXCLUDED.account_email, encrypted_credentials = EXCLUDED.encrypted_credentials,
+           scopes = ARRAY[]::text[], connected_by_user_id = EXCLUDED.connected_by_user_id,
+           last_error = NULL, updated_at = NOW()`,
+        [user.organizationId, provider, accountName, encrypted, user.sub],
+      );
+      await client.query(
+        `INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata)
+         VALUES ($1, $2, 'security.integration.configured', 'integration', $3, $4)`,
+        [user.organizationId, user.sub, provider, JSON.stringify({ provider })],
+      );
+    });
     return { configured: true, provider };
   }
 
@@ -285,10 +295,22 @@ export class IntegrationsService {
     this.assertCanManage(user.role);
     if (provider === 'stripe') throw new BadRequestException('Lumorius platform Stripe billing cannot be disconnected from the integrations page.');
     if (!CONNECTORS.some((item) => item.id === provider)) throw new BadRequestException('Unknown integration.');
-    const deleted = await this.db.query(
-      `DELETE FROM integration_connections WHERE organization_id = $1 AND provider = $2 RETURNING id`,
-      [user.organizationId, provider],
-    );
+    const deleted = await this.db.transaction(async (client) => {
+      const result = await client.query(
+        `DELETE FROM integration_connections
+         WHERE organization_id = $1 AND provider = $2
+         RETURNING id`,
+        [user.organizationId, provider],
+      );
+      if (result.rowCount === 1) {
+        await client.query(
+          `INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata)
+           VALUES ($1, $2, 'security.integration.disconnected', 'integration', $3, $4)`,
+          [user.organizationId, user.sub, provider, JSON.stringify({ provider })],
+        );
+      }
+      return result;
+    });
     return { disconnected: deleted.rowCount === 1, provider };
   }
 
@@ -324,15 +346,22 @@ export class IntegrationsService {
       ? tokenPayload.scope.split(/[\s,]+/).filter(Boolean)
       : (connector.scopes ?? []);
     const encrypted = this.encrypt(JSON.stringify(tokenPayload));
-    await this.db.query(
-      `INSERT INTO integration_connections (organization_id, provider, status, account_email, encrypted_credentials, scopes, connected_by_user_id, updated_at, last_error)
-       VALUES ($1, $2, 'connected', $3, $4, $5, $6, NOW(), NULL)
-       ON CONFLICT (organization_id, provider) DO UPDATE SET
-         status = 'connected', account_email = EXCLUDED.account_email, encrypted_credentials = EXCLUDED.encrypted_credentials,
-         scopes = EXCLUDED.scopes, connected_by_user_id = EXCLUDED.connected_by_user_id,
-         last_error = NULL, updated_at = NOW()`,
-      [savedState.organization_id, provider, email, encrypted, scopes, savedState.user_id],
-    );
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO integration_connections (organization_id, provider, status, account_email, encrypted_credentials, scopes, connected_by_user_id, updated_at, last_error)
+         VALUES ($1, $2, 'connected', $3, $4, $5, $6, NOW(), NULL)
+         ON CONFLICT (organization_id, provider) DO UPDATE SET
+           status = 'connected', account_email = EXCLUDED.account_email, encrypted_credentials = EXCLUDED.encrypted_credentials,
+           scopes = EXCLUDED.scopes, connected_by_user_id = EXCLUDED.connected_by_user_id,
+           last_error = NULL, updated_at = NOW()`,
+        [savedState.organization_id, provider, email, encrypted, scopes, savedState.user_id],
+      );
+      await client.query(
+        `INSERT INTO audit_logs (organization_id, user_id, action, resource_type, resource_id, metadata)
+         VALUES ($1, $2, 'security.integration.connected', 'integration', $3, $4)`,
+        [savedState.organization_id, savedState.user_id, provider, JSON.stringify({ provider })],
+      );
+    });
     return this.resultRedirect(provider, 'connected');
   }
 
@@ -378,12 +407,30 @@ export class IntegrationsService {
         );
         imported++;
       }
-      await this.db.query(
-        `UPDATE integration_connections SET status = 'connected', last_synced_at = NOW(), last_error = NULL, updated_at = NOW()
-         WHERE organization_id = $1 AND provider = $2`,
-        [user.organizationId, provider],
-      );
-      return { provider, fetched: items.length, imported, skipped, unsupported, lastSyncedAt: new Date().toISOString() };
+      const syncId = uuidv4();
+      const lastSyncedAt = new Date();
+      await this.db.transaction(async (client) => {
+        const updated = await client.query(
+          `UPDATE integration_connections
+              SET status = 'connected', last_synced_at = $3, last_error = NULL, updated_at = NOW()
+            WHERE organization_id = $1 AND provider = $2
+            RETURNING provider`,
+          [user.organizationId, provider, lastSyncedAt],
+        );
+        if (!updated.rows[0]) {
+          throw new ServiceUnavailableException('The integration connection disappeared before sync completion could be recorded.');
+        }
+        await this.luiePublisher.append(client, {
+          organizationId: user.organizationId,
+          eventKey: `integration.sync_completed:${provider}:${syncId}`,
+          eventType: 'integration.sync_completed',
+          aggregateType: 'integration_sync',
+          aggregateId: syncId,
+          actorId: user.sub,
+          payload: { provider, fetched: items.length, imported, skipped, unsupported },
+        }, ['luie.legacy-domain-bridge']);
+      });
+      return { provider, fetched: items.length, imported, skipped, unsupported, lastSyncedAt: lastSyncedAt.toISOString() };
     } catch (error) {
       await this.db.query(
         `UPDATE integration_connections SET status = 'error', last_error = $3, updated_at = NOW()

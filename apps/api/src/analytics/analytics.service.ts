@@ -51,6 +51,10 @@ export class AnalyticsService {
           docStats,
           meetingStats,
           urgentTasks: urgentTasks.rows,
+        }, {
+          organizationId,
+          userId,
+          feature: 'risk_analysis',
         })
       : { risks: [], opportunities: [] };
 

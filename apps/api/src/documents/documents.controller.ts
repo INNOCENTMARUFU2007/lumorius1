@@ -1,4 +1,4 @@
-
+﻿
 import {
   Controller,
   Get,
@@ -58,6 +58,7 @@ export class DocumentsController {
       user.sub,
       {
         teamId: body.teamId,
+        role: user.role,
         tags: body.tags
           ? body.tags
               .split(',')
@@ -69,29 +70,20 @@ export class DocumentsController {
   }
 
   @Get()
-  @ApiOperation({
-    summary: 'List documents in Company Brain',
-  })
   findAll(
     @CurrentUser() user: JwtPayload,
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('type') type?: string,
     @Query('teamId') teamId?: string,
-    @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
+    @Query('page') page?: number,
+    @Query('pageSize') pageSize?: number,
   ) {
-    return this.documentsService.findAll(
-      user.organizationId,
-      {
-        search,
-        status,
-        type,
-        teamId,
-        page,
-        pageSize,
-      },
-    );
+    return this.documentsService.findAll(user.organizationId, {
+      search, status, type, teamId, page, pageSize,
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
   @Get('search-facets')
@@ -104,116 +96,55 @@ export class DocumentsController {
   ) {
     return this.documentsService.getSearchFacets(
       user.organizationId,
+      { userId: user.sub, role: user.role },
     );
   }
 
-  @Get(':id')
-  @ApiOperation({
-    summary: 'Get a document by ID',
-  })
-  findOne(
-    @CurrentUser() user: JwtPayload,
-    @Param('id') id: string,
-  ) {
-    return this.documentsService.findById(
-      id,
-      user.organizationId,
-    );
+  findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.documentsService.findById(id, user.organizationId, {
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
-  @Get(':id/download')
-  @ApiOperation({
-    summary: 'Get a presigned download URL',
-  })
-  getDownloadUrl(
-    @CurrentUser() user: JwtPayload,
-    @Param('id') id: string,
-  ) {
-    return this.documentsService.getDownloadUrl(
-      id,
-      user.organizationId,
-    );
+  getDownloadUrl(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.documentsService.getDownloadUrl(id, user.organizationId, {
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
-  @Delete(':id')
-  @ApiOperation({
-    summary: 'Delete a document',
-  })
-  delete(
-    @CurrentUser() user: JwtPayload,
-    @Param('id') id: string,
-  ) {
-    return this.documentsService.delete(
-      id,
-      user.organizationId,
-    );
+  delete(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.documentsService.delete(id, user.organizationId, {
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
   @Post('search')
-  @ApiOperation({
-    summary: 'Semantic search across documents',
-  })
   search(
     @CurrentUser() user: JwtPayload,
-    @Body()
-    body: {
-      query: string;
-      documentIds?: string[];
-      topK?: number;
-      type?: string;
-      tag?: string;
-      createdAfter?: string;
-      teamId?: string;
-      myHistory?: boolean;
-    },
+    @Body() body: { query: string; documentIds?: string[]; topK?: number; teamId?: string },
   ) {
-    return this.documentsService.search(
-      user.organizationId,
-      body.query,
-      {
-        documentIds: body.documentIds,
-        topK: body.topK,
-        type: body.type,
-        tag: body.tag,
-        createdAfter: body.createdAfter,
-        teamId: body.teamId,
-        uploadedById: body.myHistory
-          ? user.sub
-          : undefined,
-      },
-    );
+    return this.documentsService.search(user.organizationId, body.query, {
+      documentIds: body.documentIds,
+      topK: body.topK,
+      teamId: body.teamId,
+      userId: user.sub,
+      role: user.role,
+    });
   }
 
   @Post('ask')
-  @ApiOperation({
-    summary: 'Ask a question about your documents (RAG)',
-  })
   ask(
     @CurrentUser() user: JwtPayload,
-    @Body()
-    body: {
-      question: string;
-      documentIds?: string[];
-      teamId?: string;
-      type?: string;
-      tag?: string;
-      createdAfter?: string;
-      myHistory?: boolean;
-    },
+    @Body() body: { question: string; documentIds?: string[]; teamId?: string },
   ) {
-    return this.documentsService.ask(
-      user.organizationId,
-      body.question,
-      {
-        documentIds: body.documentIds,
-        teamId: body.teamId,
-        type: body.type,
-        tag: body.tag,
-        createdAfter: body.createdAfter,
-        uploadedById: body.myHistory
-          ? user.sub
-          : undefined,
-      },
-    );
+    return this.documentsService.ask(user.organizationId, body.question, {
+      documentIds: body.documentIds,
+      teamId: body.teamId,
+      userId: user.sub,
+      role: user.role,
+    });
   }
 }

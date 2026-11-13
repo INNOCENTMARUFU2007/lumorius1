@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Patch,
+  Post,
   Delete,
   Param,
   Query,
@@ -21,6 +22,8 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AdminService } from './admin.service';
+import { AiFinancialService } from '../ai/ai-financial.service';
+import type { CreateAiPricingInput } from '../ai/ai-financial.service';
 import { PlatformOwnerGuard } from './platform-owner.guard';
 
 @ApiTags('admin')
@@ -28,7 +31,10 @@ import { PlatformOwnerGuard } from './platform-owner.guard';
 @UseGuards(JwtAuthGuard, PlatformOwnerGuard)
 @Controller({ path: 'admin', version: '1' })
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly aiFinancialService: AiFinancialService,
+  ) {}
 
   // ── Platform Stats ───────────────────────────────────────────
 
@@ -170,5 +176,25 @@ export class AdminController {
       Number(page),
       Number(limit),
     );
+  }
+  // ── AI provider pricing registry ─────────────────────────────
+
+  @Get('ai-pricing')
+  @ApiOperation({ summary: 'List immutable, effective-dated AI provider pricing rates' })
+  listAiPricing(
+    @Query('provider') provider?: string,
+    @Query('model') model?: string,
+    @Query('operationType') operationType?: string,
+  ) {
+    return this.aiFinancialService.listPricing({ provider, model, operationType });
+  }
+
+  @Post('ai-pricing')
+  @ApiOperation({ summary: 'Create a new effective-dated AI pricing version' })
+  createAiPricing(
+    @Body() body: CreateAiPricingInput,
+    @CurrentUser() admin: { id: string },
+  ) {
+    return this.aiFinancialService.createPricing(body, admin?.id);
   }
 }

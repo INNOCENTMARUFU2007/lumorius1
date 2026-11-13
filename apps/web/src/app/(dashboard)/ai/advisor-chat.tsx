@@ -37,11 +37,20 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   created_at: string;
+  sources?: ChatSource[];
+}
+
+interface ChatSource {
+  citationId: string;
+  sourceType: string;
+  title: string;
+  excerpt: string;
 }
 
 interface ChatResponse {
   conversationId?: string;
   response: string;
+  sources: ChatSource[];
 }
 
 type DataRecord = Record<string, unknown>;
@@ -164,6 +173,26 @@ function normalizeMessages(value: unknown): ChatMessage[] {
         typeof item.created_at === 'string'
           ? item.created_at
           : '',
+      sources: normalizeSources(item.sources),
+    }));
+}
+
+function normalizeSources(value: unknown): ChatSource[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter(isRecord)
+    .filter((item) =>
+      typeof item.citationId === 'string' &&
+      typeof item.sourceType === 'string' &&
+      typeof item.title === 'string' &&
+      typeof item.excerpt === 'string',
+    )
+    .map((item) => ({
+      citationId: item.citationId as string,
+      sourceType: item.sourceType as string,
+      title: item.title as string,
+      excerpt: item.excerpt as string,
     }));
 }
 
@@ -203,6 +232,7 @@ function normalizeChatResponse(
   return {
     conversationId,
     response: responseText,
+    sources: normalizeSources(payload.sources),
   };
 }
 
@@ -324,6 +354,7 @@ export default function AdvisorChat() {
           role: 'assistant',
           content: data.response,
           created_at: new Date().toISOString(),
+          sources: data.sources,
         },
       ]);
 
@@ -542,8 +573,8 @@ export default function AdvisorChat() {
                 </p>
 
                 <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-                  Discuss strategy, priorities, risks and opportunities.
-                  This chat is separate from document-grounded Ask AI search.
+                  Discuss strategy, priorities, risks and opportunities with
+                  permission-scoped company evidence. Sources appear beneath replies.
                 </p>
 
                 <div className="mt-4 flex flex-wrap justify-center gap-2">
@@ -595,15 +626,34 @@ export default function AdvisorChat() {
                 )}
               </span>
 
-              <p
-                className={`max-w-[82%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm leading-5 ${
+              <div className="max-w-[82%] min-w-0">
+                <p
+                  className={`whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm leading-5 ${
                   message.role === 'user'
                     ? 'rounded-tr-sm bg-brand-500 text-white'
                     : 'rounded-tl-sm bg-muted text-foreground'
-                }`}
-              >
-                {message.content}
-              </p>
+                  }`}
+                >
+                  {message.content}
+                </p>
+                {message.role === 'assistant' && Boolean(message.sources?.length) && (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Evidence
+                    </p>
+                    {message.sources?.map((source) => (
+                      <details key={source.citationId} className="rounded-lg border border-border px-2.5 py-1.5 text-xs">
+                        <summary className="cursor-pointer text-muted-foreground">
+                          [{source.citationId}] {source.title} · {source.sourceType.replace(/_/g, ' ')}
+                        </summary>
+                        <p className="mt-2 whitespace-pre-wrap text-foreground">
+                          {source.excerpt}
+                        </p>
+                      </details>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
 

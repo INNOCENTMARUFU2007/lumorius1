@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { ErrorBoundary } from '@/components/error-boundary';
+import { LuieRefreshListener } from '@/components/layout/luie-refresh-listener';
 import { getAccessToken } from '@/lib/auth';
 
 export default function DashboardLayout({
@@ -63,6 +64,7 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+      <LuieRefreshListener />
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header user={user} />

@@ -102,7 +102,7 @@ secrets:
 
 livenessProbe:
   httpGet:
-    path: /api/health
+    path: /api/v1/health/live
     port: 5000
   initialDelaySeconds: 30
   periodSeconds: 10
@@ -110,7 +110,7 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /api/health/ready
+    path: /api/v1/health/ready
     port: 5000
   initialDelaySeconds: 10
   periodSeconds: 5

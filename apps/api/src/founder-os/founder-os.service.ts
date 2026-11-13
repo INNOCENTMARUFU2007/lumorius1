@@ -639,7 +639,7 @@ export class FounderOsService {
 
   async getDashboard(
     organizationId: string,
-    _userId: string,
+    userId: string,
   ) {
     const currentQ =
       `Q${Math.ceil((new Date().getMonth() + 1) / 3)}`;
@@ -752,6 +752,7 @@ export class FounderOsService {
 
       this.generateAiInsights(
         organizationId,
+        userId,
         healthNumbers,
       ),
     ]);
@@ -800,6 +801,7 @@ export class FounderOsService {
 
   private async generateAiInsights(
     organizationId: string,
+    userId: string,
     healthScore: Record<string, number>,
   ) {
     const entries = Object.entries(healthScore);
@@ -849,7 +851,11 @@ The type must be one of: strength, warning, opportunity.
           role: 'user',
           content: prompt,
         },
-      ]);
+      ], {
+        organizationId,
+        userId,
+        feature: 'founder_os_insights',
+      });
 
       if (
         typeof result !== 'string' ||

@@ -85,7 +85,7 @@ export class AuthController {
 
   @Post('register')
   @Throttle({
-    default: {
+    long: {
       ttl: 60000,
       limit: 5,
     },
@@ -102,9 +102,9 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({
-    default: {
+    long: {
       ttl: 60000,
-      limit: 10,
+      limit: 5,
     },
   })
   @ApiOperation({
@@ -137,7 +137,7 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @Throttle({
-    default: {
+    long: {
       ttl: 60000,
       limit: 30,
     },
@@ -199,7 +199,7 @@ export class AuthController {
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
   @Throttle({
-    default: {
+    long: {
       ttl: 300000,
       limit: 3,
     },
@@ -220,7 +220,7 @@ export class AuthController {
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @Throttle({
-    default: {
+    long: {
       ttl: 300000,
       limit: 3,
     },
@@ -253,7 +253,7 @@ export class AuthController {
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
   @Throttle({
-    default: {
+    long: {
       ttl: 60000,
       limit: 5,
     },
@@ -291,7 +291,7 @@ export class AuthController {
 
   @Post('magic-link')
   @Throttle({
-    default: {
+    long: {
       ttl: 300000,
       limit: 3,
     },

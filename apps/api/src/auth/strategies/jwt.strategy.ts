@@ -91,6 +91,11 @@ export class JwtStrategy extends PassportStrategy(
       }
     }
 
-    return payload;
+    return {
+      ...payload,
+      email: String(user.email),
+      organizationId: user.organization_id as string,
+      role: String(user.role),
+    };
   }
 }

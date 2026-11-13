@@ -4,13 +4,17 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagg
 import { AiService } from './ai.service';
 import { AiQuotaGuard } from './guards/ai-quota.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { KnowledgeRetrievalService } from '../knowledge/knowledge-retrieval.service';
 
 @ApiTags('ai')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
 @Controller('ai')
 export class AiController {
-  constructor(private readonly aiService: AiService) {}
+  constructor(
+    private readonly aiService: AiService,
+    private readonly retrievalService: KnowledgeRetrievalService,
+  ) {}
 
   @Post('chat')
   @UseGuards(AiQuotaGuard)
@@ -21,9 +25,32 @@ export class AiController {
     @CurrentUser() user: JwtPayload,
     @Body() body: { message: string; conversationId?: string },
   ) {
+    return this.sendGroundedMessage(user, body);
+  }
+
+  private async sendGroundedMessage(
+    user: JwtPayload,
+    body: { message: string; conversationId?: string },
+  ) {
+    const sources = await this.retrieveSources(user, body.message);
     return this.aiService.sendMessage(
-      user.sub, user.organizationId, body.message, body.conversationId,
+      user.sub,
+      user.organizationId,
+      body.message,
+      body.conversationId,
+      { sources },
     );
+  }
+
+  private async retrieveSources(user: JwtPayload, query: string) {
+    const intelligence = await this.retrievalService.retrieveUnified({
+      organizationId: user.organizationId,
+      userId: user.sub,
+      role: user.role,
+      query,
+      limit: 6,
+    });
+    return intelligence.sources;
   }
 
   @Get('conversations')
@@ -43,13 +70,18 @@ export class AiController {
   @ApiOperation({ summary: 'Get strategic analysis from AI advisor' })
   @ApiResponse({ status: 429, description: 'Burst rate limit hit' })
   @ApiResponse({ status: 402, description: 'Monthly AI quota exhausted' })
-  strategyAnalyze(
+  async strategyAnalyze(
     @CurrentUser() user: JwtPayload,
     @Body() body: { question: string; context?: Record<string, unknown> },
   ) {
-    return this.aiService.strategyAdvisor(
-      user.organizationId, body.question, body.context ?? {},
+    const sources = await this.retrieveSources(user, body.question);
+    const result = await this.aiService.strategyAdvisor(
+      user.organizationId,
+      body.question,
+      { ...body.context, sources },
+      user.sub,
     );
+    return { ...result, sources };
   }
 
   @Post('strategy/risks-opportunities')
@@ -57,11 +89,20 @@ export class AiController {
   @ApiOperation({ summary: 'Detect risks and opportunities from business data' })
   @ApiResponse({ status: 429, description: 'Burst rate limit hit' })
   @ApiResponse({ status: 402, description: 'Monthly AI quota exhausted' })
-  detectRisksOpportunities(
+  async detectRisksOpportunities(
     @CurrentUser() user: JwtPayload,
     @Body() body: { data: Record<string, unknown> },
   ) {
-    return this.aiService.detectRisksAndOpportunities(body.data);
+    const sources = await this.retrieveSources(user, JSON.stringify(body.data).slice(0, 2000));
+    const result = await this.aiService.detectRisksAndOpportunities({
+      ...body.data,
+      intelligence_sources: sources,
+    }, {
+      organizationId: user.organizationId,
+      userId: user.sub,
+      feature: 'risk_analysis',
+    });
+    return { ...result, sources };
   }
 
   @Post('reports/weekly')
@@ -69,14 +110,19 @@ export class AiController {
   @ApiOperation({ summary: 'Generate AI weekly business report' })
   @ApiResponse({ status: 429, description: 'Burst rate limit hit' })
   @ApiResponse({ status: 402, description: 'Monthly AI quota exhausted' })
-  generateWeeklyReport(
+  async generateWeeklyReport(
     @CurrentUser() user: JwtPayload,
     @Body() body: { data: Record<string, unknown> },
   ) {
-   return this.aiService.generateWeeklyReport(body.data, {
-  organizationId: user.organizationId,
-  userId: user.sub,
-  feature: 'weekly_report',
-});
+    const sources = await this.retrieveSources(user, JSON.stringify(body.data).slice(0, 2000));
+    const result = await this.aiService.generateWeeklyReport({
+      ...body.data,
+      intelligence_sources: sources,
+    }, {
+      organizationId: user.organizationId,
+      userId: user.sub,
+      feature: 'weekly_report',
+    });
+    return { ...result, sources };
   }
 }

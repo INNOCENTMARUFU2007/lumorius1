@@ -23,6 +23,7 @@ import {
 } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('organizations')
 @ApiBearerAuth()
@@ -82,6 +83,7 @@ export class OrganizationsController {
 
   @Post('members/invite')
   @Roles('manager')
+  @Throttle({ long: { ttl: 60 * 60 * 1000, limit: 20 } })
   @ApiOperation({
     summary: 'Invite a member to the organization',
   })
@@ -221,6 +223,7 @@ export class OrganizationsController {
   // Preserve the existing invitation endpoint.
   @Post('me/invite')
   @Roles('manager')
+  @Throttle({ long: { ttl: 60 * 60 * 1000, limit: 20 } })
   @ApiOperation({
     summary: 'Invite a user to the organization',
   })
