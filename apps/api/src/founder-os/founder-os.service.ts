@@ -1,11 +1,14 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { v4 as uuidv4 } from 'uuid';
 import type { PoolClient } from 'pg';
 
 import { DatabaseService, SqlRunner } from '../database/database.service';
 import { AiService } from '../ai/ai.service';
+import { ExecutiveAnalyticsService } from '../executive-intelligence/executive-analytics.service';
+import { KEY_RESULT_SOURCES, quarterPeriod, sourceValue } from './key-result-sources';
 
 type HealthScore = {
   overall: number | null;
@@ -31,7 +34,8 @@ export class FounderOsService {
   constructor(
     private readonly db: DatabaseService,
     private readonly aiService: AiService,
-    private readonly eventEmitter: EventEmitter2
+    private readonly eventEmitter: EventEmitter2,
+    private readonly executive: ExecutiveAnalyticsService,
   ) {}
 
   private async readSection<T>(label: string, result: Promise<T>): Promise<T | null> {
@@ -45,11 +49,128 @@ export class FounderOsService {
 
   // ── OKRs ────────────────────────────────────────────────────
 
+  /**
+   * Refreshes key results linked to organisation metrics (Executive Intelligence and
+   * workspace activity) and rolls their progress up to each objective. Skips work when
+   * everything was synced in the last minute unless forced.
+   */
+  async syncLinkedKeyResults(organizationId: string, force = false): Promise<{ synced: number }> {
+    const linked = await this.db.query<{ id: string; data_source: string; source_currency: string | null; synced_at: Date | null; quarter: string; year: number }>(
+      `SELECT k.id, k.data_source, NULLIF(BTRIM(k.source_currency), '') AS source_currency, k.synced_at, o.quarter, o.year
+         FROM key_results k JOIN objectives o ON o.id = k.objective_id
+        WHERE o.organization_id = $1 AND k.data_source <> 'manual' AND o.status <> 'completed'`,
+      [organizationId],
+    );
+    if (!linked.rows.length) return { synced: 0 };
+    const fresh = Date.now() - 60_000;
+    if (!force && linked.rows.every((row) => row.synced_at && new Date(row.synced_at).getTime() > fresh)) return { synced: 0 };
+
+    const dashboards = new Map<string, Awaited<ReturnType<ExecutiveAnalyticsService['dashboardForOrganization']>> | null>();
+    let synced = 0;
+    for (const row of linked.rows) {
+      const source = KEY_RESULT_SOURCES[row.data_source];
+      const period = quarterPeriod(row.quarter, row.year);
+      if (!source || !period) continue;
+      const key = `${period.start}|${period.end}`;
+      if (!dashboards.has(key)) {
+        dashboards.set(key, await this.executive.dashboardForOrganization(organizationId, period.start, period.end).catch((error: unknown) => {
+          this.logger.warn(`Goal sync could not read metrics: ${error instanceof Error ? error.message : String(error)}`);
+          return null;
+        }));
+      }
+      const dashboard = dashboards.get(key);
+      if (!dashboard) continue;
+      const value = sourceValue(dashboard.metrics, source, row.source_currency);
+      await this.db.query(
+        `UPDATE key_results SET current_value = COALESCE($2::numeric, current_value), source_available = ($2::numeric IS NOT NULL),
+                synced_at = NOW(), updated_at = NOW() WHERE id = $1`,
+        [row.id, value === null ? null : Math.max(-9_999_999_999.99, Math.min(9_999_999_999.99, value))],
+      );
+      synced += 1;
+    }
+    await this.rollUpObjectiveProgress(organizationId);
+    return { synced };
+  }
+
+  /** Objective progress is the average of its key results' progress. */
+  private async rollUpObjectiveProgress(organizationId: string, objectiveId?: string) {
+    await this.db.query(
+      `UPDATE objectives o SET progress = ROUND(sub.progress, 2), updated_at = NOW()
+         FROM (SELECT k.objective_id, AVG(k.progress) AS progress FROM key_results k GROUP BY k.objective_id) sub
+        WHERE sub.objective_id = o.id AND o.organization_id = $1 AND ($2::uuid IS NULL OR o.id = $2::uuid)
+          AND o.progress IS DISTINCT FROM ROUND(sub.progress, 2)`,
+      [organizationId, objectiveId ?? null],
+    );
+  }
+
+  /** Current value of a source for an objective's quarter (null when there is no data yet). */
+  private async currentSourceValue(organizationId: string, objectiveId: string, dataSource: string, currency: string | null): Promise<number | null> {
+    const source = KEY_RESULT_SOURCES[dataSource];
+    const objective = (await this.db.query<{ quarter: string; year: number }>(
+      'SELECT quarter, year FROM objectives WHERE id = $1 AND organization_id = $2', [objectiveId, organizationId],
+    )).rows[0];
+    if (!source || !objective) return null;
+    const period = quarterPeriod(objective.quarter, objective.year);
+    if (!period) return null;
+    const dashboard = await this.executive.dashboardForOrganization(organizationId, period.start, period.end).catch(() => null);
+    return dashboard ? sourceValue(dashboard.metrics, source, currency) : null;
+  }
+
+  /** Checks a requested data source and who may use it. Returns the normalised currency. */
+  private assertSource(role: string, dataSource: string, currency?: string | null): string | null {
+    const source = KEY_RESULT_SOURCES[dataSource];
+    if (!source) throw new BadRequestException('Choose a supported data source for this key result.');
+    if (!source.financial) return null;
+    if (!['owner', 'admin'].includes(String(role).toLowerCase())) {
+      throw new ForbiddenException('Only workspace owners and administrators can link goals to financial data.');
+    }
+    const code = String(currency ?? '').trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(code)) throw new BadRequestException('Choose the currency to track, for example USD.');
+    return code;
+  }
+
+  /** Link an existing key result to live data (or back to manual updates). */
+  async linkKeyResult(organizationId: string, role: string, krId: string, dataSource: string, currency?: string | null) {
+    const existing = (await this.db.query<{ objective_id: string }>(
+      `SELECT k.objective_id FROM key_results k JOIN objectives o ON o.id = k.objective_id WHERE k.id = $1 AND o.organization_id = $2`,
+      [krId, organizationId],
+    )).rows[0];
+    if (!existing) throw new NotFoundException('Key result not found.');
+    const code = dataSource === 'manual' ? null : this.assertSource(role, dataSource, currency);
+    const source = KEY_RESULT_SOURCES[dataSource];
+    await this.db.query(
+      `UPDATE key_results SET data_source = $2::text, source_currency = $3::text, synced_at = NULL, source_available = NULL,
+              metric_type = CASE WHEN $4::boolean THEN 'currency' ELSE metric_type END,
+              unit = CASE WHEN $3::text IS NOT NULL THEN $3::text ELSE unit END, updated_at = NOW()
+        WHERE id = $1`,
+      [krId, dataSource, code, Boolean(source?.financial)],
+    );
+    if (dataSource !== 'manual') await this.syncLinkedKeyResults(organizationId, true);
+    await this.rollUpObjectiveProgress(organizationId, existing.objective_id);
+    return (await this.db.query('SELECT * FROM key_results WHERE id = $1', [krId])).rows[0];
+  }
+
+  /** Keeps linked goals current even when nobody opens Founder OS. */
+  @Cron('0 */30 * * * *')
+  async syncAllLinkedKeyResults() {
+    try {
+      const orgs = await this.db.query<{ organization_id: string }>(
+        `SELECT DISTINCT o.organization_id FROM key_results k JOIN objectives o ON o.id = k.objective_id
+          WHERE k.data_source <> 'manual' AND o.status <> 'completed' LIMIT 200`,
+      );
+      for (const row of orgs.rows) await this.syncLinkedKeyResults(row.organization_id, true).catch(() => undefined);
+    } catch (error) {
+      this.logger.warn(`Linked goal sync skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async getOkrs(
     organizationId: string,
     quarter?: string,
     year?: number,
   ) {
+    await this.syncLinkedKeyResults(organizationId).catch((error: unknown) =>
+      this.logger.warn(`Linked goal sync failed: ${error instanceof Error ? error.message : String(error)}`));
     const currentYear = year ?? new Date().getFullYear();
     const currentQ =
       quarter ?? `Q${Math.ceil((new Date().getMonth() + 1) / 3)}`;
@@ -192,11 +313,20 @@ export class FounderOsService {
       targetValue: number;
       startValue?: number | null;
       unit?: string;
+      dataSource?: string;
+      sourceCurrency?: string;
     },
     client?: PoolClient,
+    role = 'member',
   ) {
     const id = uuidv4();
     const runner: SqlRunner = client ?? this.db;
+    const dataSource = dto.dataSource && dto.dataSource !== 'manual' ? dto.dataSource : 'manual';
+    const currency = dataSource === 'manual' ? null : this.assertSource(role, dataSource, dto.sourceCurrency);
+    const source = KEY_RESULT_SOURCES[dataSource];
+    // A linked key result starts from today's value unless a baseline was given.
+    const live = dataSource === 'manual' || client ? null : await this.currentSourceValue(organizationId, objectiveId, dataSource, currency);
+    const start = dto.startValue === undefined || dto.startValue === null ? (live ?? (dto.startValue === null ? null : 0)) : dto.startValue;
     const result = await runner.query(
       `INSERT INTO key_results (
          id,
@@ -206,24 +336,34 @@ export class FounderOsService {
          target_value,
          start_value,
          current_value,
-         unit
+         unit,
+         data_source,
+         source_currency,
+         synced_at,
+         source_available
        )
-       SELECT $1, o.id, $3, $4, $5, $6, $6, $7 FROM objectives o
+       SELECT $1, o.id, $3, $4, $5, $6, COALESCE($9::numeric, $6), $7, $10::text, $11::text,
+              CASE WHEN $10::text = 'manual' THEN NULL ELSE NOW() END, CASE WHEN $10::text = 'manual' THEN NULL ELSE $9::numeric IS NOT NULL END
+       FROM objectives o
        WHERE o.id = $2 AND o.organization_id = $8
        RETURNING *`,
       [
         id,
         objectiveId,
         dto.title,
-        dto.metricType ?? 'percentage',
+        source?.financial ? 'currency' : dto.metricType ?? 'percentage',
         dto.targetValue,
-        dto.startValue === undefined ? 0 : dto.startValue,
-        dto.unit ?? null,
+        start,
+        currency ?? dto.unit ?? null,
         organizationId,
+        live,
+        dataSource,
+        currency,
       ],
     );
 
     if (!result.rows[0]) throw new NotFoundException('Objective not found.');
+    if (!client) await this.rollUpObjectiveProgress(organizationId, objectiveId);
     return result.rows[0];
   }
 
@@ -233,13 +373,22 @@ export class FounderOsService {
     currentValue: number,
     baseline?: number,
   ) {
+    const linked = (await this.db.query<{ data_source: string }>(
+      `SELECT k.data_source FROM key_results k JOIN objectives o ON o.id = k.objective_id WHERE k.id = $1 AND o.organization_id = $2`,
+      [krId, organizationId],
+    )).rows[0];
+    if (linked && linked.data_source !== 'manual' && baseline === undefined) {
+      throw new BadRequestException('This key result updates automatically from your data. Switch it to manual updates to type a value.');
+    }
     const result = await this.db.query(
-      `UPDATE key_results k SET current_value = $1, start_value = COALESCE($4::numeric,k.start_value), updated_at = NOW()
+      `UPDATE key_results k SET current_value = CASE WHEN k.data_source = 'manual' THEN $1 ELSE k.current_value END,
+              start_value = COALESCE($4::numeric,k.start_value), updated_at = NOW()
        FROM objectives o WHERE k.id = $2 AND k.objective_id = o.id AND o.organization_id = $3
        RETURNING k.*`,
       [currentValue, krId, organizationId, baseline ?? null],
     );
     if (!result.rows[0]) throw new NotFoundException('Key result not found.');
+    await this.rollUpObjectiveProgress(organizationId, String(result.rows[0].objective_id));
     return result.rows[0];
   }
 

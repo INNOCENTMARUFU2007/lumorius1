@@ -22,7 +22,7 @@ const CATEGORY_QUERY_ROOTS: Record<string, string[]> = {
   projects: ['projects', 'tasks', 'project-team-options'],
   workflows: ['workflows', 'workflow-runs'],
   decisions: ['decisions', 'chief-of-staff'],
-  'executive-intelligence': ['executive-intelligence', 'analytics'],
+  'executive-intelligence': ['executive-intelligence', 'analytics', 'founder-os'],
   integrations: ['integrations'],
   company: ['notifications', 'chief-of-staff'],
 };

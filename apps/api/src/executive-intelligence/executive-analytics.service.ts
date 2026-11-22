@@ -927,6 +927,14 @@ export class ExecutiveAnalyticsService {
   }
 
   /**
+   * Server-side metrics for goal tracking (Founder OS linked key results). Not exposed
+   * over HTTP; callers decide who may link a goal to financial data.
+   */
+  dashboardForOrganization(organizationId: string, start: string, end: string): Promise<ExecutiveDashboardResult> {
+    return this.getDashboard({ organizationId, userId: 'goal-sync', role: 'owner' }, start, end);
+  }
+
+  /**
    * Every KPI target with its actual over the target's own period (to date while the
    * period is running), computed by the same engine as the dashboard. Analytics and
    * Executive Intelligence both read this, so they always agree.

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
+import { costLine } from '../executive-intelligence/financial-digest.service';
 
 @Injectable()
 export class MarketingAnalyticsService {
@@ -88,6 +89,63 @@ export class MarketingAnalyticsService {
       CASE WHEN customers_count=records THEN customers END AS customers,
       CASE WHEN leads_count=records THEN leads END AS leads
     FROM aggregated ORDER BY through DESC, campaign,channel,segment,currency LIMIT 51`,[org,duration]);
-    return { days:duration,items:result.rows.slice(0,50),truncated:result.rows.length>50 };
+    return { days:duration,items:result.rows.slice(0,50),truncated:result.rows.length>50, acquisition: await this.acquisition(org, duration) };
+  }
+
+  /**
+   * Marketing spend recorded as customer-acquisition transactions in Executive Intelligence,
+   * per currency: the selected period, a 12-month trend, the largest lines and the share of revenue.
+   */
+  async acquisition(org: string, days: number) {
+    const [totals, monthly, lines] = await Promise.all([
+      this.db.query<{ currency: string; spend: string; records: number; revenue: string | null }>(
+        `SELECT BTRIM(currency) AS currency,
+                COALESCE(SUM(amount) FILTER (WHERE transaction_type = 'acquisition_cost'), 0)::numeric AS spend,
+                COUNT(*) FILTER (WHERE transaction_type = 'acquisition_cost')::int AS records,
+                SUM(amount) FILTER (WHERE transaction_type = 'revenue')::numeric AS revenue
+           FROM executive_financial_transactions
+          WHERE organization_id = $1 AND transaction_date BETWEEN CURRENT_DATE - ($2::integer - 1) AND CURRENT_DATE
+          GROUP BY 1 HAVING COUNT(*) FILTER (WHERE transaction_type = 'acquisition_cost') > 0
+          ORDER BY 2 DESC`,
+        [org, days],
+      ),
+      this.db.query<{ currency: string; month: string; spend: string }>(
+        `SELECT c.currency, TO_CHAR(m, 'YYYY-MM') AS month, COALESCE(SUM(t.amount), 0)::numeric AS spend
+           FROM generate_series(DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '11 months', DATE_TRUNC('month', CURRENT_DATE), INTERVAL '1 month') AS m
+           CROSS JOIN (SELECT DISTINCT BTRIM(currency) AS currency FROM executive_financial_transactions
+                        WHERE organization_id = $1 AND transaction_type = 'acquisition_cost') c
+           LEFT JOIN executive_financial_transactions t
+             ON t.organization_id = $1 AND t.transaction_type = 'acquisition_cost' AND BTRIM(t.currency) = c.currency
+            AND t.transaction_date >= m AND t.transaction_date < m + INTERVAL '1 month' AND t.transaction_date <= CURRENT_DATE
+          GROUP BY 1, 2 ORDER BY 1, 2`,
+        [org],
+      ),
+      this.db.query<{ currency: string; description: string | null; amount: string }>(
+        `SELECT BTRIM(currency) AS currency, description, amount::numeric AS amount
+           FROM executive_financial_transactions
+          WHERE organization_id = $1 AND transaction_type = 'acquisition_cost'
+            AND transaction_date BETWEEN CURRENT_DATE - ($2::integer - 1) AND CURRENT_DATE
+          ORDER BY amount DESC LIMIT 500`,
+        [org, days],
+      ),
+    ]);
+    return totals.rows.map((row) => {
+      const grouped = new Map<string, number>();
+      for (const line of lines.rows.filter((item) => item.currency === row.currency)) {
+        const label = costLine(line.description);
+        grouped.set(label, (grouped.get(label) ?? 0) + Number(line.amount));
+      }
+      const spend = Number(row.spend);
+      const revenue = row.revenue === null ? null : Number(row.revenue);
+      return {
+        currency: row.currency,
+        spend,
+        records: Number(row.records),
+        revenue,
+        shareOfRevenuePct: revenue && revenue > 0 ? Math.round((spend / revenue) * 1000) / 10 : null,
+        trend: monthly.rows.filter((item) => item.currency === row.currency).map((item) => ({ label: item.month, value: Number(item.spend) })),
+        topLines: Array.from(grouped.entries()).sort(([, a], [, b]) => b - a).slice(0, 5).map(([label, amount]) => ({ label, amount: Math.round(amount * 100) / 100 })),
+      };
+    });
   }
 }

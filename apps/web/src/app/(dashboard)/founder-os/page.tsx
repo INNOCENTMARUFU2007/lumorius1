@@ -1,6 +1,8 @@
 
 'use client';
 
+import { KeyResultSourceControl, SourceSelect, sourceHint, useKeyResultSources } from './key-result-source';
+
 import { useEffect, useId, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/use-auth';
@@ -369,6 +371,11 @@ function OkrCard({ obj }: { obj: DataRecord }) {
   const [targetValue, setTargetValue] = useState('');
   const [startValue, setStartValue] = useState('0');
   const [unit, setUnit] = useState('');
+  const [dataSource, setDataSource] = useState('manual');
+  const [sourceCurrency, setSourceCurrency] = useState('USD');
+  const sources = useKeyResultSources().data ?? [];
+  const selectedSource = sources.find((source) => source.id === dataSource);
+  const linked = dataSource !== 'manual';
 
   const queryClient = useQueryClient();
 
@@ -394,7 +401,9 @@ function OkrCard({ obj }: { obj: DataRecord }) {
 
       const cleanTitle = title.trim();
       const target = Number(targetValue);
-      const start = Number(startValue || '0');
+      // A linked key result with no starting value begins from today's figure.
+      const startGiven = startValue.trim() !== '';
+      const start = Number(startGiven ? startValue : '0');
 
       if (!cleanTitle) {
         throw new Error('Enter a title for the Key Result.');
@@ -419,15 +428,22 @@ function OkrCard({ obj }: { obj: DataRecord }) {
         );
       }
 
+      if (selectedSource?.financial && !/^[A-Za-z]{3}$/.test(sourceCurrency)) {
+        throw new Error('Enter the three-letter currency to track, for example USD.');
+      }
+
       return api.post(
         `/founder-os/okrs/${encodeURIComponent(objectiveId)}/key-results`,
         {
           title: cleanTitle,
           metricType,
           targetValue: target,
-          startValue: start,
-          ...(unit.trim()
+          ...(linked && !startGiven ? {} : { startValue: start }),
+          ...(unit.trim() && !selectedSource?.financial
             ? { unit: unit.trim() }
+            : {}),
+          ...(linked
+            ? { dataSource, ...(selectedSource?.financial ? { sourceCurrency: sourceCurrency.toUpperCase() } : {}) }
             : {}),
         },
       );
@@ -441,6 +457,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
       setTargetValue('');
       setStartValue('0');
       setUnit('');
+      setDataSource('manual');
       setShowAddForm(false);
 
       await queryClient.invalidateQueries({
@@ -584,8 +601,37 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                 />
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
                 <div>
+                  <label htmlFor={`kr-source-${objectiveId}`} className="mb-1.5 block text-sm font-medium text-foreground/80">
+                    Track progress from
+                  </label>
+                  <SourceSelect
+                    id={`kr-source-${objectiveId}`}
+                    value={dataSource}
+                    onChange={(next) => { setDataSource(next); setStartValue(next === 'manual' ? '0' : ''); }}
+                    sources={sources}
+                    disabled={addKeyResult.isPending}
+                  />
+                  <p className="mt-1.5 text-xs text-muted-foreground">{sourceHint(selectedSource, String(obj.quarter ?? 'this quarter'))}</p>
+                </div>
+                {selectedSource?.financial && (
+                  <div>
+                    <label htmlFor={`kr-currency-${objectiveId}`} className="mb-1.5 block text-sm font-medium text-foreground/80">Currency</label>
+                    <input
+                      id={`kr-currency-${objectiveId}`}
+                      value={sourceCurrency}
+                      maxLength={3}
+                      onChange={(event) => setSourceCurrency(event.target.value.toUpperCase())}
+                      className="w-full rounded-lg border border-border-strong bg-card px-3 py-2.5 text-sm uppercase text-foreground outline-none focus:border-violet-500"
+                      disabled={addKeyResult.isPending}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {!linked && <div>
                   <label
                     htmlFor={`kr-type-${objectiveId}`}
                     className="mb-1.5 block text-sm font-medium text-foreground/80"
@@ -607,9 +653,9 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                     <option value="currency">Currency</option>
                     <option value="boolean">Yes / No</option>
                   </select>
-                </div>
+                </div>}
 
-                <div>
+                {!linked && <div>
                   <label
                     htmlFor={`kr-unit-${objectiveId}`}
                     className="mb-1.5 block text-sm font-medium text-foreground/80"
@@ -627,14 +673,14 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                     className="w-full rounded-lg border border-border-strong bg-card px-3 py-2.5 text-sm text-foreground outline-none focus:border-violet-500"
                     disabled={addKeyResult.isPending}
                   />
-                </div>
+                </div>}
 
                 <div>
                   <label
                     htmlFor={`kr-start-${objectiveId}`}
                     className="mb-1.5 block text-sm font-medium text-foreground/80"
                   >
-                    Starting value
+                    Starting value{linked ? ' (optional)' : ''}
                   </label>
 
                   <input
@@ -643,6 +689,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                     min="0"
                     step="any"
                     value={startValue}
+                    placeholder={linked ? "Today's value" : undefined}
                     onChange={(event) =>
                       setStartValue(event.target.value)
                     }
@@ -677,9 +724,9 @@ function OkrCard({ obj }: { obj: DataRecord }) {
               </div>
 
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Progress starts from your starting value and is
-                measured against the target. You can update the
-                current value later.
+                {linked
+                  ? 'Progress is measured from the starting value (today\'s figure if you leave it blank) to the target, and refreshes automatically when new data is imported.'
+                  : 'Progress starts from your starting value and is measured against the target. You can update the current value later.'}
               </p>
 
               <div className="flex justify-end gap-2">
@@ -775,6 +822,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                           {formatMetricValue(target)}
                           {unit ? ` ${unit}` : ''}
                         </p>
+                        <KeyResultSourceControl keyResult={keyResult} sources={sources} />
                       </div>
                     </div>
                   </div>

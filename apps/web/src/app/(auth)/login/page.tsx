@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -46,8 +46,21 @@ const PLATFORM_MODULES = [
   { name: 'Security', description: 'MFA, sessions, audit and API keys.', icon: Shield },
 ] as const;
 
+/** The ?redirect= target when it is a path inside this app (never another site). */
+function safeRedirect(): string | null {
+  if (typeof window === 'undefined') return null;
+  const target = new URLSearchParams(window.location.search).get('redirect');
+  if (!target || !target.startsWith('/') || target.startsWith('//') || target.startsWith('/\\') || target.startsWith('/login')) return null;
+  return target;
+}
+
 export default function LoginPage() {
   const router = useRouter();
+
+  // Already signed in (for example, returning from checkout): go straight back.
+  useEffect(() => {
+    if (localStorage.getItem('lumorius_refresh')) router.replace(safeRedirect() ?? '/dashboard');
+  }, [router]);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -80,7 +93,9 @@ export default function LoginPage() {
 
       setTokens(data.accessToken, data.refreshToken);
 
-      router.replace(getAuthDestination(data.user));
+      const destination = getAuthDestination(data.user);
+      // Return to the page that sent the user here (e.g. billing after checkout), but only within this app.
+      router.replace(destination === '/dashboard' ? safeRedirect() ?? destination : destination);
     } catch (err: any) {
       const msg = err?.response?.data?.message;
 

@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { Check, ExternalLink, FileText, Minus } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Check, Download, ExternalLink, FileText, Loader2, Minus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { PLAN_LABEL, trialDaysLeft, usePlan } from '@/hooks/use-plan';
+import { useAuth } from '@/hooks/use-auth';
 import { SegmentedControl, StatusBadge } from '@/components/ui/primitives';
 
 type BillingInterval = 'monthly' | 'annual';
@@ -43,15 +44,18 @@ interface Subscription {
   cancel_at_period_end?: boolean;
 }
 
-interface Invoice {
+/** One row of billing history: a Dodo payment (with a downloadable receipt) or an earlier invoice. */
+interface BillingEntry {
   id: string;
-  created_at?: string;
-  paid_at?: string | null;
-  amount_due?: number | string;
-  amount_paid?: number | string;
-  currency?: string;
-  status?: string;
-  invoice_pdf?: string | null;
+  date?: string | null;
+  amount: number;
+  currency: string;
+  status: string;
+  description: string;
+  card?: string | null;
+  receiptAvailable: boolean;
+  receiptUrl?: string | null;
+  provider: 'dodo' | 'legacy';
 }
 
 const PLAN_ORDER = ['starter', 'growth', 'professional'];
@@ -187,12 +191,43 @@ export default function BillingPage() {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [checkoutReturn, setCheckoutReturn] = useState(false);
   const { data: entitlements } = usePlan();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const canManage = ['owner', 'admin'].includes(String(user?.role ?? ''));
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  const refreshBilling = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['billing'] }),
+    queryClient.invalidateQueries({ queryKey: ['entitlements'] }),
+  ]);
+
+  // Confirms the payment with Dodo directly, so the plan updates even if a webhook is late or lost.
+  const sync = useMutation({
+    mutationFn: async () => (await api.post('/billing/sync')).data?.data as { applied: number; subscription: Subscription | null },
+    onSuccess: () => void refreshBilling(),
+  });
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('checkout') !== 'dodo') return;
     setCheckoutReturn(true);
-    const timer = setTimeout(() => setCheckoutReturn(false), 90_000);
-    return () => clearTimeout(timer);
+    let stopped = false;
+    let attempts = 0;
+    const run = async () => {
+      if (stopped) return;
+      attempts += 1;
+      try {
+        const result = (await api.post('/billing/sync')).data?.data as { subscription?: Subscription | null };
+        await refreshBilling();
+        if (result?.subscription?.status === 'active' || attempts >= 18) return;
+      } catch {
+        if (attempts >= 18) return;
+      }
+      setTimeout(() => void run(), 5000);
+    };
+    void run();
+    const timer = setTimeout(() => setCheckoutReturn(false), 120_000);
+    return () => { stopped = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const { data: plans = [], isLoading: plansLoading, isError: plansError } = useQuery<Plan[]>({
@@ -209,13 +244,38 @@ export default function BillingPage() {
     queryFn: async () => (await api.get('/billing/subscription')).data?.data ?? null,
   });
 
-  const { data: invoices = [] } = useQuery<Invoice[]>({
+  const history = useQuery<BillingEntry[]>({
     queryKey: ['billing', 'invoices'],
+    enabled: canManage,
     queryFn: async () => {
       const data = (await api.get('/billing/invoices')).data?.data;
-      return Array.isArray(data) ? (data as Invoice[]) : [];
+      return Array.isArray(data) ? (data as BillingEntry[]) : [];
     },
   });
+  const invoices = history.data ?? [];
+
+  async function downloadReceipt(entry: BillingEntry) {
+    if (entry.receiptUrl) {
+      window.open(entry.receiptUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    setDownloading(entry.id);
+    try {
+      const response = await api.get(`/billing/invoices/${encodeURIComponent(entry.id)}/receipt`, { responseType: 'blob' });
+      const url = URL.createObjectURL(response.data as Blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `lumorius-receipt-${entry.id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch {
+      toast.error('The receipt could not be downloaded. Try again.');
+    } finally {
+      setDownloading(null);
+    }
+  }
 
   const checkout = useMutation({
     mutationFn: async ({ planId, interval: chosen }: { planId: string; interval: BillingInterval }) => {
@@ -286,9 +346,24 @@ export default function BillingPage() {
                     : 'Active.'}
             </p>
           </div>
-          {entitlements.status !== 'active' && (
-            <StatusBadge tone={entitlements.status === 'expired' ? 'warning' : 'info'}>{entitlements.status === 'expired' ? 'Trial ended' : 'Trial'}</StatusBadge>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {entitlements.status !== 'active' && (
+              <StatusBadge tone={entitlements.status === 'expired' ? 'warning' : 'info'}>{entitlements.status === 'expired' ? 'Trial ended' : 'Trial'}</StatusBadge>
+            )}
+            {canManage && (
+              <button
+                type="button"
+                disabled={sync.isPending}
+                onClick={() => sync.mutate(undefined, {
+                  onSuccess: (data) => toast.success(data?.applied ? 'Billing updated from Dodo Payments.' : 'Billing is up to date.'),
+                  onError: () => toast.error('Could not reach Dodo Payments. Try again.'),
+                })}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium hover:bg-muted disabled:opacity-50"
+              >
+                <RefreshCw className={cn('h-4 w-4', sync.isPending && 'animate-spin')} /> Refresh status
+              </button>
+            )}
+          </div>
         </section>
       )}
 
@@ -366,45 +441,65 @@ export default function BillingPage() {
         </section>
       )}
 
-      {invoices.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-base font-semibold">Invoices</h2>
-          <div className="overflow-x-auto rounded-xl border border-border bg-card">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left">
-                  {['Date', 'Amount', 'Status', 'Invoice'].map((h) => (
-                    <th key={h} className="p-4 font-medium text-muted-foreground">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((invoice) => {
-                  const status = invoice.status ?? 'unknown';
-                  const amount = status === 'paid' ? num(invoice.amount_paid ?? invoice.amount_due) : num(invoice.amount_due ?? invoice.amount_paid);
-                  const date = invoice.paid_at ?? invoice.created_at;
-                  return (
-                    <tr key={invoice.id} className="border-b border-border last:border-0">
-                      <td className="p-4">{date ? new Date(date).toLocaleDateString() : '—'}</td>
-                      <td className="p-4 font-medium tabular-nums">
-                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: (invoice.currency ?? 'USD').toUpperCase() }).format(amount)}
-                      </td>
-                      <td className="p-4"><StatusBadge tone={status === 'paid' ? 'success' : 'warning'}>{status.replace(/_/g, ' ')}</StatusBadge></td>
-                      <td className="p-4">
-                        {invoice.invoice_pdf ? (
-                          <a href={invoice.invoice_pdf} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-primary hover:underline">
-                            <FileText className="h-3.5 w-3.5" /> Download
-                          </a>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      {canManage && (
+        <section aria-labelledby="billing-history-title">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2 id="billing-history-title" className="text-base font-semibold">Billing history</h2>
+            <p className="text-xs text-muted-foreground">Receipts are issued by Dodo Payments, our merchant of record.</p>
           </div>
+          {history.isPending ? (
+            <div aria-hidden="true" className="lm-skeleton h-24 rounded-xl" />
+          ) : history.isError ? (
+            <p role="alert" className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+              Billing history could not be loaded. <button type="button" onClick={() => void history.refetch()} className="underline">Retry</button>
+            </p>
+          ) : invoices.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">No payments yet. After you subscribe, each payment and its receipt appears here.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-border bg-card">
+              <table className="w-full min-w-[620px] text-sm">
+                <caption className="sr-only">Payments and receipts</caption>
+                <thead>
+                  <tr className="border-b border-border text-left">
+                    {['Date', 'Description', 'Amount', 'Status', 'Receipt'].map((h) => (
+                      <th key={h} scope="col" className="p-4 font-medium text-muted-foreground">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((entry) => {
+                    const ok = entry.status === 'succeeded' || entry.status === 'paid';
+                    return (
+                      <tr key={entry.id} className="border-b border-border last:border-0">
+                        <td className="whitespace-nowrap p-4">{entry.date ? new Date(entry.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
+                        <td className="p-4">
+                          <span className="block">{entry.description}</span>
+                          {entry.card && <span className="block text-xs text-muted-foreground">{entry.card}</span>}
+                        </td>
+                        <td className="p-4 font-medium tabular-nums">{new Intl.NumberFormat('en-US', { style: 'currency', currency: (entry.currency || 'USD').toUpperCase() }).format(entry.amount)}</td>
+                        <td className="p-4"><StatusBadge tone={ok ? 'success' : 'warning'}>{ok ? 'Paid' : entry.status.replace(/_/g, ' ')}</StatusBadge></td>
+                        <td className="p-4">
+                          {entry.receiptAvailable || entry.receiptUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => void downloadReceipt(entry)}
+                              disabled={downloading === entry.id}
+                              className="inline-flex items-center gap-1.5 text-primary hover:underline disabled:opacity-60"
+                            >
+                              {downloading === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : entry.receiptUrl ? <FileText className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
+                              {entry.receiptUrl ? 'Open invoice' : 'Download receipt'}
+                            </button>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </div>

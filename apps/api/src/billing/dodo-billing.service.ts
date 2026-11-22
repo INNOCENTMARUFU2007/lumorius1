@@ -1,9 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron } from '@nestjs/schedule';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isUUID } from 'class-validator';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
-import { DatabaseService } from '../database/database.service';
+import { DatabaseService, SqlRunner } from '../database/database.service';
 
 type Interval = 'monthly' | 'annual';
 type Plan = 'starter' | 'growth' | 'professional';
@@ -16,6 +17,11 @@ type ProviderSubscription = {
   status: string; metadata?: { checkoutAttemptId?: string };
   previous_billing_date?: string; next_billing_date?: string;
   cancel_at_next_billing_date?: boolean; cancelled_at?: string;
+};
+type DodoPayment = {
+  payment_id: string; status?: string; total_amount?: number; currency?: string; created_at?: string;
+  customer?: { customer_id?: string }; product_cart?: Array<{ product_id?: string }>; subscription_id?: string | null;
+  card_last_four?: string | null; card_network?: string | null;
 };
 const checkoutPlans = ['starter', 'growth', 'professional'] as const;
 
@@ -175,9 +181,146 @@ export class DodoBillingService {
         'INSERT INTO dodo_webhook_events (id, mode) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING id', [id, this.mode],
       );
       if (!received.rows[0]) return;
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['dodo:' + this.mode + ':' + subId]);
+      await this.applySubscription(client, subId, event.data?.metadata?.checkoutAttemptId);
+    });
+    return { received: true };
+  }
+
+  /**
+   * Backstop for missed webhooks: matches this workspace's recent checkouts to Dodo
+   * subscriptions (by the checkout ID Lumorius put in their metadata) and refreshes
+   * linked subscriptions. Access is still granted only from Dodo's own server-side data.
+   */
+  async sync(organizationId: string): Promise<{ applied: number }> {
+    if (!this.configured) return { applied: 0 };
+    const pending = await this.db.query<{ id: string; created_at: Date }>(
+      `SELECT id, created_at FROM dodo_checkout_attempts
+        WHERE organization_id = $1 AND mode = $2 AND provider_subscription_id IS NULL
+          AND created_at > NOW() - INTERVAL '7 days'
+        ORDER BY created_at`,
+      [organizationId, this.mode],
+    );
+    const linked = await this.db.query<{ dodo_subscription_id: string }>(
+      `SELECT dodo_subscription_id FROM subscriptions
+        WHERE organization_id = $1 AND dodo_subscription_id IS NOT NULL AND metadata->>'dodoMode' = $2
+          AND status IN ('active', 'trialing', 'past_due', 'incomplete')`,
+      [organizationId, this.mode],
+    );
+    const work: Array<{ subId: string; attemptId?: string }> = linked.rows.map((row) => ({ subId: row.dodo_subscription_id }));
+    if (pending.rows.length) {
+      const since = new Date(new Date(pending.rows[0].created_at).getTime() - 5 * 60_000).toISOString();
+      const ids = new Set(pending.rows.map((row) => row.id));
+      const found = await this.request<{ items?: ProviderSubscription[] }>(
+        '/subscriptions?page_size=100&created_at_gte=' + encodeURIComponent(since),
+      );
+      for (const item of found.items ?? []) {
+        const attemptId = item.metadata?.checkoutAttemptId;
+        if (typeof attemptId === 'string' && ids.has(attemptId) && /^sub_[a-z0-9]+$/i.test(item.subscription_id)) {
+          work.push({ subId: item.subscription_id, attemptId });
+        }
+      }
+    }
+    let applied = 0;
+    for (const item of work) {
+      const done = await this.db.transaction((client) => this.applySubscription(client, item.subId, item.attemptId));
+      if (done) applied += 1;
+    }
+    return { applied };
+  }
+
+  /** Every five minutes, apply paid checkouts whose webhook never arrived. */
+  @Cron('0 */5 * * * *')
+  async reconcilePending() {
+    if (!this.configured) return;
+    try {
+      const orgs = await this.db.query<{ organization_id: string }>(
+        `SELECT DISTINCT organization_id FROM dodo_checkout_attempts
+          WHERE mode = $1 AND provider_subscription_id IS NULL AND checkout_url IS NOT NULL
+            AND created_at > NOW() - INTERVAL '1 day'
+          LIMIT 50`,
+        [this.mode],
+      );
+      for (const row of orgs.rows) await this.sync(row.organization_id).catch(() => undefined);
+    } catch (error) {
+      this.logger.warn(`Dodo reconciliation skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** Dodo customers that belong to this workspace (from its own subscription records). */
+  private async customers(organizationId: string): Promise<string[]> {
+    const result = await this.db.query<{ dodo_customer_id: string }>(
+      `SELECT DISTINCT dodo_customer_id FROM subscriptions
+        WHERE organization_id = $1 AND dodo_customer_id IS NOT NULL AND metadata->>'dodoMode' = $2`,
+      [organizationId, this.mode],
+    );
+    return result.rows.map((row) => row.dodo_customer_id).filter((id) => /^cus_[a-z0-9]+$/i.test(id));
+  }
+
+  /** Payment history for this workspace, newest first. */
+  async payments(organizationId: string) {
+    if (!this.configured) return [];
+    const customers = await this.customers(organizationId);
+    const products = new Map(checkoutPlans.flatMap((plan) => (['monthly', 'annual'] as const)
+      .map((interval) => [this.product(plan, interval), { plan, interval }] as const))
+      .filter(([product]) => Boolean(product)) as Array<[string, { plan: Plan; interval: Interval }]>);
+    // Dodo's payment list omits product details, so name the plan from this workspace's subscription records.
+    const local = await this.db.query<{ dodo_subscription_id: string; plan_id: Plan; interval: Interval | null }>(
+      `SELECT dodo_subscription_id, plan_id, metadata->>'interval' AS interval FROM subscriptions
+        WHERE organization_id = $1 AND dodo_subscription_id IS NOT NULL`,
+      [organizationId],
+    );
+    const bySubscription = new Map(local.rows.map((row) => [row.dodo_subscription_id, { plan: row.plan_id, interval: row.interval ?? 'monthly' }]));
+    const rows: DodoPayment[] = [];
+    for (const customer of customers) {
+      const page = await this.request<{ items?: DodoPayment[] }>('/payments?page_size=50&customer_id=' + encodeURIComponent(customer));
+      rows.push(...(page.items ?? []).filter((item) => item.customer?.customer_id === customer));
+    }
+    return rows
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+      .map((item) => {
+        const product = (item.product_cart ?? []).map((line) => products.get(String(line.product_id))).find(Boolean)
+          ?? (item.subscription_id ? bySubscription.get(item.subscription_id) : undefined);
+        return {
+          id: item.payment_id,
+          date: item.created_at,
+          amount: Number(item.total_amount ?? 0) / 100,
+          currency: String(item.currency ?? 'USD'),
+          status: String(item.status ?? 'unknown'),
+          description: product ? `${product.plan.charAt(0).toUpperCase()}${product.plan.slice(1)} plan, ${product.interval}` : 'Lumorius subscription',
+          card: item.card_last_four ? `${item.card_network ?? 'Card'} ending ${item.card_last_four}` : null,
+          receiptAvailable: item.status === 'succeeded',
+        };
+      });
+  }
+
+  /** The PDF receipt for one of this workspace's payments. */
+  async receipt(organizationId: string, paymentId: string): Promise<Buffer> {
+    if (!this.configured || !/^pay_[a-z0-9]+$/i.test(paymentId)) throw new NotFoundException('Receipt not found.');
+    const customers = new Set(await this.customers(organizationId));
+    const payment = await this.request<DodoPayment>('/payments/' + paymentId).catch(() => null);
+    if (!payment?.customer?.customer_id || !customers.has(payment.customer.customer_id)) throw new NotFoundException('Receipt not found.');
+    const url = 'https://' + this.mode + '.dodopayments.com/invoices/payments/' + paymentId;
+    try {
+      const response = await fetch(url, { headers: { Authorization: 'Bearer ' + process.env.DODO_PAYMENTS_API_KEY }, signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error('Provider HTTP ' + response.status);
+      const pdf = Buffer.from(await response.arrayBuffer());
+      if (pdf.subarray(0, 5).toString() !== '%PDF-') throw new Error('Provider returned a non-PDF receipt');
+      return pdf;
+    } catch (error) {
+      this.logger.warn(`Dodo GET /invoices/payments failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new ServiceUnavailableException('The receipt could not be downloaded. Please try again.');
+    }
+  }
+
+  /**
+   * Applies Dodo's current state of a subscription to the workspace that started its
+   * checkout. Caller holds a transaction. Returns true when a record was written.
+   */
+  private async applySubscription(client: SqlRunner, subId: string, attemptIdHint?: unknown): Promise<boolean> {
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['dodo:' + this.mode + ':' + subId]);
+    {
       const current = await this.request<ProviderSubscription>('/subscriptions/' + subId);
-      const attemptId = current.metadata?.checkoutAttemptId ?? event.data?.metadata?.checkoutAttemptId;
+      const attemptId = current.metadata?.checkoutAttemptId ?? attemptIdHint;
       const rows = await client.query<Attempt>(
         `SELECT * FROM dodo_checkout_attempts WHERE mode = $1 AND
            (provider_subscription_id = $2 OR id = $3::uuid)
@@ -186,15 +329,15 @@ export class DodoBillingService {
       );
       const attempt = rows.rows[0];
       if (!attempt || (attempt.provider_subscription_id && attempt.provider_subscription_id !== subId) ||
-          current.subscription_id !== subId || !current.customer?.customer_id) return;
+          current.subscription_id !== subId || !current.customer?.customer_id) return false;
       const products = checkoutPlans.flatMap((plan) => (['monthly', 'annual'] as const).map((interval) => ({ plan, interval, product: this.product(plan, interval) })));
       const purchase = current.product_id === attempt.product_id
         ? { plan: attempt.plan_id, interval: attempt.billing_interval }
         : attempt.provider_subscription_id ? products.find((item) => item.product && item.product === current.product_id) : undefined;
-      if (!purchase) return;
+      if (!purchase) return false;
       const status = ({ active: 'active', on_hold: 'past_due', past_due: 'past_due', paused: 'past_due', pending: 'incomplete',
         failed: 'unpaid', cancelled: 'canceled', expired: 'canceled' } as Record<string, string>)[current.status];
-      if (!status || (status === 'incomplete' && !attempt.provider_subscription_id)) return;
+      if (!status || (status === 'incomplete' && !attempt.provider_subscription_id)) return false;
 
       await client.query('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', [attempt.organization_id]);
       if (status === 'active' && !attempt.provider_subscription_id) {
@@ -224,7 +367,7 @@ export class DodoBillingService {
             ORDER BY s.created_at DESC LIMIT 1), 'free'::plan_tier), updated_at = NOW() WHERE o.id = $1`,
         [attempt.organization_id],
       );
-    });
-    return { received: true };
+      return true;
+    }
   }
 }

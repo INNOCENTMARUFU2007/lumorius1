@@ -34,8 +34,8 @@ function refreshAccessToken(): Promise<string> {
       const refresh: string = data.data.refreshToken;
       localStorage.setItem('lumorius_access', access);
       localStorage.setItem('lumorius_refresh', refresh);
-      document.cookie = `lumorius_access=${access}; path=/; max-age=${15 * 60}; SameSite=Strict`;
-      document.cookie = `lumorius_session=1; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Strict`;
+      document.cookie = `lumorius_access=${access}; path=/; max-age=${15 * 60}; SameSite=Lax`;
+      document.cookie = `lumorius_session=1; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
       return access;
     })
     .finally(() => {
@@ -47,8 +47,8 @@ function refreshAccessToken(): Promise<string> {
 function signOut() {
   localStorage.removeItem('lumorius_access');
   localStorage.removeItem('lumorius_refresh');
-  document.cookie = 'lumorius_access=; path=/; max-age=0; SameSite=Strict';
-  document.cookie = 'lumorius_session=; path=/; max-age=0; SameSite=Strict';
+  document.cookie = 'lumorius_access=; path=/; max-age=0; SameSite=Lax';
+  document.cookie = 'lumorius_session=; path=/; max-age=0; SameSite=Lax';
   if (!window.location.pathname.startsWith('/login')) window.location.href = '/login';
 }
 

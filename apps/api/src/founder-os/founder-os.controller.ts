@@ -9,6 +9,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { FounderOsService } from './founder-os.service';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { KEY_RESULT_SOURCES } from './key-result-sources';
 import {
   IsString, IsOptional, IsNumber, IsInt, Min, Max,
   IsIn, IsDateString, IsUUID, MaxLength, Matches,
@@ -36,6 +37,13 @@ class AddKeyResultDto {
   @IsNumber() @Min(0) targetValue: number = 100;
   @IsOptional() @IsNumber() startValue?: number;
   @IsOptional() @IsString() unit?: string;
+  @IsOptional() @IsString() @Matches(/^(manual|ei:[a-z_]{2,40}|workspace:[a-z_]{2,40})$/) dataSource?: string;
+  @IsOptional() @IsString() @Matches(/^[A-Za-z]{3}$/) sourceCurrency?: string;
+}
+
+class LinkKeyResultDto {
+  @IsString() @Matches(/^(manual|ei:[a-z_]{2,40}|workspace:[a-z_]{2,40})$/) dataSource: string = 'manual';
+  @IsOptional() @IsString() @Matches(/^[A-Za-z]{3}$/) sourceCurrency?: string;
 }
 
 class UpdateKeyResultDto {
@@ -127,7 +135,23 @@ export class FounderOsController {
     @Param('id') objectiveId: string,
     @Body() dto: AddKeyResultDto,
   ) {
-    return this.founderOsService.addKeyResult(user.organizationId, objectiveId, dto);
+    return this.founderOsService.addKeyResult(user.organizationId, objectiveId, dto, undefined, String(user.role ?? ''));
+  }
+
+  @Get('key-result-sources')
+  @ApiOperation({ summary: 'Organisation metrics a key result can track automatically' })
+  keyResultSources(@CurrentUser() user: JwtPayload) {
+    const financialAllowed = ['owner', 'admin'].includes(String(user.role ?? '').toLowerCase());
+    return Object.entries(KEY_RESULT_SOURCES).map(([id, source]) => ({
+      id, label: source.label, financial: source.financial, kind: source.kind, origin: source.origin,
+      lowerIsBetter: Boolean(source.lowerIsBetter), available: !source.financial || financialAllowed,
+    }));
+  }
+
+  @Patch('okrs/key-results/:id/source')
+  @ApiOperation({ summary: 'Link a key result to live organisation data, or back to manual updates' })
+  linkKeyResult(@CurrentUser() user: JwtPayload, @Param('id') krId: string, @Body() dto: LinkKeyResultDto) {
+    return this.founderOsService.linkKeyResult(user.organizationId, String(user.role ?? ''), krId, dto.dataSource, dto.sourceCurrency);
   }
 
   @Patch('okrs/key-results/:id')

@@ -296,14 +296,29 @@ export class AnalyticsService {
     return metrics.rows;
   }
 
+  /**
+   * Active goals: Founder OS objectives that are not completed (with progress rolled up
+   * from their key results), plus any goals from the older goals table.
+   */
   async getGoals(organizationId: string) {
     const res = await this.db.query(
-      `SELECT g.*, u.name AS owner_name
-       FROM goals g
-       LEFT JOIN users u ON g.owner_id = u.id
-       WHERE g.organization_id = $1
-         AND g.status = 'active'
-       ORDER BY g.due_date ASC NULLS LAST`,
+      `SELECT o.id, o.title, o.description, 'active' AS status, o.status AS health, o.progress,
+              o.due_date::timestamptz AS due_date, o.quarter, o.year, u.name AS owner_name,
+              kr.current_value, kr.target_value, kr.unit, kr.data_source, 'founder_os' AS source
+         FROM objectives o
+         LEFT JOIN users u ON u.id = o.owner_id
+         LEFT JOIN LATERAL (
+           SELECT current_value, target_value, unit, data_source FROM key_results
+            WHERE objective_id = o.id ORDER BY created_at LIMIT 1
+         ) kr ON TRUE
+        WHERE o.organization_id = $1 AND o.status <> 'completed'
+       UNION ALL
+       SELECT g.id, g.title, g.description, g.status::text, NULL, NULL, g.due_date, NULL, NULL, u.name,
+              g.current_value, g.target_value, g.unit, NULL, 'goals'
+         FROM goals g
+         LEFT JOIN users u ON g.owner_id = u.id
+        WHERE g.organization_id = $1 AND g.status = 'active'
+        ORDER BY due_date ASC NULLS LAST, title`,
       [organizationId],
     );
 

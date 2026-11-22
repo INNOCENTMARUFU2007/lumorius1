@@ -39,7 +39,8 @@ export function middleware(request: NextRequest) {
 
   if (!token && pathname !== '/login') {
     const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('redirect', pathname);
+    // Keep the query (e.g. ?checkout=dodo) so the page can finish what it was doing after sign-in.
+    loginUrl.searchParams.set('redirect', pathname + request.nextUrl.search);
 
     return NextResponse.redirect(loginUrl);
   }

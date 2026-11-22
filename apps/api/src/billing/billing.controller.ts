@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, UseGuards, RawBodyRequest, Req, Headers, ForbiddenException, BadRequestException, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, RawBodyRequest, Req, Headers, ForbiddenException, BadRequestException, HttpCode, Param, StreamableFile } from '@nestjs/common';
+import { RawApiResponse } from '../common/interceptors/transform.interceptor';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Request } from 'express';
@@ -91,12 +92,55 @@ export class BillingController {
     return this.billingService.createPortalSession(user.organizationId, `${appUrl}/billing`);
   }
 
+  @Post('sync')
+  @HttpCode(200)
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Apply paid Dodo checkouts and refresh the subscription from Dodo' })
+  async syncSubscription(@CurrentUser() user: JwtPayload) {
+    this.assertCanManageBilling(user);
+    const result = await this.dodo.sync(user.organizationId);
+    return { ...result, subscription: await this.billingService.getSubscription(user.organizationId) };
+  }
+
   @Get('invoices')
   @ApiBearerAuth()
   @UseGuards(AuthGuard('jwt'))
-  @ApiOperation({ summary: 'Get invoice history' })
-  getInvoices(@CurrentUser() user: JwtPayload) {
-    return this.billingService.getInvoices(user.organizationId);
+  @ApiOperation({ summary: 'Billing history: Dodo payments with receipts, plus any earlier invoices' })
+  async getInvoices(@CurrentUser() user: JwtPayload) {
+    this.assertCanManageBilling(user);
+    const payments = await this.dodo.payments(user.organizationId);
+    const legacy = await this.billingService.getInvoices(user.organizationId);
+    return [
+      ...payments.map((item) => ({ ...item, provider: 'dodo' })),
+      ...(Array.isArray(legacy) ? legacy : []).map((invoice: Record<string, unknown>) => ({
+        id: String(invoice.id),
+        date: invoice.paid_at ?? invoice.created_at,
+        amount: Number(invoice.amount_paid ?? invoice.amount_due ?? 0),
+        currency: String(invoice.currency ?? 'USD').toUpperCase(),
+        status: String(invoice.status ?? 'unknown'),
+        description: 'Subscription invoice',
+        card: null,
+        receiptAvailable: false,
+        receiptUrl: typeof invoice.invoice_pdf === 'string' ? invoice.invoice_pdf : null,
+        provider: 'legacy',
+      })),
+    ];
+  }
+
+  @Get('invoices/:paymentId/receipt')
+  @RawApiResponse()
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard('jwt'))
+  @ApiOperation({ summary: 'Download the PDF receipt for a Dodo payment' })
+  async downloadReceipt(@CurrentUser() user: JwtPayload, @Param('paymentId') paymentId: string): Promise<StreamableFile> {
+    this.assertCanManageBilling(user);
+    const pdf = await this.dodo.receipt(user.organizationId, paymentId);
+    return new StreamableFile(pdf, {
+      type: 'application/pdf',
+      disposition: 'attachment; filename="lumorius-receipt-' + paymentId + '.pdf"',
+      length: pdf.length,
+    });
   }
 
   @Post('webhook/dodo')

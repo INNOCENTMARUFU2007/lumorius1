@@ -648,9 +648,15 @@ export class NotificationEmailService {
             [org.id],
           ),
           this.db.query<Record<string, string>>(
-            `SELECT COUNT(*) FILTER (WHERE status = 'active') as active,
-                    COUNT(*) FILTER (WHERE status = 'completed' AND updated_at > NOW() - INTERVAL '7 days') as achieved_this_week
-             FROM goals WHERE organization_id = $1`,
+            // Founder OS objectives plus the older goals table, so the email matches Founder OS.
+            `SELECT SUM(active)::int AS active, SUM(achieved)::int AS achieved_this_week FROM (
+               SELECT COUNT(*) FILTER (WHERE status <> 'completed') AS active,
+                      COUNT(*) FILTER (WHERE status = 'completed' AND updated_at > NOW() - INTERVAL '7 days') AS achieved
+                 FROM objectives WHERE organization_id = $1
+               UNION ALL
+               SELECT COUNT(*) FILTER (WHERE status = 'active'),
+                      COUNT(*) FILTER (WHERE status = 'completed' AND updated_at > NOW() - INTERVAL '7 days')
+                 FROM goals WHERE organization_id = $1) counts`,
             [org.id],
           ),
         ]);
