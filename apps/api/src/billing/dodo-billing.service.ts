@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isUUID } from 'class-validator';
@@ -21,6 +21,7 @@ const checkoutPlans = ['starter', 'growth', 'professional'] as const;
 
 @Injectable()
 export class DodoBillingService {
+  private readonly logger = new Logger(DodoBillingService.name);
   constructor(private readonly db: DatabaseService, private readonly config: ConfigService) {}
 
   private get mode() {
@@ -59,7 +60,9 @@ export class DodoBillingService {
       });
       if (!response.ok) throw new Error('Provider HTTP ' + response.status);
       return await response.json() as T;
-    } catch {
+    } catch (error) {
+      // Log the route and status only: never the key or the request body.
+      this.logger.warn(`Dodo ${body ? 'POST' : 'GET'} ${path.split('?')[0]} failed: ${error instanceof Error ? error.message : String(error)}`);
       throw new ServiceUnavailableException('Dodo Payments could not complete the request. Please try again.');
     }
   }
@@ -125,7 +128,8 @@ export class DodoBillingService {
         Number(price.discount_bps ?? price.discount ?? 0) !== 0 || price.purchasing_power_parity === true) {
       throw new ServiceUnavailableException('The Dodo product price or billing interval does not match the Lumorius plan.');
     }
-    const result = await this.request<{ checkout_url: string }>('/checkout-sessions', {
+    // Dodo's REST route for checkout sessions is /checkouts (the SDK's checkoutSessions.create).
+    const result = await this.request<{ checkout_url: string }>('/checkouts', {
       product_cart: [{ product_id: product, quantity: 1 }], customer: { email: user.email },
       return_url: this.billingUrl() + '?checkout=dodo', metadata: { checkoutAttemptId: attemptId },
       subscription_data: { trial_period_days: 0 },
