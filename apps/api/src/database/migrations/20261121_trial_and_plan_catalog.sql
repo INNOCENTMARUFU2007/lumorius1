@@ -41,7 +41,7 @@ UPDATE billing_plans SET
   price_monthly = 99,
   price_yearly = 990,
   limits = '{"users": 15, "documents": 1000, "storage_gb": 50, "storage_bytes": 53687091200, "ai_tokens_monthly": 1000000}'::jsonb,
-  features = '["Up to 15 team members", "1,000 documents", "50 GB storage", "1,000,000 AI tokens per month", "3 AI agents"]'::jsonb,
+  features = '["Up to 15 team members", "1,000 documents", "50 GB storage", "1,000,000 AI tokens per month", "4 AI agents"]'::jsonb,
   is_active = TRUE
 WHERE id = 'growth';
 
@@ -50,7 +50,7 @@ UPDATE billing_plans SET
   price_monthly = 199,
   price_yearly = 1990,
   limits = '{"users": 40, "documents": 5000, "storage_gb": 200, "storage_bytes": 214748364800, "ai_tokens_monthly": 3000000}'::jsonb,
-  features = '["Up to 40 team members", "5,000 documents", "200 GB storage", "3,000,000 AI tokens per month", "3 AI agents"]'::jsonb,
+  features = '["Up to 40 team members", "5,000 documents", "200 GB storage", "3,000,000 AI tokens per month", "4 AI agents"]'::jsonb,
   is_active = TRUE
 WHERE id = 'professional';
 

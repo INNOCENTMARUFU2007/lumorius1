@@ -76,6 +76,7 @@ const COMPARISON: Array<{ label: string; plans: string[] }> = [
   { label: 'Decision tracking', plans: ['growth', 'professional'] },
   { label: 'Executive Intelligence (financial reporting)', plans: ['growth', 'professional'] },
   { label: 'Operations Manager agent', plans: ['growth', 'professional'] },
+  { label: 'Profit & Finance Analyst agent', plans: ['growth', 'professional'] },
   { label: 'Decision governance: approval policies and delegation', plans: ['professional'] },
 ];
 
