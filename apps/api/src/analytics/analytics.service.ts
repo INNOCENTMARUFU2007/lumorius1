@@ -1,5 +1,5 @@
 
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
 import { AiService } from '../ai/ai.service';
@@ -320,6 +320,13 @@ export class AnalyticsService {
       target?: number;
     },
   ) {
+    const name = typeof dto?.name === 'string' ? dto.name.trim() : '';
+    if (!name || name.length > 120) throw new BadRequestException('Give the KPI a name of up to 120 characters.');
+    const unit = typeof dto.unit === 'string' && dto.unit.trim() ? dto.unit.trim().slice(0, 24) : null;
+    const description = typeof dto.description === 'string' && dto.description.trim() ? dto.description.trim().slice(0, 500) : null;
+    const rawTarget = dto.target as unknown;
+    const target = rawTarget === undefined || rawTarget === null || rawTarget === '' ? null : Number(rawTarget);
+    if (target !== null && (!Number.isFinite(target) || Math.abs(target) >= 1e11)) throw new BadRequestException('The target must be a number.');
     const id = uuidv4();
 
     await this.db.query(
@@ -329,10 +336,10 @@ export class AnalyticsService {
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         id,
-        dto.name,
-        dto.description ?? null,
-        dto.unit ?? null,
-        dto.target ?? null,
+        name,
+        description,
+        unit,
+        target,
         organizationId,
         userId,
       ],
@@ -357,23 +364,29 @@ export class AnalyticsService {
     );
 
     if (metric.rows.length === 0) {
-      throw new Error('KPI metric not found for this organisation');
+      throw new NotFoundException('KPI not found in this workspace.');
     }
 
-    const recordDate = date ?? new Date().toISOString().split('T')[0];
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || Math.abs(amount) >= 1e11) throw new BadRequestException('Enter the KPI value as a number.');
+    const today = new Date().toISOString().split('T')[0];
+    const recordDate = date ?? today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate) || Number.isNaN(Date.parse(recordDate + 'T00:00:00Z')) || recordDate > today) {
+      throw new BadRequestException('Use a valid date that is today or earlier.');
+    }
 
     await this.db.query(
       `INSERT INTO kpi_values (id, metric_id, value, recorded_at)
        VALUES (gen_random_uuid(), $1, $2, $3)
        ON CONFLICT (metric_id, recorded_at)
        DO UPDATE SET value = EXCLUDED.value`,
-      [metricId, value, recordDate],
+      [metricId, amount, recordDate],
     );
 
     return {
       recorded: true,
       date: recordDate,
-      value,
+      value: amount,
     };
   }
 

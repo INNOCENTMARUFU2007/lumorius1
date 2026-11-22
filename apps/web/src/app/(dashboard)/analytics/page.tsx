@@ -22,8 +22,6 @@ import type { LucideIcon } from 'lucide-react';
 import {
   AreaChart,
   Area,
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -33,7 +31,9 @@ import {
 import api from '@/lib/api';
 import { toast } from 'sonner';
 import { RingGauge, ShareBar, StatTile } from '@/components/ui/insight-visuals';
-import { KpiScorecard, useKpiScorecard } from '@/components/kpi-scorecard';
+import { useKpiScorecard } from '@/components/kpi-scorecard';
+import { useAuth } from '@/hooks/use-auth';
+import KpiPerformance from './kpi-performance';
 
 type DataRecord = Record<string, unknown>;
 
@@ -62,13 +62,6 @@ type DashboardData = DataRecord & {
   urgentTasks?: unknown[];
   risks?: unknown[];
   opportunities?: unknown[];
-};
-
-type KpiHistoryPoint = {
-  date: string;
-  label: string;
-  value: number;
-  timestamp: number;
 };
 
 type MetricCardProps = {
@@ -260,42 +253,6 @@ function normalizeTrend(value: unknown): TrendPoint[] {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function normalizeKpiHistory(
-  value: unknown,
-): KpiHistoryPoint[] {
-  return asRecords(value)
-    .map((point) => {
-      const rawDate = textValue(
-        point.date,
-        textValue(point.recorded_at, ''),
-      );
-
-      const valueNumber = toNumber(point.value);
-
-      const parsedDate = new Date(
-        /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
-          ? `${rawDate}T12:00:00`
-          : rawDate,
-      );
-
-      return {
-        date: rawDate,
-        label: formatDateLabel(rawDate),
-        value: valueNumber,
-        timestamp: Number.isFinite(parsedDate.getTime())
-          ? parsedDate.getTime()
-          : 0,
-      };
-    })
-    .filter(
-      (
-        point,
-      ): point is KpiHistoryPoint =>
-        point.date.length > 0 && point.value !== null,
-    )
-    .sort((a, b) => a.timestamp - b.timestamp);
-}
-
 function MetricCard({
   title,
   value,
@@ -483,6 +440,8 @@ export default function AnalyticsPage() {
   const kpis = kpiQuery.data ?? [];
   // Executive Intelligence targets (owners and admins); the same data Executive Intelligence shows.
   const scorecard = useKpiScorecard();
+  const { user } = useAuth();
+  const canManageKpis = ['owner', 'admin', 'manager'].includes(String(user?.role ?? ''));
   const governedKpis = scorecard.data?.length ?? 0;
 
   const summary = asRecord(dashboard?.summary);
@@ -602,7 +561,7 @@ export default function AnalyticsPage() {
 
       <MarketingPanel />
       <nav aria-label="Analytics sections" className="flex flex-wrap gap-4 text-sm font-medium text-muted-foreground">
-        {[['#activity', 'Activity'], ['#workload', 'Team workload'], ['#business-kpis', 'Business KPIs'], ['#kpi-history', 'KPI history'], ['#goals', 'Goals']].map(([href, label]) => (
+        {[['#activity', 'Activity'], ['#workload', 'Team workload'], ['#kpi-history', 'KPI history'], ['#goals', 'Goals']].map(([href, label]) => (
           <a key={href} href={href} className="hover:text-foreground hover:underline">{label}</a>
         ))}
       </nav>
@@ -752,204 +711,14 @@ export default function AnalyticsPage() {
         </div>
       </section>
 
-      <div id="business-kpis" className="scroll-mt-5"><KpiScorecard /></div>
-
-      <section id="kpi-history" className="scroll-mt-5 rounded-xl border border-border bg-card p-5">
-        <div className="mb-5">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-green-500" />
-
-            <h2 className="text-lg font-semibold">
-              KPI performance
-            </h2>
-          </div>
-
-          <p className="mt-1 text-sm text-muted-foreground">
-            Each chart shows the recorded value of one KPI over time.
-            The horizontal axis is the date; the vertical axis is the KPI value.
-          </p>
-        </div>
-
-        {kpiQuery.isError ? (
-          <p role="alert" className="text-sm text-red-500">
-            {getErrorMessage(
-              kpiQuery.error,
-              'KPI metrics could not be loaded.',
-            )}
-          </p>
-        ) : kpiQuery.isLoading ? (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {[0, 1].map((item) => (
-              <div
-                key={item}
-                className="h-64 animate-pulse rounded-xl bg-muted/40"
-              />
-            ))}
-          </div>
-        ) : kpis.length === 0 ? (
-          <div className="rounded-lg bg-muted/30 px-5 py-10 text-center">
-            <TrendingUp className="mx-auto h-8 w-8 text-muted-foreground/50" />
-
-            <p className="mt-3 font-medium">
-              No KPI metrics configured
-            </p>
-
-            <p className="mt-1 text-sm text-muted-foreground">
-              Create a KPI and record values to see its performance history here.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {kpis.slice(0, 8).map((kpi, index) => {
-              const id = textValue(kpi.id, `kpi-${index}`);
-              const name = textValue(kpi.name, 'Unnamed KPI');
-              const unit = textValue(kpi.unit, '');
-
-              const current = toNumber(kpi.current_value);
-              const previous = toNumber(kpi.previous_value);
-
-              const change =
-                current !== null &&
-                previous !== null &&
-                previous !== 0
-                  ? ((current - previous) / Math.abs(previous)) * 100
-                  : null;
-
-              const history = normalizeKpiHistory(kpi.history);
-
-              return (
-                <article
-                  key={id}
-                  className="min-w-0 rounded-xl border border-border p-4"
-                >
-                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-                    <div className="min-w-0">
-                      <h3 className="break-words text-sm font-medium text-muted-foreground">
-                        {name}
-                      </h3>
-
-                      <p className="mt-1 break-words text-2xl font-bold">
-                        {current === null
-                          ? 'Not recorded'
-                          : formatUnit(current, unit)}
-                      </p>
-
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Current recorded value
-                      </p>
-                    </div>
-
-                    <div className="rounded-lg bg-muted/60 px-3 py-2 text-xs">
-                      {previous === null ? (
-                        <span className="text-muted-foreground">
-                          No previous value
-                        </span>
-                      ) : (
-                        <span>
-                          Previous: {formatUnit(previous, unit)}
-                        </span>
-                      )}
-
-                      {change !== null && (
-                        <p className="mt-1 font-medium text-foreground">
-                          {change > 0 ? '+' : ''}
-                          {change.toFixed(1)}% vs previous
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-4 h-[220px]">
-                    {history.length < 2 ? (
-                      <EmptyChart
-                        message="Record at least two KPI values to see a trend."
-                      />
-                    ) : (
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart
-                          data={history}
-                          margin={{
-                            top: 8,
-                            right: 10,
-                            left: 4,
-                            bottom: 24,
-                          }}
-                        >
-                          <CartesianGrid
-                            strokeDasharray="3 3"
-                            vertical={false}
-                            stroke="currentColor"
-                            strokeOpacity={0.12}
-                          />
-
-                          <XAxis
-                            dataKey="label"
-                            tick={chartTick}
-                            tickLine={false}
-                            axisLine={false}
-                            minTickGap={16}
-                            label={{
-                              value: 'Date',
-                              position: 'insideBottom',
-                              offset: -14,
-                              fontSize: 11,
-                            }}
-                          />
-
-                          <YAxis
-                            width={58}
-                            tick={chartTick}
-                            tickLine={false}
-                            axisLine={false}
-                            domain={['auto', 'auto']}
-                            label={{
-                              value: unit ? `Value (${unit})` : 'KPI value',
-                              angle: -90,
-                              position: 'insideLeft',
-                              fontSize: 10,
-                            }}
-                          />
-
-                          <Tooltip
-                            labelFormatter={(label) => `Date: ${String(label)}`}
-                            formatter={(value) => [
-                              formatUnit(Number(value), unit),
-                              name,
-                            ]}
-                            contentStyle={chartTooltip}
-                          />
-
-                          <Line
-                            type="linear"
-                            dataKey="value"
-                            name={name}
-                            stroke="#7965e9"
-                            strokeWidth={2.5}
-                            dot={{ r: 3 }}
-                            activeDot={{ r: 5 }}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    )}
-                  </div>
-
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {history.length > 0
-                      ? `${history.length} recorded value${history.length === 1 ? '' : 's'}`
-                      : 'No historical values recorded'}
-                  </p>
-                </article>
-              );
-            })}
-          </div>
-        )}
-
-        {kpis.length > 8 && (
-          <p className="mt-4 text-xs text-muted-foreground">
-            Showing 8 of {kpis.length} KPI metrics.
-          </p>
-        )}
-      </section>
+      <KpiPerformance
+        rawKpis={kpis}
+        loading={kpiQuery.isLoading}
+        error={kpiQuery.isError ? getErrorMessage(kpiQuery.error, 'Team KPIs could not be loaded.') : null}
+        onChanged={() => void kpiQuery.refetch()}
+        canManage={canManageKpis}
+        canRecord={Boolean(user)}
+      />
 
       <section id="workload" className="scroll-mt-5 overflow-hidden rounded-2xl border border-border bg-card">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border p-4 sm:p-5">
