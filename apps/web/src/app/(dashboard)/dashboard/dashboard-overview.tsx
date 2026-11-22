@@ -1,33 +1,51 @@
-﻿'use client';
+'use client';
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
-  AlertTriangle,
+  ArrowRight,
   ArrowDownRight,
-  ArrowUpRight,
   Brain,
   CheckCircle2,
   CircleDollarSign,
   FileText,
+  FolderKanban,
+  ListChecks,
   Mic,
   Ratio,
   Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import dynamic from 'next/dynamic';
+import { isAxiosError } from 'axios';
+import { ActivityHeatmap, StatusBar } from './activity-heatmap';
+
+// Recharts is the heaviest dependency on this page; load it after first paint.
+const CompletionChart = dynamic(() => import('./completion-chart'), {
+  ssr: false,
+  loading: () => <div className="lm-skeleton w-full" style={{ height: 280 }} />,
+});
 import api from '@/lib/api';
-import { formatRelative } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { useAuth } from '@/hooks/use-auth';
+import {
+  DataFreshness,
+  EmptyState,
+  ErrorState,
+  InsightList,
+  MetricCard,
+  PageHeader,
+  Panel,
+  SectionHeading,
+  SegmentedControl,
+  Skeleton,
+  StatusBadge,
+  TrendIndicator,
+  type Insight,
+} from '@/components/ui/primitives';
+import { ChartContainer } from '@/components/ui/chart';
 
 interface TaskStats {
   total?: string | number;
@@ -76,6 +94,19 @@ interface TeamDashboardResponse {
   meetingsByWeek: Array<Record<string, unknown>>;
 }
 
+interface ExecutiveMetric {
+  metricKey: string;
+  status: 'actual' | 'estimated' | 'unavailable';
+  value: number | string | null;
+  currency?: string;
+  note?: string;
+}
+
+interface PersonalAiUsage {
+  operations: string | number;
+  tokens: string | number;
+}
+
 type MetricDefinition = {
   label: string;
   value: string;
@@ -114,7 +145,7 @@ function unwrapApiResponse(response: unknown): unknown {
   return payload;
 }
 
-function number(value: string | number | undefined): number | null {
+function number(value: string | number | null | undefined): number | null {
   if (value === undefined || value === null || value === '') {
     return null;
   }
@@ -123,58 +154,42 @@ function number(value: string | number | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function MetricCard({ metric }: { metric: MetricDefinition }) {
-  const Icon = metric.icon;
-
-  return (
-    <article
-      title={metric.detail}
-      className="min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium text-muted-foreground">
-            {metric.label}
-          </p>
-          <p
-            className={`mt-2 truncate font-semibold tracking-tight ${
-              metric.available
-                ? 'text-2xl text-foreground'
-                : 'text-sm text-muted-foreground'
-            }`}
-          >
-            {metric.value}
-          </p>
-        </div>
-
-        <span
-          className={`rounded-lg p-2 ${
-            metric.available
-              ? 'bg-brand-500/10 text-brand-500'
-              : 'bg-muted text-muted-foreground'
-          }`}
-        >
-          <Icon className="h-4 w-4" />
-        </span>
-      </div>
-
-      <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
-        {metric.note}
-      </p>
-    </article>
-  );
-}
-
-function EmptyPanel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-36 items-center justify-center rounded-lg border border-dashed border-border px-5 text-center text-sm text-muted-foreground">
-      {children}
-    </div>
-  );
-}
-
 export default function DashboardOverview() {
   const [days, setDays] = useState(30);
+  const { user } = useAuth();
+  const canOpenTasks = ['owner', 'admin', 'manager', 'member'].includes(user?.role.toLowerCase() ?? '');
+  const canSeeFinancials =
+    Boolean(user?.organizationId) && ['owner', 'admin'].includes(user?.role.toLowerCase() ?? '');
+
+  const financialQuery = useQuery({
+    queryKey: ['executive-intelligence', 'dashboard', 'overview', user?.organizationId, user?.id],
+    enabled: canSeeFinancials,
+    queryFn: async () => {
+      const payload = unwrapApiResponse(await api.get('/executive-intelligence/dashboard')) as
+        { metrics?: ExecutiveMetric[] } | undefined;
+      if (!Array.isArray(payload?.metrics)) {
+        throw new Error('The executive dashboard API returned an invalid response.');
+      }
+      return payload.metrics;
+    },
+    // A 403 means the plan does not include advanced financial reporting; retrying cannot help.
+    retry: (count, error) => !isAxiosError(error) || (error.response?.status !== 403 && count < 1),
+  });
+  const financialLocked = isAxiosError(financialQuery.error) && financialQuery.error.response?.status === 403;
+
+  const aiUsageQuery = useQuery({
+    queryKey: ['analytics', 'my-ai-usage', user?.organizationId, user?.id],
+    enabled: Boolean(user?.organizationId && user.id),
+    queryFn: async () => {
+      const usage = unwrapApiResponse(await api.get('/analytics/my-ai-usage')) as PersonalAiUsage | undefined;
+      const operations = number(usage?.operations);
+      const tokens = number(usage?.tokens);
+      if (operations === null || tokens === null) {
+        throw new Error('The AI usage API returned an invalid response.');
+      }
+      return { operations, tokens };
+    },
+  });
 
   const {
     data,
@@ -278,72 +293,75 @@ export default function DashboardOverview() {
   const previous = number(tasks?.completed_previous_period);
   const current = taskCount;
 
-  const hasSignal =
-    previous !== null &&
-    current !== null &&
-    previous >= 3 &&
-    Math.abs(current - previous) / previous >= 0.5;
 
-  const changePercent =
-    hasSignal && previous
-      ? Math.round(((current! - previous) / previous) * 100)
-      : 0;
+  const executiveMetrics = financialQuery.data ?? [];
+  const measuredMetrics = (key: string) =>
+    executiveMetrics.flatMap((metric) => {
+      const value = number(metric.value);
+      return metric.metricKey === key && metric.status !== 'unavailable' && value !== null
+        ? [{ ...metric, value }]
+        : [];
+    });
 
+  const financialCard = (
+    label: string,
+    icon: LucideIcon,
+    values: string[],
+    note: string,
+    missing: string,
+  ): MetricDefinition => ({
+    label,
+    icon,
+    value: values.length ? values.join('\n') : financialQuery.isLoading ? 'Loading…' : '—',
+    note: values.length ? note : financialQuery.isError ? 'Could not load financial data' : missing,
+    detail: values.length ? note : missing,
+    available: values.length > 0,
+  });
+
+  const currencyValues = (key: string) =>
+    measuredMetrics(key).flatMap(({ currency, value, status }) =>
+      currency
+        ? [`${status === 'estimated' ? '≈ ' : ''}${value.toLocaleString(undefined, {
+            style: 'currency',
+            currency,
+            currencyDisplay: 'code',
+          })}`]
+        : [],
+    );
+
+  const cac = measuredMetrics('cac');
+  const ratios = measuredMetrics('ltv').flatMap((ltv) => {
+    const cost = cac.find((metric) => metric.currency && metric.currency === ltv.currency);
+    if (!cost || cost.value <= 0 || ltv.value < 0) return [];
+    const prefix = ltv.status === 'estimated' || cost.status === 'estimated' ? '≈ ' : '';
+    const ratio = (ltv.value / cost.value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    return [`${prefix}${ratio}× (${ltv.currency})`];
+  });
+  const churn = measuredMetrics('customer_retention_rate')
+    .filter(({ value }) => value >= 0 && value <= 100)
+    .map(({ value, status }) =>
+      `${status === 'estimated' ? '≈ ' : ''}${(1 - value / 100).toLocaleString(undefined, {
+        style: 'percent',
+        maximumFractionDigits: 2,
+      })}`,
+    );
+
+  const financialMetrics = canSeeFinancials ? [
+    financialCard('Total Revenue', CircleDollarSign, currencyValues('revenue'),
+      'Committed revenue this month', 'Commit revenue transactions in Executive Intelligence'),
+    financialCard('Churn Rate', ArrowDownRight, churn,
+      'Customer churn this month', 'Customer cohort and churn history needed'),
+    financialCard('MRR', CircleDollarSign, currencyValues('mrr'),
+      'Monthly run rate from active contracts', 'Commit active recurring contracts in Executive Intelligence'),
+    financialCard('ARR', Activity, currencyValues('arr'),
+      'Annual run rate from active contracts', 'Commit active recurring contracts in Executive Intelligence'),
+    financialCard('CAC', Users, currencyValues('cac'),
+      'Customer acquisition cost this month', 'Verified acquisition spend and new customer counts needed'),
+    financialCard('LTV:CAC', Ratio, ratios,
+      'Lifetime value divided by acquisition cost', 'Verified LTV and CAC in the same currency needed'),
+  ] : [];
+  const aiUsage = aiUsageQuery.data;
   const metrics: MetricDefinition[] = [
-    {
-      label: 'Total Revenue',
-      value: 'Unavailable',
-      note: 'No company revenue feed configured',
-      detail:
-        'Lumorius billing records describe the app subscription, not your company revenue. No verified revenue source is available.',
-      icon: CircleDollarSign,
-      available: false,
-    },
-    {
-      label: 'Churn Rate',
-      value: 'Unavailable',
-      note: 'No customer subscription history',
-      detail:
-        'A verified customer churn calculation needs historical customer subscription events; that dataset is not available here.',
-      icon: ArrowDownRight,
-      available: false,
-    },
-    {
-      label: 'MRR',
-      value: 'Unavailable',
-      note: 'No company recurring-revenue data',
-      detail:
-        'MRR requires the company’s active customer subscriptions and recurring amounts. The Lumorius plan subscription is not company revenue.',
-      icon: CircleDollarSign,
-      available: false,
-    },
-    {
-      label: 'ARR',
-      value: 'Unavailable',
-      note: 'Requires validated MRR',
-      detail:
-        'ARR is derived from validated recurring company revenue. That source is not configured.',
-      icon: Activity,
-      available: false,
-    },
-    {
-      label: 'CAC',
-      value: 'Unavailable',
-      note: 'Spend and acquisition data missing',
-      detail:
-        'CAC requires acquisition spend and newly acquired customers for the same period.',
-      icon: Users,
-      available: false,
-    },
-    {
-      label: 'LTV:CAC',
-      value: 'Unavailable',
-      note: 'Validated LTV and CAC required',
-      detail:
-        'This ratio needs validated lifetime value and customer acquisition cost inputs.',
-      icon: Ratio,
-      available: false,
-    },
     {
       label: 'Documents Indexed',
       value: isLoading
@@ -385,16 +403,18 @@ export default function DashboardOverview() {
     },
     {
       label: 'AI Usage',
-      value: 'Unavailable',
-      note: 'Usage telemetry is not exposed',
-      detail:
-        'The current AI chat flow does not expose verified token, provider-call, or product-credit usage to this dashboard.',
+      value: aiUsage ? `${aiUsage.operations.toLocaleString()} operations` : aiUsageQuery.isLoading ? 'Loading…' : '—',
+      note: aiUsage
+        ? `${aiUsage.tokens.toLocaleString()} recorded tokens · this month (UTC)`
+        : aiUsageQuery.isError ? 'Could not load your AI usage' : 'Your usage this month (UTC)',
+      detail: 'Recorded AI operations attributed to your account in this organization for the current UTC month.',
       icon: FileText,
-      available: false,
+      available: Boolean(aiUsage),
     },
   ];
 
   const statusRows = (team?.tasksByStatus ?? []).map((row) => ({
+    key: row.status,
     status: row.status.replace(/_/g, ' '),
     count: Number(row.count),
   }));
@@ -404,379 +424,309 @@ export default function DashboardOverview() {
     0,
   );
 
+  const overdue = number(tasks?.overdue);
+  const urgentOpen = number(tasks?.urgent_open);
+  const failedDocs = number(documents?.failed);
+  const processingDocs = (number(documents?.processing) ?? 0) + (number(documents?.uploading) ?? 0);
+  const rawFirst = (user?.name ?? '').trim().split(/\s+/)[0] ?? '';
+  // Names stored in capitals ("JANE") read as shouting in a greeting.
+  const firstName = rawFirst && rawFirst === rawFirst.toUpperCase() ? rawFirst.charAt(0) + rawFirst.slice(1).toLowerCase() : rawFirst;
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+
+  // Deterministic briefing: every statement below is computed from the API
+  // responses on this page. Nothing is inferred by AI and no causes are guessed.
+  const briefing: Insight[] = [];
+  if (current !== null && previous !== null) {
+    const delta = current - previous;
+    briefing.push({
+      id: 'completion-change',
+      tone: delta > 0 ? 'success' : delta < 0 ? 'warning' : 'neutral',
+      provenance: 'calculated',
+      title:
+        delta === 0
+          ? `Task completions held steady over the last ${days} days`
+          : `Task completions ${delta > 0 ? 'rose' : 'fell'} by ${Math.abs(delta).toLocaleString()} versus the previous ${days} days`,
+      body: `${current.toLocaleString()} tasks completed in this period compared with ${previous.toLocaleString()} in the prior period. The data does not show why; review the work queue to investigate.`,
+    });
+  }
+  if (overdue !== null && overdue > 0) {
+    briefing.push({
+      id: 'overdue',
+      tone: 'critical',
+      provenance: 'calculated',
+      title: `${overdue.toLocaleString()} open ${overdue === 1 ? 'task is' : 'tasks are'} past due`,
+      body: 'Open tasks with a due date earlier than today.',
+      action: canOpenTasks ? (
+        <Link href="/tasks?status=overdue" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+          Review overdue tasks <ArrowRight className="h-3 w-3" />
+        </Link>
+      ) : undefined,
+    });
+  }
+  if (failedDocs !== null && failedDocs > 0) {
+    briefing.push({
+      id: 'failed-docs',
+      tone: 'warning',
+      provenance: 'calculated',
+      title: `${failedDocs.toLocaleString()} ${failedDocs === 1 ? 'document' : 'documents'} failed to index`,
+      body: 'Failed documents are excluded from Company Brain answers until they are reprocessed or re-uploaded.',
+      action: (
+        <Link href="/brain" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+          Open Company Brain <ArrowRight className="h-3 w-3" />
+        </Link>
+      ),
+    });
+  }
+  if (canSeeFinancials && financialQuery.isSuccess && currencyValues('revenue').length === 0) {
+    briefing.push({
+      id: 'revenue-gap',
+      tone: 'warning',
+      provenance: 'missing',
+      title: 'No committed revenue for this month',
+      body: 'Financial performance cannot be assessed until revenue transactions are imported and committed in Executive Intelligence.',
+      action: (
+        <Link href="/executive-intelligence" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+          Import financial data <ArrowRight className="h-3 w-3" />
+        </Link>
+      ),
+    });
+  }
+
+  const sparkValues = trend.map((point) => point.value);
+
+  const heroStats = [
+    { label: 'Overdue tasks', value: overdue, tone: overdue ? 'text-destructive' : 'text-foreground', href: canOpenTasks ? '/tasks?status=overdue' : undefined },
+    { label: 'Urgent and open', value: urgentOpen, tone: urgentOpen ? 'text-warning' : 'text-foreground', href: canOpenTasks ? '/tasks' : undefined },
+    { label: 'Documents processing', value: documents ? processingDocs : null, tone: 'text-foreground', href: '/brain' },
+    { label: 'Failed to index', value: failedDocs, tone: failedDocs ? 'text-warning' : 'text-foreground', href: '/brain' },
+  ];
+
   return (
-    <div className="mx-auto w-full max-w-[1500px] space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-500">
-            Lumorius overview
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-            Executive dashboard
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Live operational metrics, with unavailable data called out clearly.
-          </p>
+    <div className="mx-auto w-full max-w-[1500px] space-y-6">
+      <PageHeader
+        hero
+        title={firstName ? `${greeting}, ${firstName}` : 'Overview'}
+        description={new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+        actions={
+          canOpenTasks ? (
+            <>
+              <Link href="/tasks?view=projects" className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3.5 text-sm font-medium transition hover:bg-muted">
+                <FolderKanban className="h-4 w-4" /> Projects
+              </Link>
+              <Link href="/tasks" className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90">
+                <ListChecks className="h-4 w-4" /> Work queue
+              </Link>
+            </>
+          ) : undefined
+        }
+      />
+
+      <dl aria-label="Needs attention" className="grid grid-cols-2 divide-x divide-y divide-border overflow-hidden rounded-xl border border-border bg-card sm:grid-cols-4 sm:divide-y-0">
+        {heroStats.map((stat) => {
+          const content = (
+            <>
+              <dt className="text-xs text-muted-foreground">{stat.label}</dt>
+              <dd className={`mt-1 font-mono text-xl font-medium tabular-nums ${stat.tone}`}>
+                {isLoading ? <Skeleton className="h-6 w-10" /> : stat.value === null ? '—' : stat.value.toLocaleString()}
+              </dd>
+            </>
+          );
+          return stat.href ? (
+            <Link key={stat.label} href={stat.href} className="px-4 py-3 transition-colors hover:bg-muted/50">
+              {content}
+            </Link>
+          ) : (
+            <div key={stat.label} className="px-4 py-3">{content}</div>
+          );
+        })}
+      </dl>
+
+      {isError && <ErrorState title="Workspace activity could not be refreshed" description="Showing the most recent data available. Check your connection and retry." />}
+
+      <section aria-label="Workspace activity">
+        <SectionHeading title="Workspace activity" actions={<DataFreshness at={data?.generatedAt} />} />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {metrics.map((metric, index) => (
+            <MetricCard
+              key={metric.label}
+              {...metric}
+              loading={isLoading && index < 3}
+              emphasis={metric.label === 'Tasks Completed' ? 'primary' : 'default'}
+              sparkline={metric.label === 'Tasks Completed' ? sparkValues : undefined}
+              trend={metric.label === 'Tasks Completed' ? <TrendIndicator current={current} previous={previous} /> : undefined}
+            />
+          ))}
         </div>
+      </section>
 
-        <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          Task period
-          <select
-            aria-label="Task completion period"
-            value={days}
-            onChange={(event) => setDays(Number(event.target.value))}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-brand-500"
-          >
-            <option value={7}>Last 7 days</option>
-            <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-          </select>
-        </label>
-      </div>
-
-      {isError && (
-        <div
-          role="alert"
-          className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.75fr)_minmax(300px,1fr)]">
+        <ChartContainer
+          title="Task completions"
+          description={`Tasks completed per day · last ${days} days`}
+          loading={isLoading}
+          error={isError && !data}
+          empty={trend.length === 0}
+          emptyTitle="No completion history for this period"
+          emptyDescription="Completed tasks with a completion timestamp will appear here."
+          height={280}
+          legend={
+            <>
+              <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-chart-1" aria-hidden="true" /> Completed per day</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-3 bg-chart-2" aria-hidden="true" /> 7-day average</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-0 w-3 border-t border-dashed border-muted-foreground" aria-hidden="true" /> Period average</span>
+            </>
+          }
+          source="Tasks marked done with a completion time, grouped by calendar day."
+          actions={
+            <SegmentedControl
+              label="Task completion period"
+              value={days}
+              onChange={setDays}
+              options={[
+                { value: 7, label: '7D' },
+                { value: 30, label: '30D' },
+                { value: 90, label: '90D' },
+              ]}
+            />
+          }
         >
-          Dashboard data could not be loaded. Values are left blank rather than shown as zero.
-        </div>
-      )}
+          <CompletionChart points={trend} height={280} />
+          <div className="mt-6 border-t border-border pt-5">
+            <p className="mb-3 text-xs font-medium text-muted-foreground">Daily activity</p>
+            <ActivityHeatmap points={trend} />
+          </div>
+        </ChartContainer>
 
-      <section
-        aria-label="Key performance indicators"
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5"
-      >
-        {metrics.map((metric) => (
-          <MetricCard key={metric.label} metric={metric} />
-        ))}
+        <Panel
+          title="What changed"
+          description={`Last ${days} days compared with the ${days} before`}
+          footer="Calculated from your workspace records. Lumorius does not guess at causes here."
+        >
+          {isLoading ? (
+            <div className="space-y-2.5">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : briefing.length ? (
+            <InsightList insights={briefing} />
+          ) : (
+            <EmptyState
+              icon={CheckCircle2}
+              title="Nothing needs attention"
+              description="No overdue tasks, indexing failures or data gaps were detected in the selected period."
+              compact
+            />
+          )}
+        </Panel>
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.9fr)]">
-        <article className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="font-semibold text-foreground">
-                Task completions
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Daily completed tasks · last {days} days
-              </p>
-            </div>
-
-            <span className="rounded-md bg-brand-500/10 px-2.5 py-1 text-xs font-medium text-brand-500">
-              Tasks
-            </span>
-          </div>
-
-          {isLoading ? (
-            <div className="h-[270px] animate-pulse rounded-lg bg-muted/60" />
-          ) : trend.length > 0 ? (
-            <div className="h-[270px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={trend}
-                  margin={{ top: 8, right: 8, bottom: 0, left: -18 }}
-                >
-                  <defs>
-                    <linearGradient
-                      id="taskCompletionFill"
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop
-                        offset="0%"
-                        stopColor="#f59e0b"
-                        stopOpacity={0.26}
-                      />
-                      <stop
-                        offset="95%"
-                        stopColor="#f59e0b"
-                        stopOpacity={0.01}
-                      />
-                    </linearGradient>
-                  </defs>
-
-                  <CartesianGrid
-                    stroke="hsl(var(--border))"
-                    strokeDasharray="3 3"
-                    vertical={false}
-                  />
-
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 11 }}
-                    tickLine={false}
-                    axisLine={false}
-                    minTickGap={24}
-                  />
-
-                  <YAxis
-                    allowDecimals={false}
-                    tick={{ fontSize: 11 }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-
-                  <Tooltip
-                    contentStyle={{
-                      background: 'hsl(var(--card))',
-                      borderColor: 'hsl(var(--border))',
-                      borderRadius: 10,
-                      fontSize: 12,
-                    }}
-                    labelStyle={{ color: 'hsl(var(--foreground))' }}
-                    formatter={(value) => [`${value} completed`, 'Tasks']}
-                  />
-
-                  <Area
-                    type="monotone"
-                    dataKey="value"
-                    stroke="#f59e0b"
-                    strokeWidth={2}
-                    fill="url(#taskCompletionFill)"
-                    activeDot={{ r: 4 }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyPanel>
-              Task completion history is unavailable for this period.
-            </EmptyPanel>
-          )}
-        </article>
-
-        <article className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-            <div>
-              <h2 className="font-semibold text-foreground">
-                Operational signal
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                Deterministic task-completion comparison
-              </p>
-            </div>
-          </div>
-
-          {isLoading ? (
-            <div className="h-44 animate-pulse rounded-lg bg-muted/60" />
-          ) : hasSignal ? (
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-              <div className="flex items-center gap-2">
-                {changePercent >= 0 ? (
-                  <ArrowUpRight className="h-4 w-4 text-amber-500" />
-                ) : (
-                  <ArrowDownRight className="h-4 w-4 text-amber-500" />
-                )}
-
-                <p className="text-sm font-semibold text-foreground">
-                  Task completions {changePercent >= 0 ? 'increased' : 'decreased'}{' '}
-                  {Math.abs(changePercent)}%
-                </p>
-              </div>
-
-              <p className="mt-2 text-sm text-muted-foreground">
-                {current} completed in the last {days} days, compared with{' '}
-                {previous} in the preceding {days} days.
-              </p>
-
-              <p className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
-                Rule: at least a 50% change, with at least 3 completions in the
-                prior window. No confidence score is inferred.
-              </p>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-border bg-muted/30 p-4">
-              <p className="text-sm font-medium text-foreground">
-                No signal met the comparison rule.
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                The panel compares completed tasks with the preceding {days}-day
-                window and requires a 50% change plus a baseline of 3 tasks.
-              </p>
-            </div>
-          )}
-
-          <p className="mt-4 text-[11px] leading-4 text-muted-foreground">
-            This is a simple activity threshold, not a predictive anomaly model.
-          </p>
-        </article>
-      </section>
-
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <article className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold text-foreground">Task status</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Organization-wide task distribution
-              </p>
-            </div>
-
-            <Link
-              href="/tasks"
-              className="text-xs font-medium text-brand-500 hover:underline"
-            >
-              Open tasks
-            </Link>
-          </div>
-
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <Panel
+          title="Task status"
+          description="Organization-wide distribution"
+          actions={<Link href="/tasks" className="text-xs font-medium text-primary hover:underline">Open tasks</Link>}
+        >
           {teamLoading ? (
-            <div className="h-40 animate-pulse rounded-lg bg-muted/60" />
+            <div className="space-y-4">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-7 w-full" />)}</div>
           ) : teamError ? (
-            <EmptyPanel>Task status data could not be loaded.</EmptyPanel>
+            <ErrorState title="Task status data could not be loaded" />
           ) : statusRows.length === 0 ? (
-            <EmptyPanel>No task status data yet.</EmptyPanel>
+            <EmptyState icon={ListChecks} title="No tasks yet" description="Create tasks or import action items from meetings." compact />
           ) : (
-            <div className="space-y-4">
-              {statusRows.map((row) => (
-                <div key={row.status}>
-                  <div className="mb-1.5 flex justify-between gap-3 text-xs">
-                    <span className="capitalize text-muted-foreground">
-                      {row.status}
-                    </span>
-                    <span className="font-medium tabular-nums text-foreground">
-                      {row.count.toLocaleString()}
-                    </span>
-                  </div>
-
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-brand-500"
-                      style={{
-                        width: `${
-                          statusTotal
-                            ? (row.count / statusTotal) * 100
-                            : 0
-                        }%`,
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+            <StatusBar rows={statusRows} />
           )}
-        </article>
+        </Panel>
 
-        <article className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold text-foreground">
-                Document indexing
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Processing state from Company Brain
-              </p>
-            </div>
-
-            <Link
-              href="/brain"
-              className="text-xs font-medium text-brand-500 hover:underline"
-            >
-              Open library
-            </Link>
-          </div>
-
+        <Panel
+          title="Document indexing"
+          description="Processing state from Company Brain"
+          actions={<Link href="/brain" className="text-xs font-medium text-primary hover:underline">Open library</Link>}
+          footer={documents ? `${number(documents.total)?.toLocaleString() ?? '—'} total documents recorded.` : undefined}
+        >
           {isLoading ? (
-            <div className="h-40 animate-pulse rounded-lg bg-muted/60" />
+            <div className="space-y-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
           ) : documents ? (
-            <div className="space-y-3">
-              {[
-                ['Indexed', documents.indexed],
-                ['Processing', documents.processing],
-                ['Uploading', documents.uploading],
-                ['Failed', documents.failed],
-              ].map(([label, value]) => (
-                <div
-                  key={label as string}
-                  className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2.5"
-                >
-                  <span className="text-sm text-muted-foreground">
-                    {label}
-                  </span>
-                  <span className="text-sm font-semibold tabular-nums text-foreground">
-                    {number(value as string | number)?.toLocaleString() ?? '—'}
-                  </span>
-                </div>
+            <ul className="space-y-2">
+              {([
+                ['Indexed', documents.indexed, 'success'],
+                ['Processing', documents.processing, 'info'],
+                ['Uploading', documents.uploading, 'primary'],
+                ['Failed', documents.failed, 'critical'],
+              ] as const).map(([label, value, tone]) => (
+                <li key={label} className="flex items-center justify-between rounded-lg border border-border/60 bg-muted/25 px-3 py-2.5">
+                  <StatusBadge tone={(number(value) ?? 0) > 0 ? tone : 'neutral'}>{label}</StatusBadge>
+                  <span className="text-sm font-semibold tabular-nums text-foreground">{number(value)?.toLocaleString() ?? '—'}</span>
+                </li>
               ))}
-
-              <p className="pt-1 text-[11px] text-muted-foreground">
-                {number(documents.total)?.toLocaleString() ?? '—'} total
-                documents recorded.
-              </p>
-            </div>
+            </ul>
           ) : (
-            <EmptyPanel>
-              Document indexing metrics are unavailable.
-            </EmptyPanel>
+            <EmptyState icon={Brain} title="Indexing metrics unavailable" compact />
           )}
-        </article>
+        </Panel>
 
-        <article className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="font-semibold text-foreground">
-                Priority work
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Urgent and near-due open tasks
-              </p>
-            </div>
-
-            <Link
-              href="/tasks"
-              className="text-xs font-medium text-brand-500 hover:underline"
-            >
-              View all
-            </Link>
-          </div>
-
+        <Panel
+          title="Priority work"
+          description="Urgent and near-due open tasks"
+          actions={<Link href="/tasks" className="text-xs font-medium text-primary hover:underline">View all</Link>}
+          className="md:col-span-2 xl:col-span-1"
+        >
           {isLoading ? (
-            <div className="h-40 animate-pulse rounded-lg bg-muted/60" />
+            <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-14 w-full" />)}</div>
           ) : data?.urgentTasks?.length ? (
-            <div className="space-y-2">
+            <ul className="space-y-2">
               {data.urgentTasks.slice(0, 5).map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-start gap-3 rounded-lg border border-border p-3"
-                >
-                  <span
-                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                      task.priority === 'urgent'
-                        ? 'bg-red-500'
-                        : 'bg-amber-500'
-                    }`}
-                  />
-
+                <li key={task.id} className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 transition-colors hover:border-border-strong">
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${task.priority === 'urgent' ? 'bg-destructive' : 'bg-warning'}`} aria-hidden="true" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-foreground">
-                      {task.title}
-                    </span>
-
-                    <span className="mt-1 block text-xs capitalize text-muted-foreground">
-                      {task.priority}
-                      {task.due_date
-                        ? ` · due ${formatRelative(task.due_date)}`
-                        : ''}
+                    <span className="block truncate text-sm font-medium text-foreground">{task.title}</span>
+                    <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <StatusBadge tone={task.priority === 'urgent' ? 'critical' : 'warning'} dot={false}>{task.priority}</StatusBadge>
+                      {task.due_date ? `Due ${formatDate(task.due_date)}` : 'No due date'}
                     </span>
                   </span>
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           ) : (
-            <EmptyPanel>No urgent or near-due tasks.</EmptyPanel>
+            <EmptyState icon={CheckCircle2} title="No urgent or near-due tasks" compact />
           )}
-        </article>
+        </Panel>
       </section>
 
-      {data?.generatedAt && (
-        <p className="text-right text-[11px] text-muted-foreground">
-          Metrics refreshed {formatRelative(data.generatedAt)}
-        </p>
+      {canSeeFinancials && (
+        <section aria-label="Financial performance">
+          <SectionHeading
+            title="Financial performance"
+            description="Committed figures from Executive Intelligence. “≈” marks estimated values."
+            actions={
+              <Link href="/executive-intelligence" className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
+                Executive Intelligence <ArrowRight className="h-4 w-4" />
+              </Link>
+            }
+          />
+          {financialLocked ? (
+            <EmptyState
+              icon={CircleDollarSign}
+              title="Financial performance is not included in your current plan"
+              description="Revenue, MRR, ARR, CAC and churn come from Executive Intelligence, which requires a plan with advanced financial reporting."
+              action={
+                <Link href="/billing" className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90">
+                  View plans <ArrowRight className="h-4 w-4" />
+                </Link>
+              }
+            />
+          ) : (
+            <>
+              {financialQuery.isError && <ErrorState className="mb-3" title="Financial data could not be loaded" onRetry={() => void financialQuery.refetch()} />}
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+                {financialMetrics.map((metric) => (
+                  <MetricCard key={metric.label} {...metric} loading={financialQuery.isLoading} tone="info" />
+                ))}
+              </div>
+            </>
+          )}
+        </section>
       )}
     </div>
   );

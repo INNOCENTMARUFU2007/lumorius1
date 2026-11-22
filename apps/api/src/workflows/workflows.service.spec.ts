@@ -59,25 +59,37 @@ describe('WorkflowsService V4.11 decision automation', () => {
 
     expect(db.query.mock.calls[0][1][3]).toBe(triggerType);
   });
+  const growthPlan = { rows: [{ plan_id: 'growth', trial_ends_at: null, created_at: new Date().toISOString() }] };
+
   it('dispatches an active matching decision workflow to the Bull queue', async () => {
     db.query
+      .mockResolvedValueOnce(growthPlan)
       .mockResolvedValueOnce({ rows: [{ id: 'workflow-1', trigger_config: {}, status: 'active' }] })
       .mockResolvedValueOnce({ rows: [{ id: 'run-1' }] });
     const result = await service.dispatchEvent('org-1', 'decision.proposed', {
       decision: { id: 'decision-1', decisionType: 'strategic', priority: 'high', status: 'proposed' },
     }, 'decision.proposed:decision-1:1', 'actor-1');
     expect(result.matched).toBe(1);
-    const insertedRunId = String(db.query.mock.calls[1][1][0]);
+    const insertedRunId = String(db.query.mock.calls[2][1][0]);
     expect(queue.add).toHaveBeenCalledWith(
       'execute',
       expect.objectContaining({ runId: insertedRunId, workflowId: 'workflow-1', organizationId: 'org-1' }),
       expect.objectContaining({ jobId: insertedRunId }),
     );
-    expect(db.query.mock.calls[1][0]).toContain('ON CONFLICT (workflow_id, event_key)');
+    expect(db.query.mock.calls[2][0]).toContain('ON CONFLICT (workflow_id, event_key)');
+  });
+
+  it('does not fire event workflows when the plan excludes Workflows', async () => {
+    db.query.mockResolvedValueOnce({ rows: [{ plan_id: 'starter', trial_ends_at: null, created_at: new Date().toISOString() }] });
+    const result = await service.dispatchEvent('org-1', 'decision.proposed', { decision: { id: 'decision-1' } }, 'key-1');
+    expect(result).toMatchObject({ matched: 0, skipped: 'plan_does_not_include_workflows' });
+    expect(db.query).toHaveBeenCalledTimes(1);
+    expect(queue.add).not.toHaveBeenCalled();
   });
 
   it('does not enqueue a duplicate event when the run key already exists', async () => {
     db.query
+      .mockResolvedValueOnce(growthPlan)
       .mockResolvedValueOnce({ rows: [{ id: 'workflow-1', trigger_config: {}, status: 'active' }] })
       .mockResolvedValueOnce({ rows: [] });
     const result = await service.dispatchEvent('org-1', 'decision.proposed', { decision: { id: 'decision-1' } }, 'same-event-key');

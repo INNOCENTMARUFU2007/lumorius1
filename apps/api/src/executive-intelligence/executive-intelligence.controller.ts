@@ -10,6 +10,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { FeatureGuard, RequiresFeature } from '../billing/entitlements';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -19,7 +20,8 @@ import { ExecutiveImportService } from './executive-import.service';
 
 @ApiTags('executive-intelligence')
 @ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(AuthGuard('jwt'), FeatureGuard)
+@RequiresFeature('advanced_financial')
 @Controller('executive-intelligence')
 export class ExecutiveIntelligenceController {
   constructor(private readonly imports: ExecutiveImportService) {}

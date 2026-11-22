@@ -1,10 +1,80 @@
 import { ForbiddenException, BadRequestException } from '@nestjs/common';
 import { ExecutiveAnalyticsService } from './executive-analytics.service';
 import {
+  buildMonthlySeries,
   calculateTargetAssessment,
   escapeCsvField,
+  metricTrendsFromSeries,
+  monthlyTrendWindow,
   normalizeMonthlyRecurringAmount,
 } from './executive-analytics.service';
+
+describe('monthly trend helpers', () => {
+  it('covers the 12 months ending at the period end for a short period', () => {
+    const window = monthlyTrendWindow('2026-10-24', '2026-11-22');
+    expect(window.months).toHaveLength(12);
+    expect(window.months[0]).toBe('2025-12');
+    expect(window.months[11]).toBe('2026-11');
+    expect(window.start).toBe('2025-12-01');
+    // Month ends, but never past the period end.
+    expect(window.snapshotDates[0]).toBe('2025-12-31');
+    expect(window.snapshotDates[2]).toBe('2026-02-28');
+    expect(window.snapshotDates[11]).toBe('2026-11-22');
+  });
+
+  it('uses the whole period when longer than 12 months, capped at 36', () => {
+    expect(monthlyTrendWindow('2025-01-15', '2026-11-22').months).toHaveLength(23);
+    const long = monthlyTrendWindow('2018-01-01', '2026-11-22');
+    expect(long.months).toHaveLength(36);
+    expect(long.months[0]).toBe('2023-12');
+  });
+
+  it('zero-fills months, keeps currencies apart and marks which types have records', () => {
+    const months = ['2026-09', '2026-10', '2026-11'];
+    const series = buildMonthlySeries(months, [
+      { currency: 'USD', month: '2026-10', transaction_type: 'revenue', total_amount: '1000.50', record_count: 2 },
+      { currency: 'USD', month: '2026-11', transaction_type: 'cost_of_goods_sold', total_amount: '400', record_count: 3 },
+      { currency: 'EUR ', month: '2026-11', transaction_type: 'revenue', total_amount: '90', record_count: 1 },
+      { currency: 'USD', month: '2026-11', transaction_type: 'not_a_type', total_amount: '5', record_count: 1 },
+    ], []);
+    expect(series.map((s) => s.currency)).toEqual(['EUR', 'USD']);
+    const usd = series[1];
+    expect(usd.typesPresent).toEqual(['revenue', 'cost_of_goods_sold']);
+    expect(usd.points.map((p) => p.revenue)).toEqual([0, 1000.5, 0]);
+    expect(usd.points.map((p) => p.recordCount)).toEqual([0, 2, 3]);
+    expect(usd.points.every((p) => p.mrr === null)).toBe(true);
+  });
+
+  it('fills MRR per month end, using zero for months with no active contracts', () => {
+    const series = buildMonthlySeries(['2026-10', '2026-11'], [], [
+      { snapshot_date: '2026-11-22', currency: 'USD', mrr: '250' },
+    ]);
+    expect(series[0].points.map((p) => p.mrr)).toEqual([0, 250]);
+    const trends = metricTrendsFromSeries(series[0]);
+    expect(trends.arr.map((p) => p.value)).toEqual([0, 3000]);
+  });
+
+  it('gives derived metrics a trend only when their inputs exist', () => {
+    const [onlyRevenue] = buildMonthlySeries(['2026-11'], [
+      { currency: 'USD', month: '2026-11', transaction_type: 'revenue', total_amount: '100', record_count: 1 },
+      { currency: 'USD', month: '2026-11', transaction_type: 'refund', total_amount: '10', record_count: 1 },
+    ], []);
+    const revenueTrends = metricTrendsFromSeries(onlyRevenue);
+    expect(revenueTrends.net_revenue[0].value).toBe(90);
+    expect(revenueTrends.gross_profit).toBeUndefined();
+    expect(revenueTrends.mrr).toBeUndefined();
+
+    const [full] = buildMonthlySeries(['2026-11'], [
+      { currency: 'USD', month: '2026-11', transaction_type: 'revenue', total_amount: '100', record_count: 1 },
+      { currency: 'USD', month: '2026-11', transaction_type: 'cost_of_goods_sold', total_amount: '30', record_count: 1 },
+      { currency: 'USD', month: '2026-11', transaction_type: 'operating_expense', total_amount: '50.1', record_count: 1 },
+      { currency: 'USD', month: '2026-11', transaction_type: 'acquisition_cost', total_amount: '20.2', record_count: 1 },
+    ], []);
+    const fullTrends = metricTrendsFromSeries(full);
+    expect(fullTrends.gross_profit[0].value).toBe(70);
+    expect(fullTrends.operating_result[0].value).toBe(-0.3);
+  });
+});
 
 describe('ExecutiveAnalyticsService calculation helpers', () => {
   it('rejects non-admin dashboard access before opening a database transaction', async () => {

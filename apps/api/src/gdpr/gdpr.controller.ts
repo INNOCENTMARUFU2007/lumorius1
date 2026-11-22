@@ -8,6 +8,9 @@ import {
   Param,
   Post,
   Put,
+  Query,
+  ParseUUIDPipe,
+  Header,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -27,6 +30,7 @@ export class GdprController {
   constructor(private readonly gdprService: GdprService) {}
 
   @Get('export')
+  @Header('Cache-Control', 'private, no-store')
   @ApiOperation({ summary: 'Export all my data (GDPR Art. 20)' })
   async exportMyData(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const bundle = await this.gdprService.exportUserData(user.sub);
@@ -55,6 +59,22 @@ export class GdprController {
     return this.gdprService.cancelDeletion(user.sub);
   }
 
+  @Get('organization/export')
+  @Roles('owner', 'admin')
+  @Header('Cache-Control', 'private, no-store')
+  organizationExport(
+    @CurrentUser() user: JwtPayload,
+    @Query('resource') resource: string,
+    @Query('after') after?: string,
+  ) {
+    return this.gdprService.exportOrganizationData(user.organizationId, user.sub, resource, after);
+  }
+
+  @Get('organization/deletion-requests/:id')
+  organizationDeletionReceipt(@CurrentUser() user: JwtPayload, @Param('id', ParseUUIDPipe) id: string) {
+    return this.gdprService.getOrganizationDeletionReceipt(id, user.sub);
+  }
+
   @Get('organization/deletion-status')
   @Roles('owner', 'admin')
   @ApiOperation({ summary: 'Get the organization deletion request status' })
@@ -63,7 +83,7 @@ export class GdprController {
   }
 
   @Post('organization/request-deletion')
-  @Roles('owner', 'admin')
+  @Roles('owner')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({ summary: 'Schedule organization deletion after a 30-day grace period' })
   requestOrganizationDeletion(@CurrentUser() user: JwtPayload) {

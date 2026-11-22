@@ -190,6 +190,7 @@ export class KnowledgeDecisionsService {
     role: string,
     input: Record<string, unknown>,
     sourceMeetingDecisionCandidateId?: string,
+    transaction?: PoolClient,
   ) {
     this.assertCanCreate(role);
     const title = this.clean(input.title, 240);
@@ -209,7 +210,7 @@ export class KnowledgeDecisionsService {
 
     const dueDate = this.parseDate(input.dueDate, 'dueDate');
     const reviewDueAt = this.parseDate(input.reviewDueAt, 'reviewDueAt');
-    const result = await this.db.transaction(async client => {
+    const create = async (client: PoolClient) => {
       const inserted = await client.query(
         `INSERT INTO knowledge_decisions (
            organization_id, title, description, rationale, decision_type,
@@ -252,8 +253,8 @@ export class KnowledgeDecisionsService {
       );
       await this.appendDecisionLifecycleEvent(client, 'decision.created', organizationId, userId, row);
       return row;
-    });
-    return result;
+    };
+    return transaction ? create(transaction) : this.db.transaction(create);
   }
 
   async listDecisions(
@@ -649,7 +650,7 @@ export class KnowledgeDecisionsService {
 
   private assertUuid(value: unknown, field: string): string {
     const result = typeof value === 'string' ? value.trim() : '';
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result)) {
+    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(result)) {
       throw new BadRequestException(`${field} must be a valid UUID.`);
     }
     return result.toLowerCase();
@@ -841,6 +842,15 @@ export class KnowledgeDecisionsService {
 
       if (!this.canManage(current, userId, role) && !representedUserId) {
         throw new ForbiddenException('Only the decision owner, creator or an authorised organisation approver can change its lifecycle.');
+      }
+
+      if (['approved', 'implemented'].includes(nextStatus) && /^Review version \d+ in AI Advisor: \/ai\?agentRun=/.test(String(current.description ?? ''))) {
+        const proposal = (await client.query<{ status: string; seen: boolean }>(`SELECT r.status,
+          EXISTS (SELECT 1 FROM agent_run_steps s WHERE s.organization_id=r.organization_id AND s.run_id=r.id
+            AND s.stage='proposal_view' AND s.details->>'actor'=$3 AND s.details->>'version'=r.artifact_version::text) AS seen
+          FROM agent_runs r WHERE r.organization_id=$1 AND r.decision_id=$2`, [organizationId,id,userId])).rows[0];
+        if (proposal && nextStatus === 'approved' && !proposal.seen) throw new ConflictException('Open the agent proposal in AI Advisor before approving it.');
+        if (proposal && nextStatus === 'implemented' && proposal.status !== 'applied') throw new ConflictException('Apply the approved proposal in AI Advisor before recording implementation.');
       }
 
       const approvalPolicy = current.status === 'draft' && nextStatus === 'proposed'
@@ -1387,12 +1397,14 @@ export class KnowledgeDecisionsService {
 
     const summaryResult = await this.db.query(
       `SELECT
-         COUNT(*) FILTER (WHERE decision.status = 'proposed' AND decision.approval_due_at IS NOT NULL)::int AS pending,
+         COUNT(*)::int AS pending,
+         COUNT(*) FILTER (WHERE decision.approval_required_role IS NOT NULL)::int AS policy_pending,
+         COUNT(*) FILTER (WHERE decision.approval_required_role IS NULL)::int AS without_policy,
          COUNT(*) FILTER (WHERE decision.status = 'proposed' AND decision.approval_due_at < NOW())::int AS overdue,
          COUNT(*) FILTER (WHERE decision.status = 'proposed' AND decision.approval_due_at >= NOW() AND decision.approval_due_at <= NOW() + INTERVAL '48 hours')::int AS due_soon,
          COUNT(*) FILTER (WHERE decision.status = 'proposed' AND decision.approval_escalation_count > 0)::int AS escalated
        FROM knowledge_decisions decision
-       WHERE decision.organization_id = $1::uuid AND ${visibility}`,
+       WHERE decision.organization_id = $1::uuid AND decision.status = 'proposed' AND ${visibility}`,
       [organizationId, privileged, userId],
     );
 
@@ -1407,16 +1419,14 @@ export class KnowledgeDecisionsService {
               decision.approval_escalation_count AS "escalationCount",
               owner.name AS "ownerName",
               GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - decision.approval_due_at)) / 3600))::int AS "hoursOverdue",
-              (decision.approval_due_at < NOW()) AS "isOverdue"
+              COALESCE(decision.approval_due_at < NOW(), FALSE) AS "isOverdue"
          FROM knowledge_decisions decision
          LEFT JOIN users owner ON owner.id = decision.owner_id
         WHERE decision.organization_id = $1::uuid
           AND decision.status = 'proposed'
-          AND decision.approval_due_at IS NOT NULL
-          AND decision.approval_due_at <= NOW() + INTERVAL '7 days'
           AND ${visibility}
-        ORDER BY decision.approval_due_at ASC
-        LIMIT 50`,
+        ORDER BY decision.approval_due_at ASC NULLS LAST, decision.created_at DESC, decision.id DESC
+        LIMIT 12`,
       [organizationId, privileged, userId],
     );
 
@@ -1439,6 +1449,7 @@ export class KnowledgeDecisionsService {
       `SELECT delegation.id,
               delegation.principal_user_id AS "principalUserId",
               principal.name AS "principalName",
+              CASE WHEN principal.is_active THEN principal.role::text END AS "principalRole",
               delegation.delegate_user_id AS "delegateUserId",
               delegate.name AS "delegateName",
               delegation.decision_type AS "decisionType",
@@ -1457,45 +1468,12 @@ export class KnowledgeDecisionsService {
       [organizationId, userId, privileged],
     );
 
-    const eventResult = await this.db.query(
-      `SELECT event.id,
-              event.event_type AS "eventType",
-              event.details,
-              event.note,
-              event.created_at AS "createdAt",
-              actor.name AS "actorName",
-              actor.email AS "actorEmail",
-              represented.name AS "representedUserName",
-              decision.title AS "decisionTitle"
-         FROM knowledge_decision_governance_events event
-         LEFT JOIN users actor ON actor.id = event.actor_id
-         LEFT JOIN users represented ON represented.id = event.represented_user_id
-         LEFT JOIN knowledge_decisions decision
-           ON decision.id = event.decision_id
-          AND decision.organization_id = event.organization_id
-        WHERE event.organization_id = $1::uuid
-          AND ($2::boolean = TRUE OR event.actor_id = $3::uuid OR event.represented_user_id = $3::uuid)
-          AND (
-            event.decision_id IS NULL
-            OR EXISTS (
-              SELECT 1 FROM knowledge_decisions visible
-               WHERE visible.id = event.decision_id
-                 AND visible.organization_id = event.organization_id
-                 AND (visible.team_id IS NULL OR $2::boolean = TRUE OR EXISTS (
-                   SELECT 1 FROM team_members member
-                    WHERE member.team_id = visible.team_id AND member.user_id = $3::uuid
-                 ))
-            )
-          )
-        ORDER BY event.created_at DESC
-        LIMIT 40`,
-      [organizationId, privileged, userId],
-    );
-
     const summary = summaryResult.rows[0] ?? {};
     return {
       summary: {
         pending: Number(summary.pending ?? 0),
+        policyPending: Number(summary.policy_pending ?? 0),
+        withoutPolicy: Number(summary.without_policy ?? 0),
         overdue: Number(summary.overdue ?? 0),
         dueSoon: Number(summary.due_soon ?? 0),
         escalated: Number(summary.escalated ?? 0),
@@ -1503,12 +1481,88 @@ export class KnowledgeDecisionsService {
       queue: queueResult.rows,
       policies,
       delegations: delegationResult.rows,
-      events: eventResult.rows,
       permissions: {
         managePolicies: privileged,
         manageOrganisation: this.canManageOrganisation(role),
         canEscalate: this.canManageOrganisation(role),
       },
+    };
+  }
+
+  async listGovernanceEvents(organizationId: string, userId: string, role: string, category: string, cursor?: string) {
+    const groups: Record<string, string[]> = {
+      policy: ['approval_policy_created', 'approval_policy_updated', 'approval_policy_deactivated', 'approval_policy_snapshotted'],
+      delegation: ['approval_delegation_granted', 'approval_delegation_revoked'],
+      decision: ['approval_granted', 'approval_rejected'],
+      escalation: ['approval_escalated'],
+    };
+    if (!['all', ...Object.keys(groups)].includes(category)) {
+      throw new BadRequestException('Invalid governance audit filter.');
+    }
+    let beforeTime: string | null = null;
+    let beforeId: string | null = null;
+    if (cursor !== undefined) {
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(cursor)) throw new BadRequestException('Invalid audit cursor.');
+      const [timestamp, id, ...extra] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+      if (extra.length || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(timestamp) ||
+          !Number.isFinite(Date.parse(timestamp))) {
+        throw new BadRequestException('Invalid audit cursor.');
+      }
+      // Require a real calendar date too. Date.parse can normalize invalid dates.
+      if (new Date(timestamp).toISOString().slice(0, 19) !== timestamp.slice(0, 19)) {
+        throw new BadRequestException('Invalid audit cursor.');
+      }
+      beforeTime = timestamp;
+      beforeId = this.assertUuid(id, 'Audit cursor ID');
+    }
+
+    const visibleLane = (participant: string) => `
+      SELECT event.id, event.organization_id, event.event_type, event.note, event.created_at,
+             event.actor_id, event.represented_user_id, event.decision_id
+      FROM knowledge_decision_governance_events event
+      WHERE event.organization_id = $1::uuid
+        ${participant}
+        AND ($4::text[] IS NULL OR event.event_type = ANY($4::text[]))
+        AND (($5::timestamptz IS NULL AND $6::uuid IS NULL) OR (event.created_at, event.id) < ($5::timestamptz, $6::uuid))
+        AND (event.decision_id IS NULL OR EXISTS (
+          SELECT 1 FROM knowledge_decisions decision
+          WHERE decision.id = event.decision_id AND decision.organization_id = event.organization_id
+            AND (decision.team_id IS NULL OR $2::boolean OR EXISTS (
+              SELECT 1 FROM team_members member
+              WHERE member.team_id = decision.team_id AND member.user_id = $3::uuid
+            ))
+        ))
+      ORDER BY event.created_at DESC, event.id DESC
+      LIMIT $7`;
+    const privileged = this.isPrivileged(role);
+    const candidates = privileged
+      ? visibleLane('')
+      : `(${visibleLane('AND event.actor_id = $3::uuid')})
+         UNION ALL
+         (${visibleLane('AND event.represented_user_id = $3::uuid AND event.actor_id <> $3::uuid')})`;
+    const pageSize = 10;
+    const result = await this.db.query<{ id: string; createdAt: string }>(
+      `WITH candidates AS (${candidates})
+       SELECT event.id, event.event_type AS "eventType", event.note,
+              to_char(event.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt",
+              actor.name AS "actorName", actor.email AS "actorEmail",
+              represented.name AS "representedUserName", decision.title AS "decisionTitle"
+       FROM candidates event
+       LEFT JOIN users actor ON actor.id = event.actor_id
+       LEFT JOIN users represented ON represented.id = event.represented_user_id
+       LEFT JOIN knowledge_decisions decision
+         ON decision.id = event.decision_id AND decision.organization_id = event.organization_id
+       ORDER BY event.created_at DESC, event.id DESC
+       LIMIT $7`,
+      [organizationId, privileged, userId, category === 'all' ? null : groups[category], beforeTime, beforeId, pageSize + 1],
+    );
+    const items = result.rows.slice(0, pageSize);
+    const last = items[items.length - 1];
+    return {
+      items,
+      nextCursor: last && result.rows.length > pageSize
+        ? Buffer.from(`${last.createdAt}|${last.id}`).toString('base64url')
+        : null,
     };
   }
 
@@ -1627,13 +1681,14 @@ export class KnowledgeDecisionsService {
   }
 
   async createApprovalDelegation(organizationId: string, userId: string, role: string, input: Record<string, unknown>) {
+    const actorId = this.assertUuid(userId, 'Signed-in user ID');
     const principalId = input.principalUserId
       ? this.assertUuid(input.principalUserId, 'Principal user ID')
-      : userId;
+      : actorId;
     const delegateId = this.assertUuid(input.delegateUserId, 'Delegate user ID');
     if (principalId === delegateId) throw new BadRequestException('A user cannot delegate approval authority to themselves.');
-    if (principalId !== userId) {
-      throw new ForbiddenException('Approval authority must be delegated by the principal user themselves. Organisation administrators may revoke a delegation, but cannot grant one on another userâ€™s behalf.');
+    if (principalId !== actorId) {
+      throw new ForbiddenException('Approval authority must be delegated by the principal user themselves. Organisation administrators may revoke a delegation, but cannot grant one on another user’s behalf.');
     }
     await this.ensureUser(organizationId, principalId);
     await this.ensureUser(organizationId, delegateId);

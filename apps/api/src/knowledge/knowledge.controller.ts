@@ -1,3 +1,4 @@
+import { RequiresModule } from '../billing/entitlements';
 import {
   Controller,
   Get,
@@ -24,6 +25,7 @@ import {
 @ApiTags('knowledge')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@RequiresModule('core')
 @Controller('knowledge')
 export class KnowledgeController {
   constructor(

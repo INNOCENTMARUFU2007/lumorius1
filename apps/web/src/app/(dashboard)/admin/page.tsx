@@ -71,7 +71,7 @@ export default function AdminPage() {
   const [userCursorIndex, setUserCursorIndex] = useState(0);
   const userCursor = userCursors[userCursorIndex] ?? null;
 
-  const platformAdminEmail = (process.env.NEXT_PUBLIC_LUMORIUS_ADMIN_EMAIL ?? 'marufuinnocent0@gmail.com')
+  const platformAdminEmail = (process.env.NEXT_PUBLIC_LUMORIUS_ADMIN_EMAIL ?? '')
     .trim()
     .toLowerCase();
   const isPlatformAdmin = Boolean(
@@ -302,7 +302,7 @@ export default function AdminPage() {
                   return [
                     ...(showOrganisationGroupHeader ? [
                       <tr key={`org-group-${currentOrgId}-${String(u.id)}`} className="bg-muted/40 border-t-2 border-border">
-                          <td colSpan={7} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          <td colSpan={7} className="px-4 py-2 text-xs font-semibold  text-muted-foreground">
                             <div className="flex items-center justify-between gap-3">
                               <span>{String(u.org_name ?? 'No organisation')}</span>
                               <span className="normal-case font-normal">

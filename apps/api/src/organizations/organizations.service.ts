@@ -9,6 +9,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
 import { EmailService } from '../common/email/email.service';
+import { resolvePlan, WorkspacePlanRow } from '../billing/plan-policy';
 
 @Injectable()
 export class OrganizationsService {
@@ -16,6 +17,37 @@ export class OrganizationsService {
     private readonly db: DatabaseService,
     private readonly emailService: EmailService,
   ) {}
+
+  /**
+   * Seats = active members + unexpired pending invitations, capped by the
+   * plan's `users` limit (-1 = unlimited). Expired trials cannot add seats.
+   */
+  private async assertSeatAvailable(organizationId: string) {
+    const res = await this.db.query<WorkspacePlanRow & { max_users: number | null; seats: number }>(
+      `SELECT o.plan_id::text AS plan_id, o.trial_ends_at, o.created_at,
+              NULLIF(bp.limits ->> 'users', '')::integer AS max_users,
+              (SELECT COUNT(*)::int FROM users u WHERE u.organization_id = o.id AND u.is_active = TRUE)
+            + (SELECT COUNT(*)::int FROM invitations i
+                WHERE i.organization_id = o.id AND i.accepted_at IS NULL AND i.expires_at > NOW()) AS seats
+         FROM organizations o
+         LEFT JOIN billing_plans bp ON bp.id = o.plan_id::text
+        WHERE o.id = $1`,
+      [organizationId],
+    );
+    const row = res.rows[0];
+    if (!row) throw new NotFoundException('Organization not found');
+    if (resolvePlan(row) === 'expired') {
+      throw new ForbiddenException({ code: 'trial_expired', message: 'Your free trial has ended. Choose a plan to invite teammates.', upgradeUrl: '/billing' });
+    }
+    const limit = row.max_users ?? 1;
+    if (limit >= 0 && Number(row.seats) >= limit) {
+      throw new ForbiddenException({
+        code: 'seat_limit_reached',
+        message: `Your plan includes ${limit} ${limit === 1 ? 'seat' : 'seats'}, and all are in use or invited. Upgrade to add more teammates.`,
+        upgradeUrl: '/billing',
+      });
+    }
+  }
 
   // ============================================================
   // ORGANIZATION
@@ -575,6 +607,8 @@ export class OrganizationsService {
       );
     }
 
+    await this.assertSeatAvailable(organizationId);
+
     const token = uuidv4();
     const invitationId = uuidv4();
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
@@ -776,16 +810,12 @@ export class OrganizationsService {
            COALESCE(NULLIF(bp.limits ->> 'users', '')::integer, 0) AS max_users,
            COALESCE(NULLIF(bp.limits ->> 'storage_gb', '')::numeric, 0) AS storage_gb,
            COALESCE(NULLIF(bp.limits ->> 'ai_tokens_monthly', '')::bigint, 0) AS ai_tokens_monthly,
-           COALESCE(
-             (SELECT SUM(d.size_bytes)
-              FROM documents d
-              WHERE d.organization_id = o.id), 0
-           ) AS storage_used_bytes,
+           o.storage_used_bytes,
            COALESCE(
              (SELECT SUM(au.total_tokens)
               FROM ai_usage au
               WHERE au.organization_id = o.id
-                AND au.created_at >= date_trunc('month', NOW())), 0
+                AND au.created_at >= date_trunc('month', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'), 0
            ) AS ai_tokens_used
          FROM organizations o
          JOIN billing_plans bp ON o.plan_id::text = bp.id
@@ -885,8 +915,8 @@ export class OrganizationsService {
 
         await client.query(
           `INSERT INTO organizations
-             (id, name, slug, plan_id, settings)
-           VALUES ($1, $2, $3, 'free', $4)`,
+             (id, name, slug, plan_id, settings, trial_ends_at)
+           VALUES ($1, $2, $3, 'free', $4, NOW() + INTERVAL '14 days')`,
           [
             organizationId,
             requestedOrgName,

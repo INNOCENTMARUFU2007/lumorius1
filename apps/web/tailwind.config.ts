@@ -1,4 +1,7 @@
 import type { Config } from 'tailwindcss';
+import colors from 'tailwindcss/colors';
+
+const token = (name: string) => `hsl(var(--${name}) / <alpha-value>)`;
 
 const config: Config = {
   darkMode: ['class'],
@@ -9,66 +12,79 @@ const config: Config = {
   ],
   theme: {
     extend: {
-     colors: {
-  border: 'hsl(var(--border))',
-  input: 'hsl(var(--input))',
-  ring: 'hsl(var(--ring))',
+      colors: {
+        // Neutral greys follow the cool navy palette so legacy `gray-*` usages match the system.
+        gray: colors.slate,
 
-  background: 'hsl(var(--background))',
-  foreground: 'hsl(var(--foreground))',
+        border: token('border'),
+        'border-strong': token('border-strong'),
+        input: token('input'),
+        ring: token('ring'),
 
-  primary: {
-    DEFAULT: 'hsl(var(--primary))',
-    foreground: 'hsl(var(--primary-foreground))',
-  },
+        background: token('background'),
+        'background-deep': token('background-deep'),
+        foreground: token('foreground'),
+        'surface-elevated': token('surface-elevated'),
 
-  secondary: {
-    DEFAULT: 'hsl(var(--secondary))',
-    foreground: 'hsl(var(--secondary-foreground))',
-  },
+        primary: { DEFAULT: token('primary'), foreground: token('primary-foreground') },
+        secondary: { DEFAULT: token('secondary'), foreground: token('secondary-foreground') },
+        destructive: { DEFAULT: token('destructive'), foreground: token('destructive-foreground') },
+        muted: { DEFAULT: token('muted'), foreground: token('muted-foreground') },
+        accent: { DEFAULT: token('accent'), foreground: token('accent-foreground') },
+        popover: { DEFAULT: token('popover'), foreground: token('popover-foreground') },
+        card: { DEFAULT: token('card'), foreground: token('card-foreground') },
 
-  destructive: {
-    DEFAULT: 'hsl(var(--destructive))',
-    foreground: 'hsl(var(--destructive-foreground))',
-  },
+        success: token('success'),
+        warning: token('warning'),
+        info: token('info'),
+        violet: { ...colors.violet, DEFAULT: token('violet') },
 
-  muted: {
-    DEFAULT: 'hsl(var(--muted))',
-    foreground: 'hsl(var(--muted-foreground))',
-  },
+        chart: {
+          1: token('chart-1'),
+          2: token('chart-2'),
+          3: token('chart-3'),
+          4: token('chart-4'),
+          5: token('chart-5'),
+          grid: token('chart-grid'),
+        },
 
-  accent: {
-    DEFAULT: 'hsl(var(--accent))',
-    foreground: 'hsl(var(--accent-foreground))',
-  },
-
-  popover: {
-    DEFAULT: 'hsl(var(--popover))',
-    foreground: 'hsl(var(--popover-foreground))',
-  },
-
-  card: {
-    DEFAULT: 'hsl(var(--card))',
-    foreground: 'hsl(var(--card-foreground))',
-  },
-
-  brand: {
-    50: '#f0f4ff',
-    100: '#dce7ff',
-    200: '#c0d2ff',
-    300: '#94afff',
-    400: '#6585ff',
-    500: '#4254f5',
-    600: '#2d38e9',
-    700: '#2429ce',
-    800: '#2024a7',
-    900: '#1f2384',
-    950: '#131454',
-  },
-},
+        // Electric Indigo scale — brand-500 is #6366F1.
+        brand: {
+          50: '#eef2ff',
+          100: '#e0e7ff',
+          200: '#c7d2fe',
+          300: '#a5b4fc',
+          400: '#818cf8',
+          500: '#6366f1',
+          600: '#4f46e5',
+          700: '#4338ca',
+          800: '#3730a3',
+          900: '#312e81',
+          950: '#1e1b4b',
+        },
+      },
+      // Larger small sizes: the UI is dense, and 12px/14px text read as cramped.
+      fontSize: {
+        xs: ['0.8125rem', { lineHeight: '1.25rem' }],
+        sm: ['0.9375rem', { lineHeight: '1.45rem' }],
+        base: ['1rem', { lineHeight: '1.6rem' }],
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
+      },
+      boxShadow: {
+        panel: '0 1px 2px hsl(var(--shadow-color) / 0.06), 0 8px 24px -12px hsl(var(--shadow-color) / 0.14)',
+        elevated: '0 24px 60px -20px hsl(var(--shadow-color) / 0.45)',
+        'glow-primary': '0 1px 2px hsl(var(--shadow-color) / 0.15)',
+      },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
+      },
+      transitionTimingFunction: {
+        'out-expo': 'cubic-bezier(0.22, 1, 0.36, 1)',
       },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-in-out',

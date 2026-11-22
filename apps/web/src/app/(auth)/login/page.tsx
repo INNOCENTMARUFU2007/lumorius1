@@ -5,16 +5,22 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
+  Bot,
   Brain,
+  CheckSquare,
+  ClipboardList,
+  Eye,
+  EyeOff,
   Gauge,
   Lock,
   Mail,
+  MessageSquareText,
   Mic,
   Network,
-  Eye,
-  EyeOff,
+  Puzzle,
+  Scale,
+  BarChart3,
   Shield,
-  Sparkles,
   TrendingUp,
   Workflow,
 } from 'lucide-react';
@@ -22,37 +28,22 @@ import api from '@/lib/api';
 import { setTokens, getAuthDestination } from '@/lib/auth';
 import { toast } from 'sonner';
 
+// Every module in the app, in the same order as the sidebar.
 const PLATFORM_MODULES = [
-  {
-    name: 'Company Brain',
-    description: 'Search trusted workspace knowledge.',
-    icon: Brain,
-  },
-  {
-    name: 'Meeting Intelligence',
-    description: 'Turn meetings into decisions and actions.',
-    icon: Mic,
-  },
-  {
-    name: 'Decision Intelligence',
-    description: 'Track rationale, approvals, and outcomes.',
-    icon: Network,
-  },
-  {
-    name: 'Executive Intelligence',
-    description: 'Review financial and operational signals.',
-    icon: Gauge,
-  },
-  {
-    name: 'Founder OS & Analytics',
-    description: 'Monitor goals, KPIs, and progress.',
-    icon: TrendingUp,
-  },
-  {
-    name: 'Workflows & AI Advisor',
-    description: 'Automate work with grounded assistance.',
-    icon: Workflow,
-  },
+  { name: 'Company Brain', description: 'Ask questions of your documents.', icon: Brain },
+  { name: 'Meetings', description: 'Summaries, decisions and actions.', icon: Mic },
+  { name: 'Tasks & Projects', description: 'Plan work and track deadlines.', icon: CheckSquare },
+  { name: 'Chief of Staff', description: 'Your priorities in one view.', icon: ClipboardList },
+  { name: 'AI Agents', description: 'Missions you review and approve.', icon: Bot },
+  { name: 'AI Advisor', description: 'Strategy answers from your data.', icon: MessageSquareText },
+  { name: 'Workflows', description: 'Automate routine follow-ups.', icon: Workflow },
+  { name: 'Decisions', description: 'Approvals, rationale and outcomes.', icon: Scale },
+  { name: 'Executive Intelligence', description: 'Revenue, costs and targets.', icon: Gauge },
+  { name: 'Goals & Founder OS', description: 'Goals, OKRs and health score.', icon: TrendingUp },
+  { name: 'Analytics', description: 'Team and business metrics.', icon: BarChart3 },
+  { name: 'Knowledge Graph', description: 'How people and work connect.', icon: Network },
+  { name: 'Integrations', description: 'Google, Microsoft, Slack and more.', icon: Puzzle },
+  { name: 'Security', description: 'MFA, sessions, audit and API keys.', icon: Shield },
 ] as const;
 
 export default function LoginPage() {
@@ -109,11 +100,11 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gray-950 flex">
 
      {/* Left — brand panel */}
-<div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-violet-900/50 to-indigo-900/30 border-r border-gray-800 items-center justify-center px-12 py-12">
+<div className="hidden lg:flex lg:w-1/2 bg-gray-900/40 border-r border-gray-800 items-center justify-center px-12 py-12">
   <div className="w-full flex flex-col items-center">
 
   <div className="w-[460px] max-w-full flex flex-col items-center">
-    <div className="w-full flex justify-center items-center mb-10">
+    <div className="w-full flex justify-center items-center mb-8">
       <img
         src="/logo-horizontal.svg"
         alt="Lumorius AI"
@@ -128,15 +119,17 @@ export default function LoginPage() {
         One secure workspace for knowledge, decisions, and execution.
       </p>
     </div>
-    <div className="grid w-full grid-cols-2 gap-3">
+    <div className="grid w-full grid-cols-2 gap-2">
       {PLATFORM_MODULES.map(({ name, description, icon: Icon }) => (
         <div
           key={name}
-          className="min-h-24 rounded-xl border border-gray-800 bg-gray-900/60 p-3"
+          className="flex items-start gap-2.5 rounded-lg border border-gray-800 bg-gray-900/60 px-3 py-2.5"
         >
-          <Icon className="h-4 w-4 text-violet-300" aria-hidden="true" />
-          <p className="mt-2 text-xs font-semibold text-gray-100">{name}</p>
-          <p className="mt-1 text-[11px] leading-4 text-gray-400">{description}</p>
+          <Icon className="mt-0.5 h-4 w-4 shrink-0 text-gray-300" aria-hidden="true" />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-gray-100">{name}</span>
+            <span className="block text-xs text-gray-400">{description}</span>
+          </span>
         </div>
       ))}
     </div>
@@ -174,7 +167,7 @@ export default function LoginPage() {
                   className="flex min-h-11 items-center gap-2 rounded-lg border border-gray-800 bg-gray-900/60 px-2.5 py-2"
                 >
                   <Icon className="h-3.5 w-3.5 shrink-0 text-violet-300" aria-hidden="true" />
-                  <span className="text-[11px] leading-4 text-gray-300">{name}</span>
+                  <span className="text-xs leading-4 text-gray-300">{name}</span>
                 </div>
               ))}
             </div>

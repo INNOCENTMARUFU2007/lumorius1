@@ -49,7 +49,8 @@ const logger = new Logger('DatabaseModule');
           max: poolMax,
 
           idleTimeoutMillis: 30_000,
-          connectionTimeoutMillis: 5_000,
+          // How long a request waits for a free connection before failing.
+          connectionTimeoutMillis: config.get<number>('database.connectionTimeoutMs', 15_000),
 
           ssl: config.get<string>('nodeEnv') === 'production'
             ? {

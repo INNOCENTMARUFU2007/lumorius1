@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
+import { RequiresModule } from '../billing/entitlements';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, ForbiddenException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AiService } from './ai.service';
@@ -9,6 +10,7 @@ import { KnowledgeRetrievalService } from '../knowledge/knowledge-retrieval.serv
 @ApiTags('ai')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@RequiresModule('core')
 @Controller('ai')
 export class AiController {
   constructor(
@@ -51,6 +53,24 @@ export class AiController {
       limit: 6,
     });
     return intelligence.sources;
+  }
+
+  @Get('settings')
+  @ApiOperation({ summary: 'AI provider, model and automation settings for this workspace' })
+  getSettings(@CurrentUser() user: JwtPayload) {
+    return this.aiService.getAiSettings(user.organizationId);
+  }
+
+  @Patch('settings')
+  @ApiOperation({ summary: 'Choose the AI provider/model and automation for this workspace (owner or admin)' })
+  updateSettings(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { provider?: string; model?: string; autoKnowledgeExtraction?: boolean },
+  ) {
+    if (!['owner', 'admin'].includes(String(user.role ?? '').toLowerCase())) {
+      throw new ForbiddenException('Only an owner or admin can change AI settings.');
+    }
+    return this.aiService.updateAiSettings(user.organizationId, body ?? {});
   }
 
   @Get('conversations')

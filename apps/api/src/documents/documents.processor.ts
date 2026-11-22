@@ -23,7 +23,7 @@ export class DocumentsProcessor {
     private readonly luiePublisher: LuieEventPublisher,
   ) {}
 
-  @Process('process')
+  @Process({ name: 'process', concurrency: 4 })
   async processDocument(job: Job<{ documentId: string; organizationId: string }>) {
     const { documentId, organizationId } = job.data;
     this.logger.log(`Processing document ${documentId} in organization ${organizationId}`);

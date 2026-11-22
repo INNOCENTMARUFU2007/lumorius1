@@ -1,0 +1,5 @@
+# Unified AI Advisor
+The /ai route now renders a single Advisor workspace rather than redirecting agent-related links to another page. Conversation and strategy is the default; a compact tool selector exposes company questions, source search and research using the existing API-backed tools. Saved evidence and document filters remain available.
+The existing Agent Command Center is embedded inline for missions, saved results and approvals. Run and proposal URLs continue to open their stored records. Conversation stays mounted when switching knowledge tools to retain its selected chat. Saved conversation persistence still uses the existing backend.
+The interface uses a navy/cyan/violet surface, consolidated toolbar and existing accessible components. No new model API, execution permission or fabricated business metric was added. Agent scope and plan locks remain enforced by the backend.
+Verification: web TypeScript and production build run for this change. No live-provider or browser visual test is claimed.

@@ -17,6 +17,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { repairDisplayText } from '@/lib/repair-text';
 import { toast } from 'sonner';
 
 type ConflictStatus = 'proposed' | 'confirmed' | 'dismissed' | 'resolved';
@@ -214,23 +215,23 @@ function ClaimEvidence({ evidence }: { evidence: ConflictEvidence[] }) {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <FileText className="h-3.5 w-3.5 shrink-0" />
-              <span className="break-words">{item.documentName}</span>
+              <span className="break-words">{repairDisplayText(item.documentName)}</span>
             </span>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               {formatConfidence(item.confidence)} evidence confidence
             </span>
           </div>
           <blockquote className="mt-2 border-l-2 border-brand-500/50 pl-3 text-sm leading-6 text-foreground/80">
-            â€œ{item.quote}â€
+            “{repairDisplayText(item.quote)}”
           </blockquote>
-          <div className="mt-2 flex flex-wrap justify-between gap-2 text-[10px] text-muted-foreground">
+          <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
             <span>{humanize(item.stance)}</span>
             <span>Last observed: {formatDate(item.lastSeenAt)}</span>
           </div>
         </div>
       ))}
       {evidence.length > 5 && (
-        <p className="text-[11px] text-muted-foreground">Showing 5 of {evidence.length} accessible quotations.</p>
+        <p className="text-xs text-muted-foreground">Showing 5 of {evidence.length} accessible quotations.</p>
       )}
     </div>
   );
@@ -240,13 +241,13 @@ function ClaimComparison({ title, claim }: { title: string; claim: ConflictClaim
   return (
     <article className="min-w-0 rounded-xl border border-border bg-background p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</p>
-        <span className="rounded-md bg-muted px-2 py-1 text-[10px] text-muted-foreground">{humanize(claim.valueType)}</span>
+        <p className="text-xs font-semibold  text-muted-foreground">{title}</p>
+        <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">{humanize(claim.valueType)}</span>
       </div>
-      <p className="mt-3 break-words text-xs text-muted-foreground">{claim.subject} Â· {humanize(claim.predicate)}</p>
+      <p className="mt-3 break-words text-xs text-muted-foreground">{repairDisplayText(claim.subject)} · {humanize(claim.predicate)}</p>
       <p className="mt-2 break-words text-xl font-semibold leading-tight">
         {claim.isNegated ? <span className="mr-1 text-rose-600">NOT</span> : null}
-        {claim.object}
+        {repairDisplayText(claim.object)}
       </p>
       <p className="mt-2 text-xs text-muted-foreground">Claim confidence: {formatConfidence(claim.confidence)}</p>
       <ClaimEvidence evidence={claim.evidence} />
@@ -265,7 +266,7 @@ function ConflictHistory({ conflictId }: { conflictId: string }) {
   });
 
   if (historyQuery.isLoading) {
-    return <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading review historyâ€¦</div>;
+    return <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading review history…</div>;
   }
   if (historyQuery.isError) {
     return <p className="py-3 text-xs text-rose-600">Could not load review history: {historyQuery.error.message}</p>;
@@ -278,9 +279,9 @@ function ConflictHistory({ conflictId }: { conflictId: string }) {
     <ol className="space-y-3 py-3">
       {historyQuery.data.map(item => (
         <li key={item.id} className="border-l-2 border-border pl-3">
-          <p className="text-xs font-medium">{humanize(item.previousStatus)} â†’ {humanize(item.newStatus)}</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            {item.reviewerName}{item.reviewerEmail ? ` Â· ${item.reviewerEmail}` : ''} Â· {formatDate(item.createdAt)}
+          <p className="text-xs font-medium">{humanize(item.previousStatus)} → {humanize(item.newStatus)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {item.reviewerName}{item.reviewerEmail ? ` · ${item.reviewerEmail}` : ''} · {formatDate(item.createdAt)}
           </p>
           {item.reviewNote ? <p className="mt-1 whitespace-pre-wrap text-xs text-foreground/80">{item.reviewNote}</p> : null}
         </li>
@@ -371,7 +372,7 @@ export function KnowledgeConflictPanel() {
         <div className="flex items-start gap-3">
           <span className="rounded-xl bg-amber-500/10 p-2.5 text-amber-600"><AlertTriangle className="h-5 w-5" /></span>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-amber-600">Organizational intelligence</p>
+            <p className="text-xs font-semibold  text-amber-600">Organizational intelligence</p>
             <h2 className="mt-0.5 text-lg font-semibold">Claim conflict review</h2>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
               Compare competing claims and their source quotations. Differences remain proposed until a reviewer makes a decision.
@@ -414,12 +415,12 @@ export function KnowledgeConflictPanel() {
           ))}
         </div>
         <p className="text-xs tabular-nums text-muted-foreground">
-          {conflictsQuery.isLoading ? 'Loading conflictsâ€¦' : `${total.toLocaleString()} conflict${total === 1 ? '' : 's'}`}
+          {conflictsQuery.isLoading ? 'Loading conflicts…' : `${total.toLocaleString()} conflict${total === 1 ? '' : 's'}`}
         </p>
       </div>
 
       {conflictsQuery.isLoading ? (
-        <div className="flex min-h-36 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Loading claim conflictsâ€¦</div>
+        <div className="flex min-h-36 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Loading claim conflicts…</div>
       ) : conflictsQuery.isError ? (
         <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/[0.04] p-4">
           <p className="text-sm font-medium text-rose-600">Could not load claim conflicts</p>
@@ -451,13 +452,13 @@ export function KnowledgeConflictPanel() {
                 <div className="flex flex-col justify-between gap-3 bg-muted/20 p-4 sm:flex-row sm:items-start">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${statusClass(conflict.status)}`}>{humanize(conflict.status)}</span>
-                      <span className="rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground">{humanize(conflict.conflictType)}</span>
+                      <span className={`rounded-md border px-2 py-1 text-xs font-semibold  ${statusClass(conflict.status)}`}>{humanize(conflict.status)}</span>
+                      <span className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground">{humanize(conflict.conflictType)}</span>
                     </div>
-                    <h3 className="mt-2 break-words text-sm font-semibold">{conflict.claimA.subject} Â· {humanize(conflict.claimA.predicate)}</h3>
-                    <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">{conflict.detectionReason}</p>
+                    <h3 className="mt-2 break-words text-sm font-semibold">{repairDisplayText(conflict.claimA.subject)} · {humanize(conflict.claimA.predicate)}</h3>
+                    <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">{repairDisplayText(conflict.detectionReason)}</p>
                   </div>
-                  <div className="shrink-0 text-left text-[10px] text-muted-foreground sm:text-right">
+                  <div className="shrink-0 text-left text-xs text-muted-foreground sm:text-right">
                     <p>First detected: {formatDate(conflict.firstDetectedAt)}</p>
                     <p className="mt-1">Last detected: {formatDate(conflict.lastDetectedAt)}</p>
                     {conflict.reviewedAt ? <p className="mt-1">Reviewed: {formatDate(conflict.reviewedAt)}</p> : null}
@@ -488,7 +489,7 @@ export function KnowledgeConflictPanel() {
                         onChange={event => setNotes(previous => ({ ...previous, [conflict.id]: event.target.value }))}
                         rows={2}
                         maxLength={2000}
-                        placeholder={conflict.status === 'confirmed' ? 'Explain how the conflict was resolved (at least 8 characters).' : 'Add context for this review decisionâ€¦'}
+                        placeholder={conflict.status === 'confirmed' ? 'Explain how the conflict was resolved (at least 8 characters).' : 'Add context for this review decision…'}
                         className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs outline-none transition focus:ring-2 focus:ring-brand-500"
                       />
                     </div>
@@ -553,7 +554,7 @@ export function KnowledgeConflictPanel() {
           })}
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-            <p className="text-xs text-muted-foreground">Page {page} of {pageCount} Â· {total.toLocaleString()} total</p>
+            <p className="text-xs text-muted-foreground">Page {page} of {pageCount} · {total.toLocaleString()} total</p>
             <div className="flex gap-2">
               <button type="button" onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} disabled={offset === 0 || conflictsQuery.isFetching} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-40"><ChevronLeft className="h-3.5 w-3.5" /> Previous</button>
               <button type="button" onClick={() => setOffset(offset + PAGE_SIZE)} disabled={offset + PAGE_SIZE >= total || conflictsQuery.isFetching} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-40">Next <ChevronRight className="h-3.5 w-3.5" /></button>
@@ -562,7 +563,7 @@ export function KnowledgeConflictPanel() {
         </div>
       )}
 
-      <p className="flex items-start gap-2 border-t border-border pt-3 text-[10px] leading-5 text-muted-foreground">
+      <p className="flex items-start gap-2 border-t border-border pt-3 text-xs leading-5 text-muted-foreground">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         A detected difference is not proof of a factual contradiction. Review the source context, dates and conditions before confirming. Confirmed conflicts can be marked resolved with an explanatory note; dismissed and resolved records remain in the audit history.
       </p>

@@ -20,12 +20,16 @@ export function setTokens(access: string, refresh: string) {
 
   // Sync access token to cookie so Next.js middleware can read it.
   document.cookie = `lumorius_access=${access}; path=/; max-age=${15 * 60}; SameSite=Strict`;
+  // Session marker (no secret): lets page navigation through after the 15-minute access
+  // token expires while the refresh token (7 days) is still valid. The API still checks every request.
+  document.cookie = `lumorius_session=1; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Strict`;
 }
 
 export function clearTokens() {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
   document.cookie = 'lumorius_access=; path=/; max-age=0; SameSite=Strict';
+  document.cookie = 'lumorius_session=; path=/; max-age=0; SameSite=Strict';
 }
 
 export function isAuthenticated(): boolean {

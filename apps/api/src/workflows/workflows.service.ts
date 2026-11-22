@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
+import { planPolicy, resolvePlan, WorkspacePlanRow } from '../billing/plan-policy';
 
 type WorkflowStatus = 'active' | 'paused' | 'draft' | 'archived';
 type DataRecord = Record<string, unknown>;
@@ -258,12 +259,12 @@ export class WorkflowsService {
 
     return { scanned: pending.rows.length, recovered, failed };
   }
-  async trigger(id: string, organizationId: string, triggerData: DataRecord = {}, triggeredById?: string) {
+  async trigger(id: string, organizationId: string, triggerData: DataRecord = {}, triggeredById?: string, eventKey: string | null = null) {
     const workflow = await this.findById(id, organizationId);
     if (String(workflow.status) !== 'active') {
       throw new BadRequestException(`This workflow cannot run because its status is "${String(workflow.status)}". Activate it first.`);
     }
-    const result = await this.enqueueRun(workflow, organizationId, 'manual', triggerData ?? {}, null, triggeredById ?? null);
+    const result = await this.enqueueRun(workflow, organizationId, 'manual', triggerData ?? {}, eventKey, triggeredById ?? null);
     return { runId: result.runId, status: result.status };
   }
 
@@ -274,6 +275,15 @@ export class WorkflowsService {
     eventKey: string,
     triggeredById?: string | null,
   ) {
+    // Event- and schedule-driven runs respect the plan the same way the API does:
+    // a workspace without the Workflows module keeps its workflows, but they do not fire.
+    const plan = await this.db.query<WorkspacePlanRow>(
+      'SELECT plan_id::text AS plan_id, trial_ends_at, created_at FROM organizations WHERE id = $1::uuid',
+      [organizationId],
+    );
+    if (!planPolicy(resolvePlan(plan.rows[0])).modules.includes('workflows')) {
+      return { eventType, matched: 0, outcomes: [], skipped: 'plan_does_not_include_workflows' };
+    }
     const result = await this.db.query(
       `SELECT id, trigger_type, trigger_config, status
          FROM workflows
@@ -294,11 +304,67 @@ export class WorkflowsService {
     return { eventType, matched: outcomes.length, outcomes };
   }
 
-  async getRuns(workflowId: string, organizationId: string) {
+  async performance(organizationId:string) {
+    return (await this.db.query<{ id:string; name:string; runs:number; failed:number; active:number; median_seconds:number|null; p90_seconds:number|null; retried_steps:number }>(`WITH recent AS (
+      SELECT id,workflow_id,status,started_at,completed_at FROM workflow_runs
+      WHERE organization_id=$1 AND started_at >= now()-interval '30 days'
+    ), counts AS (
+      SELECT workflow_id, count(*)::int AS runs, count(*) FILTER (WHERE status::text='failed')::int AS failed,
+        count(*) FILTER (WHERE status::text IN ('pending','running'))::int AS active,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM completed_at-started_at)) FILTER (WHERE completed_at>=started_at) AS median_seconds,
+        percentile_cont(0.9) WITHIN GROUP (ORDER BY extract(epoch FROM completed_at-started_at)) FILTER (WHERE completed_at>=started_at) AS p90_seconds
+      FROM recent GROUP BY workflow_id
+    ), retries AS (
+      SELECT r.workflow_id,count(*) FILTER (WHERE s.attempt_count>1)::int AS retried_steps FROM recent r
+      JOIN workflow_step_runs s ON s.workflow_run_id=r.id AND s.organization_id=$1 GROUP BY r.workflow_id
+    ) SELECT w.id,w.name,c.runs,c.failed,c.active,c.median_seconds,c.p90_seconds,COALESCE(retries.retried_steps,0) AS retried_steps
+      FROM counts c JOIN workflows w ON w.id=c.workflow_id AND w.organization_id=$1 LEFT JOIN retries ON retries.workflow_id=w.id
+      ORDER BY c.failed DESC,c.runs DESC,w.id LIMIT 40`,[organizationId])).rows;
+  }
+
+  async process(workflowId: string, organizationId: string) {
+    await this.findById(workflowId, organizationId);
+    const result = await this.db.query<{ sampled: number; observed: number;
+      variants: { path: string[]; runs: number; failed: number; median_seconds: number | null }[];
+      bottlenecks: { step_index: number; step_type: string; observed: number; failed: number; retried: number; p90_seconds: number | null; median_wait_seconds: number | null }[] }>(`
+      WITH sample AS MATERIALIZED (
+        SELECT id,status,started_at,completed_at FROM workflow_runs
+        WHERE organization_id=$1 AND workflow_id=$2 AND started_at>=now()-interval '30 days'
+        ORDER BY started_at DESC,id DESC LIMIT 1000
+      ), steps AS MATERIALIZED (
+        SELECT r.id AS run_id,s.step_index,s.step_type,s.status,s.started_at,s.completed_at,s.attempt_count,
+          s.started_at - lag(s.completed_at) OVER(PARTITION BY r.id ORDER BY s.step_index) AS wait
+        FROM sample r JOIN workflow_step_runs s ON s.workflow_run_id=r.id AND s.organization_id=$1 AND s.workflow_id=$2
+      ), observed AS (
+        SELECT run_id,array_agg(step_type::text ORDER BY step_index) AS path FROM steps GROUP BY run_id
+      ), variants AS (
+        SELECT o.path,count(*)::int AS runs,count(*) FILTER(WHERE r.status::text='failed')::int AS failed,
+          round(percentile_cont(.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.completed_at-r.started_at))
+            FILTER(WHERE r.completed_at>=r.started_at)::numeric,2) AS median_seconds
+        FROM observed o JOIN sample r ON r.id=o.run_id GROUP BY o.path
+        ORDER BY count(*) DESC,o.path LIMIT 8
+      ), bottlenecks AS (
+        SELECT step_index,step_type,count(*)::int AS observed,count(*) FILTER(WHERE status::text='failed')::int AS failed,
+          count(*) FILTER(WHERE attempt_count>1)::int AS retried,
+          round(percentile_cont(.9) WITHIN GROUP (ORDER BY extract(epoch FROM completed_at-started_at))
+            FILTER(WHERE completed_at>=started_at)::numeric,2) AS p90_seconds,
+          round(percentile_cont(.5) WITHIN GROUP (ORDER BY extract(epoch FROM wait))
+            FILTER(WHERE wait>=interval '0 seconds')::numeric,2) AS median_wait_seconds
+        FROM steps GROUP BY step_index,step_type
+        ORDER BY p90_seconds DESC NULLS LAST,step_index,step_type LIMIT 12
+      )
+      SELECT (SELECT count(*)::int FROM sample) AS sampled,(SELECT count(*)::int FROM observed) AS observed,
+        COALESCE((SELECT jsonb_agg(v ORDER BY v.runs DESC,v.path) FROM variants v),'[]'::jsonb) AS variants,
+        COALESCE((SELECT jsonb_agg(b ORDER BY b.p90_seconds DESC NULLS LAST,b.step_index,b.step_type) FROM bottlenecks b),'[]'::jsonb) AS bottlenecks
+    `, [organizationId, workflowId]);
+    return result.rows[0];
+  }
+
+  async getRuns(workflowId: string, organizationId: string, fullDetails = false) {
     await this.findById(workflowId, organizationId);
     const result = await this.db.query(
       `SELECT run.id, run.workflow_id, run.status, run.trigger_event,
-              run.input_data, run.output_data, run.error_message,
+              ${fullDetails ? 'run.input_data, run.output_data, run.error_message,' : ''}
               run.started_at, run.completed_at,
               COALESCE((
                 SELECT jsonb_agg(
@@ -308,9 +374,7 @@ export class WorkflowsService {
                     'step_type', step.step_type,
                     'status', step.status,
                     'attempt_count', step.attempt_count,
-                    'input_data', step.input_data,
-                    'output_data', step.output_data,
-                    'error_message', step.error_message,
+                    ${fullDetails ? "'input_data', step.input_data, 'output_data', step.output_data, 'error_message', step.error_message," : ''}
                     'started_at', step.started_at,
                     'completed_at', step.completed_at
                   ) ORDER BY step.step_index

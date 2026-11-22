@@ -8,6 +8,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
+import { reserveWorkspaceStorage } from '../billing/storage-quota';
 import { StorageService } from '../storage/storage.service';
 import { LuieEventPublisher } from '../luie/luie-event.publisher';
 
@@ -107,14 +108,15 @@ export class MeetingsService {
     let meetingPersisted = false;
     try {
       await this.db.transaction(async (client) => {
+        await reserveWorkspaceStorage(client, actor.organizationId, file.buffer.length);
         await client.query(
           `INSERT INTO meetings
-             (id, organization_id, created_by_id, title, status, audio_key,
+             (id, organization_id, created_by_id, title, status, audio_key, audio_size_bytes,
               team_id, scheduled_at, processing_stage, source_type,
               consent_status, consent_captured_at, consent_captured_by)
-           VALUES ($1, $2, $3, $4, 'recording', $5, $6, $7, 'queued',
+           VALUES ($1, $2, $3, $4, 'recording', $5, $8, $6, $7, 'queued',
                    'recording', 'granted', NOW(), $3)`,
-          [meetingId, actor.organizationId, actor.userId, title, storageKey, opts.teamId ?? null, scheduledAt],
+          [meetingId, actor.organizationId, actor.userId, title, storageKey, opts.teamId ?? null, scheduledAt, file.buffer.length],
         );
         await client.query(
           `INSERT INTO meeting_intelligence_review_events
@@ -211,7 +213,8 @@ export class MeetingsService {
   }
 
   async findAll(actor: MeetingActor, query: MeetingQuery) {
-    const page = Math.max(1, Math.floor(Number(query.page) || 1));
+    const requestedPage = Number(query.page ?? 1);
+    const page = Number.isSafeInteger(requestedPage) ? Math.min(1_000_000, Math.max(1, requestedPage)) : 1;
     const pageSize = Math.min(100, Math.max(1, Math.floor(Number(query.pageSize) || 20)));
     const offset = (page - 1) * pageSize;
     const conditions = [
@@ -225,20 +228,25 @@ export class MeetingsService {
     let idx = 4;
 
     if (query.search?.trim()) { conditions.push(`m.title ILIKE $${idx++}`); values.push(`%${query.search.trim()}%`); }
-    if (query.status?.trim()) { conditions.push(`m.status::text = $${idx++}`); values.push(query.status.trim()); }
+    if (query.status === 'in_flight') {
+      conditions.push("m.status::text IN ('recording', 'uploading', 'processing', 'transcribing', 'analyzing')");
+    } else if (query.status?.trim()) {
+      conditions.push(`m.status::text = $${idx++}`);
+      values.push(query.status.trim());
+    }
     if (query.teamId?.trim()) { conditions.push(`m.team_id = $${idx++}`); values.push(query.teamId.trim()); }
     const where = conditions.join(' AND ');
 
-    const countResult = await this.db.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM meetings m WHERE ${where}`,
+    const countResult = await this.db.query<{ status: string; count: string }>(
+      `SELECT m.status::text AS status, COUNT(*)::text AS count FROM meetings m WHERE ${where} GROUP BY m.status`,
       values,
     );
     const dataResult = await this.db.query(
       `SELECT m.*, u.name AS created_by_name,
               COALESCE(ma.summary, m.summary) AS summary,
               COALESCE(ma.sentiment, m.sentiment) AS sentiment,
-              COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(ma.action_items) = 'array' THEN ma.action_items ELSE '[]'::jsonb END),
-                       jsonb_array_length(CASE WHEN jsonb_typeof(m.action_items) = 'array' THEN m.action_items ELSE '[]'::jsonb END), 0) AS action_item_count
+              COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(ma.action_items) = 'array' THEN ma.action_items END),
+                       jsonb_array_length(CASE WHEN jsonb_typeof(m.action_items) = 'array' THEN m.action_items END), 0) AS action_item_count
        FROM meetings m
        LEFT JOIN users u ON u.id = m.created_by_id AND u.organization_id = m.organization_id
        LEFT JOIN LATERAL (
@@ -248,12 +256,13 @@ export class MeetingsService {
          ORDER BY analysis.created_at DESC LIMIT 1
        ) ma ON TRUE
        WHERE ${where}
-       ORDER BY m.created_at DESC
+       ORDER BY m.created_at DESC, m.id DESC
        LIMIT ${pageSize} OFFSET ${offset}`,
       values,
     );
-    const total = Number(countResult.rows[0]?.count ?? 0);
-    return { data: dataResult.rows, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
+    const statusCounts = Object.fromEntries(countResult.rows.map(({ status, count }) => [status, Number(count)]));
+    const total = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
+    return { data: dataResult.rows, total, page, pageSize, totalPages: Math.ceil(total / pageSize), statusCounts };
   }
 
   async findById(meetingId: string, actor: MeetingActor) {
@@ -303,9 +312,10 @@ export class MeetingsService {
         title: string;
         status: string;
         audio_key: string | null;
+        audio_size_bytes: string | null;
         team_id: string | null;
       }>(
-        `SELECT meeting.id, meeting.title, meeting.status, meeting.audio_key, meeting.team_id
+        `SELECT meeting.id, meeting.title, meeting.status, meeting.audio_key, meeting.audio_size_bytes, meeting.team_id
            FROM meetings meeting
           WHERE meeting.id = $1::uuid
             AND meeting.organization_id = $2::uuid
@@ -333,6 +343,10 @@ export class MeetingsService {
           [actor.organizationId, meetingId, meeting.audio_key],
         );
         cleanupQueued = true;
+        if (meeting.audio_size_bytes) {
+          await client.query('UPDATE organizations SET storage_used_bytes = GREATEST(0, storage_used_bytes - $2::bigint) WHERE id = $1',
+            [actor.organizationId, meeting.audio_size_bytes]);
+        }
       }
 
       const deleted = await client.query(

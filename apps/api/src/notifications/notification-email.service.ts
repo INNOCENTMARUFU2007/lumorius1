@@ -72,6 +72,20 @@ export interface SecurityNotificationEvent
   extends OrganizationNotificationEvent {
   userId?: string;
 }
+interface WorkspaceUpdateEvent {
+  organizationId: string;
+  eventKey?: string;
+  actorId?: string;
+  taskId?: string;
+  title?: string;
+  status?: string;
+  decision?: { id: string; title?: string; status: string };
+  provider?: string;
+  imported?: number;
+  skipped?: number;
+  unsupported?: number;
+}
+
 @Injectable()
 export class NotificationEmailService {
   private readonly logger = new Logger(NotificationEmailService.name);
@@ -299,6 +313,75 @@ export class NotificationEmailService {
             : String(result.reason),
         );
       }
+    });
+  }
+
+  @OnEvent('task.updated', { async: true, suppressErrors: false })
+  @OnEvent('task.status_changed', { async: true, suppressErrors: false })
+  async handleTaskUpdate(payload: WorkspaceUpdateEvent) {
+    if (!payload.taskId || !payload.eventKey) return;
+    const recipients = await this.db.query<{ id: string }>(
+      `SELECT u.id FROM tasks task JOIN users u
+         ON u.organization_id = task.organization_id AND u.id IN (task.assignee_id, task.created_by_id)
+       WHERE task.organization_id = $1 AND task.id = $2 AND u.is_active
+         AND (task.team_id IS NULL OR u.role::text IN ('owner','admin','super_admin') OR EXISTS (
+           SELECT 1 FROM team_members tm WHERE tm.team_id = task.team_id AND tm.user_id = u.id
+         ))`,
+      [payload.organizationId, payload.taskId],
+    );
+    await this.notificationsService.createForOrganization({
+      organizationId: payload.organizationId,
+      includeUserIds: recipients.rows.map(({ id }) => id),
+      excludeUserIds: payload.actorId ? [payload.actorId] : [],
+      eventKey: payload.eventKey, type: 'task_updated',
+      title: `Task updated: ${String(payload.title ?? 'Task').slice(0, 200)}`,
+      message: payload.status ? `Status: ${payload.status.replace(/_/g, ' ')}` : 'A task you follow was updated.',
+      actionUrl: '/tasks', data: { taskId: payload.taskId },
+    });
+  }
+
+  @OnEvent('decision.proposed', { async: true, suppressErrors: false })
+  @OnEvent('decision.approved', { async: true, suppressErrors: false })
+  @OnEvent('decision.rejected', { async: true, suppressErrors: false })
+  @OnEvent('decision.implemented', { async: true, suppressErrors: false })
+  @OnEvent('decision.reviewed', { async: true, suppressErrors: false })
+  @OnEvent('decision.withdrawn', { async: true, suppressErrors: false })
+  async handleDecisionUpdate(payload: WorkspaceUpdateEvent) {
+    const decision = payload.decision;
+    if (!decision?.id || !payload.eventKey) return;
+    const recipients = await this.db.query<{ id: string }>(
+      `SELECT u.id FROM knowledge_decisions d JOIN users u ON u.organization_id = d.organization_id
+       WHERE d.organization_id = $1 AND d.id = $2 AND u.is_active
+         AND (u.id IN (d.owner_id, d.created_by_id)
+           OR ($3::boolean AND CASE d.approval_required_role
+             WHEN 'owner' THEN u.role::text IN ('owner','super_admin')
+             WHEN 'admin' THEN u.role::text IN ('owner','admin','super_admin')
+             ELSE u.role::text IN ('owner','admin','manager','super_admin') END))
+         AND (d.team_id IS NULL OR u.role::text IN ('owner','admin','super_admin') OR EXISTS (
+           SELECT 1 FROM team_members tm WHERE tm.team_id = d.team_id AND tm.user_id = u.id
+         ))`,
+      [payload.organizationId, decision.id, decision.status === 'proposed'],
+    );
+    await this.notificationsService.createForOrganization({
+      organizationId: payload.organizationId,
+      includeUserIds: recipients.rows.map(({ id }) => id),
+      excludeUserIds: payload.actorId ? [payload.actorId] : [],
+      eventKey: payload.eventKey, type: 'decision',
+      title: `Decision ${decision.status}: ${String(decision.title ?? 'Decision').slice(0, 180)}`,
+      actionUrl: '/decisions', data: { decisionId: decision.id },
+    });
+  }
+
+  @OnEvent('integration.sync_completed', { async: true, suppressErrors: false })
+  async handleIntegrationSync(payload: WorkspaceUpdateEvent) {
+    if (!payload.actorId || !payload.eventKey) return;
+    await this.notificationsService.createForOrganization({
+      organizationId: payload.organizationId,
+      includeUserIds: [payload.actorId],
+      eventKey: payload.eventKey, type: 'integration',
+      title: `Sync complete: ${String(payload.provider ?? 'Integration').replace(/-/g, ' ')}`,
+      message: `${Number(payload.imported ?? 0)} imported · ${Number(payload.skipped ?? 0)} already synced · ${Number(payload.unsupported ?? 0)} unsupported`,
+      actionUrl: '/integrations',
     });
   }
 

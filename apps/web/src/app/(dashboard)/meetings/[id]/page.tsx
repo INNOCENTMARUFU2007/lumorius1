@@ -343,7 +343,7 @@ export default function MeetingReviewPage() {
       return unwrapPayload<{ revision: number; unchanged: boolean }>(response.data);
     },
     onSuccess: (result) => {
-      toast.success(result?.unchanged ? 'Summary is unchanged' : `Summary saved Â· revision ${result?.revision ?? ''}`);
+      toast.success(result?.unchanged ? 'Summary is unchanged' : `Summary saved · revision ${result?.revision ?? ''}`);
       void refreshReview();
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
     },
@@ -417,7 +417,7 @@ export default function MeetingReviewPage() {
     },
     onSuccess: (decision) => {
       const status = typeof decision?.status === 'string' ? decision.status : 'proposed';
-      toast.success(`Governance decision created Â· ${status}`);
+      toast.success(`Governance decision created · ${status}`);
       void refreshReview();
       queryClient.invalidateQueries({ queryKey: ['decisions'] });
     },
@@ -616,11 +616,11 @@ export default function MeetingReviewPage() {
           <SectionHeading icon={Sparkles} title="Topics and agenda" description="Topics and coverage extracted from the source." />
           <div className="mt-4 space-y-4">
             <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Key topics</h3>
+              <h3 className="mb-2 text-xs font-semibold  text-muted-foreground">Key topics</h3>
               {topics.length ? <div className="flex flex-wrap gap-2">{topics.map((item, index) => <span key={`${item}-${index}`} className="rounded-full border border-border bg-muted px-2.5 py-1 text-xs">{item}</span>)}</div> : <p className="text-sm text-muted-foreground">No topics recorded.</p>}
             </div>
             <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agenda coverage</h3>
+              <h3 className="mb-2 text-xs font-semibold  text-muted-foreground">Agenda coverage</h3>
               {agenda.length ? <ul className="space-y-1.5 text-sm text-foreground">{agenda.map((item, index) => <li key={`${item}-${index}`} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />{item}</li>)}</ul> : <p className="text-sm text-muted-foreground">No agenda coverage recorded.</p>}
             </div>
             {analysis?.strategic_insights && (
@@ -635,18 +635,18 @@ export default function MeetingReviewPage() {
           <SectionHeading icon={AlertTriangle} title="Open questions and risks" description="Items requiring follow-up or human attention." />
           <div className="mt-4 space-y-4">
             <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Open questions</h3>
+              <h3 className="mb-2 text-xs font-semibold  text-muted-foreground">Open questions</h3>
               {openQuestions.length ? <ul className="list-inside list-disc space-y-1.5 text-sm text-foreground">{openQuestions.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="text-sm text-muted-foreground">No open questions recorded.</p>}
             </div>
             <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Risks</h3>
+              <h3 className="mb-2 text-xs font-semibold  text-muted-foreground">Risks</h3>
               {risks.length ? <ul className="list-inside list-disc space-y-1.5 text-sm text-foreground">{risks.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="text-sm text-muted-foreground">No risks recorded.</p>}
             </div>
           </div>
         </div>
       </section>
 
-      <section className="space-y-4">
+      <section id="meeting-actions" className="scroll-mt-5 space-y-4">
         <SectionHeading
           icon={ListChecks}
           title="Action proposals"
@@ -666,7 +666,7 @@ export default function MeetingReviewPage() {
                   <p className="whitespace-pre-wrap font-medium leading-6 text-foreground">{action.action_text}</p>
                   <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     <span>{confidenceLabel(action.confidence)}</span>
-                    <span>Source {formatTimestamp(action.source_start_ms)}{action.source_end_ms != null ? `â€“${formatTimestamp(action.source_end_ms)}` : ''}</span>
+                    <span>Source {formatTimestamp(action.source_start_ms)}{action.source_end_ms != null ? `–${formatTimestamp(action.source_end_ms)}` : ''}</span>
                     {action.candidate_assignee_name && <span>Suggested owner: {action.candidate_assignee_name} (unconfirmed)</span>}
                   </div>
                 </div>
@@ -674,7 +674,7 @@ export default function MeetingReviewPage() {
               </div>
               {action.evidence_excerpt && (
                 <blockquote className="mt-4 rounded-lg border-l-2 border-brand-500 bg-muted/50 px-4 py-3 text-sm leading-6 text-muted-foreground">
-                  â€œ{action.evidence_excerpt}â€
+                  “{action.evidence_excerpt}”
                 </blockquote>
               )}
 
@@ -755,7 +755,7 @@ export default function MeetingReviewPage() {
                       value={actionReasons[action.id] ?? ''}
                       onChange={(event) => setActionReasons((current) => ({ ...current, [action.id]: event.target.value }))}
                       maxLength={2000}
-                      placeholder="Rejection reason (8â€“2,000 characters)"
+                      placeholder="Rejection reason (8–2,000 characters)"
                       aria-label="Action rejection reason"
                       className="min-w-52 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
                     />
@@ -779,7 +779,7 @@ export default function MeetingReviewPage() {
               )}
               {action.status === 'task_created' && (
                 <div className="mt-4 flex items-center gap-2 rounded-lg bg-emerald-500/5 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
-                  <CheckCircle2 className="h-4 w-4" /> Task created {action.created_task_id ? `Â· ${action.created_task_id}` : ''}
+                  <CheckCircle2 className="h-4 w-4" /> Task created {action.created_task_id ? `· ${action.created_task_id}` : ''}
                 </div>
               )}
               {action.status === 'rejected' && action.rejection_reason && (
@@ -809,7 +809,7 @@ export default function MeetingReviewPage() {
                   <p className="whitespace-pre-wrap font-medium leading-6 text-foreground">{candidate.description}</p>
                   <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     <span>{confidenceLabel(candidate.confidence)}</span>
-                    <span>Source {formatTimestamp(candidate.source_start_ms)}{candidate.source_end_ms != null ? `â€“${formatTimestamp(candidate.source_end_ms)}` : ''}</span>
+                    <span>Source {formatTimestamp(candidate.source_start_ms)}{candidate.source_end_ms != null ? `–${formatTimestamp(candidate.source_end_ms)}` : ''}</span>
                     {candidate.decision_maker_candidate && <span>Decision maker mentioned: {candidate.decision_maker_candidate} (unconfirmed)</span>}
                   </div>
                 </div>
@@ -817,7 +817,7 @@ export default function MeetingReviewPage() {
               </div>
               {candidate.evidence_excerpt && (
                 <blockquote className="mt-4 rounded-lg border-l-2 border-brand-500 bg-muted/50 px-4 py-3 text-sm leading-6 text-muted-foreground">
-                  â€œ{candidate.evidence_excerpt}â€
+                  “{candidate.evidence_excerpt}”
                 </blockquote>
               )}
 
@@ -916,7 +916,7 @@ export default function MeetingReviewPage() {
                           value={decisionReasons[candidate.id] ?? ''}
                           onChange={(event) => setDecisionReasons((current) => ({ ...current, [candidate.id]: event.target.value }))}
                           maxLength={2000}
-                          placeholder="Rejection reason (8â€“2,000 characters)"
+                          placeholder="Rejection reason (8–2,000 characters)"
                           aria-label="Decision rejection reason"
                           className="min-w-52 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
                         />
@@ -956,7 +956,7 @@ export default function MeetingReviewPage() {
             {review.summaryRevisions.map((revision) => (
               <details key={`${revision.revision}-${revision.created_at ?? ''}`} className="py-3 first:pt-0 last:pb-0">
                 <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 text-sm">
-                  <span className="font-medium text-foreground">Revision {revision.revision} Â· {revision.source === 'human' ? 'Edited by a reviewer' : 'Generated summary'}</span>
+                  <span className="font-medium text-foreground">Revision {revision.revision} · {revision.source === 'human' ? 'Edited by a reviewer' : 'Generated summary'}</span>
                   <span className="text-xs text-muted-foreground">{formatDate(revision.created_at)}</span>
                 </summary>
                 <p className="mt-3 whitespace-pre-wrap rounded-lg bg-muted/40 p-3 text-sm leading-6 text-muted-foreground">{revision.summary}</p>

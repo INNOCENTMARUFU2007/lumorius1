@@ -28,6 +28,31 @@ describe('LuieEventPublisher', () => {
     client = { query: clientQuery } as unknown as PoolClient;
   });
 
+  it('publishes events for existing PostgreSQL identifiers with legacy version and variant bits', async () => {
+    const event = {
+      ...validEvent,
+      organizationId: 'aaaaaaaa-aaaa-0aaa-0aaa-aaaaaaaaaaaa',
+      aggregateId: 'bbbbbbbb-bbbb-0bbb-0bbb-bbbbbbbbbbbb',
+      actorId: 'cccccccc-cccc-0ccc-0ccc-cccccccccccc',
+      teamId: 'eeeeeeee-eeee-0eee-0eee-eeeeeeeeeeee',
+    };
+    clientQuery
+      .mockResolvedValueOnce({ rows: [{ id: existingEventId }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    await expect(publisher.append(client, event, ['luie.search']))
+      .resolves.toMatchObject({ eventId: existingEventId, deliveriesInserted: 1 });
+    expect(clientQuery.mock.calls[0][1]).toEqual(expect.arrayContaining([
+      event.organizationId, event.aggregateId, event.actorId, event.teamId,
+    ]));
+  });
+
+  it('rejects a malformed identifier before accessing the database', async () => {
+    await expect(publisher.append(client, { ...validEvent, actorId: 'not-a-uuid' }, ['luie.search']))
+      .rejects.toThrow('Invalid LUIE actor UUID.');
+    expect(clientQuery).not.toHaveBeenCalled();
+  });
+
   it('persists the event and its initial recipient set through the supplied transaction client', async () => {
     clientQuery
       .mockResolvedValueOnce({ rows: [{ id: existingEventId }] })

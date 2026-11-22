@@ -1,3 +1,4 @@
+import { EntitlementsModule } from './billing/entitlements';
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -34,9 +35,13 @@ import configuration, { validateEnvironment } from './common/config/configuratio
 import { LuieModule } from './luie/luie.module';
 
 
+import { AgentWorkforceModule } from './agents/agent-workforce.module';
+import { WorkspaceModule } from './workspace/workspace.module';
+
 @Module({
   imports: [
     LuieModule,
+    EntitlementsModule,
    ConfigModule.forRoot({
   isGlobal: true,
   envFilePath: '../../.env',
@@ -97,6 +102,8 @@ import { LuieModule } from './luie/luie.module';
     AdminModule,
     MetricsModule,
     GdprModule,
+    WorkspaceModule,
+    AgentWorkforceModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

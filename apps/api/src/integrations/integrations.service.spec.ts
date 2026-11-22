@@ -14,7 +14,10 @@ describe('IntegrationsService sync completion events', () => {
       query: jest.fn().mockResolvedValue({ rows: [{ provider: 'google-drive' }] }),
     };
     const db = {
-      query: jest.fn().mockResolvedValue({ rows: [connection] }),
+      // First query is the plan check (Google Drive is paid-plan only); the rest return the connection.
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ plan_id: 'growth', trial_ends_at: null, created_at: new Date().toISOString() }] })
+        .mockResolvedValue({ rows: [connection] }),
       transaction: jest.fn(async (callback: (transactionClient: typeof client) => Promise<unknown>) =>
         callback(client)),
     };

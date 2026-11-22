@@ -1,5 +1,6 @@
 import {
   Body,
+  ForbiddenException,
   Controller,
   Get,
   Header,
@@ -8,21 +9,25 @@ import {
   UseGuards,
   StreamableFile,
 } from '@nestjs/common';
+import { FeatureGuard, RequiresFeature } from '../billing/entitlements';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { CashForecastService } from './cash-forecast.service';
 import { ExecutiveAnalyticsService } from './executive-analytics.service';
 import { ExecutivePdfService } from './executive-pdf.service';
 import { RawApiResponse } from '../common/interceptors/transform.interceptor';
 
 @ApiTags('executive-intelligence')
 @ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(AuthGuard('jwt'), FeatureGuard)
+@RequiresFeature('advanced_financial')
 @Controller('executive-intelligence')
 export class ExecutiveAnalyticsController {
   constructor(
     private readonly analytics: ExecutiveAnalyticsService,
     private readonly pdf: ExecutivePdfService,
+    private readonly cash: CashForecastService,
   ) {}
 
   private actor(user: JwtPayload) {
@@ -31,6 +36,18 @@ export class ExecutiveAnalyticsController {
       userId: user.sub,
       role: String(user.role ?? ''),
     };
+  }
+
+  @Get('forecasts')
+  forecast(@CurrentUser() user: JwtPayload) {
+    if (!['owner','admin'].includes(user.role)) throw new ForbiddenException('Workspace administrator access is required.');
+    return this.cash.forWorkspace(user.organizationId);
+  }
+
+  @Get('scorecard')
+  @ApiOperation({ summary: 'KPI targets with actuals over each target period (shared by Analytics and Executive Intelligence)' })
+  getScorecard(@CurrentUser() user: JwtPayload) {
+    return this.analytics.getScorecard(this.actor(user));
   }
 
   @Get('dashboard')

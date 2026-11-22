@@ -24,6 +24,7 @@ interface BroadcastNotificationOptions {
   data?: Record<string, unknown>;
   recipientRoles?: string[];
   excludeUserIds?: string[];
+  includeUserIds?: string[];
   eventKey?: string;
 }
 
@@ -70,6 +71,7 @@ export class NotificationsService {
     const excludedUserIds = [
       ...new Set(opts.excludeUserIds ?? []),
     ];
+    const includedUserIds = opts.includeUserIds === undefined ? undefined : [...new Set(opts.includeUserIds)];
 
     const result = await this.db.query<{ user_id: string }>(
       `INSERT INTO notifications (
@@ -86,6 +88,7 @@ export class NotificationsService {
         AND u.is_active = TRUE
         AND ($7::text[] IS NULL OR u.role::text = ANY($7::text[]))
         AND NOT (u.id = ANY($8::uuid[]))
+        ${includedUserIds === undefined ? '' : 'AND u.id = ANY($9::uuid[])'}
       ON CONFLICT (user_id, (data ->> 'eventKey'))
         WHERE (data ? 'eventKey')
       DO NOTHING
@@ -99,6 +102,7 @@ export class NotificationsService {
         JSON.stringify(data),
         roles,
         excludedUserIds,
+        ...(includedUserIds === undefined ? [] : [includedUserIds]),
       ],
     );
 
@@ -122,6 +126,29 @@ export class NotificationsService {
     );
 
     return result.rows;
+  }
+
+  async feed(userId: string, organizationId: string, unreadOnly: boolean, pageInput: unknown) {
+    const pageSize = 25;
+    const requested = Number(pageInput ?? 1);
+    const page = Number.isSafeInteger(requested) ? Math.min(1_000_000, Math.max(1, requested)) : 1;
+    const [rows, counts] = await Promise.all([
+      this.db.query(
+        `SELECT id, type, title, message, action_url, data, read_at, created_at
+           FROM notifications
+          WHERE user_id = $1 AND organization_id = $2 AND (NOT $3::boolean OR read_at IS NULL)
+          ORDER BY created_at DESC, id DESC LIMIT $4 OFFSET $5`,
+        [userId, organizationId, unreadOnly, pageSize, (page - 1) * pageSize],
+      ),
+      this.db.query<{ all_count: number; unread: number }>(
+        `SELECT COUNT(*)::int AS all_count, COUNT(*) FILTER (WHERE read_at IS NULL)::int AS unread
+           FROM notifications WHERE user_id = $1 AND organization_id = $2`,
+        [userId, organizationId],
+      ),
+    ]);
+    const summary = counts.rows[0] ?? { all_count: 0, unread: 0 };
+    const total = unreadOnly ? summary.unread : summary.all_count;
+    return { items: rows.rows, total, unread: summary.unread, page, pageSize };
   }
 
   async markRead(userId: string, notificationId: string) {

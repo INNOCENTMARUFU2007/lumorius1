@@ -1,0 +1,51 @@
+// Local-only acceptance check. Every inserted row and changed record is rolled back.
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+const apiRoot=path.resolve(__dirname,'../..');process.chdir(apiRoot);
+const ts=require('typescript'),{Client}=require('pg'),parse=require('dotenv').parse;
+require.extensions['.ts']=(mod,file)=>mod._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true,emitDecoratorMetadata:true,esModuleInterop:true}}).outputText,file);
+require('reflect-metadata');
+const {GdprService}=require('./gdpr.service.ts');
+const {WorkflowsProcessor}=require('../workflows/workflows.processor.ts');
+const {GoogleStrategy}=require('../auth/strategies/google.strategy.ts');
+const env={...parse(fs.readFileSync('../../.env')),...parse(fs.readFileSync('.env')),...process.env};
+if(!['localhost','127.0.0.1','[::1]'].includes(new URL(env.DATABASE_URL).hostname)||env.NODE_ENV==='production')throw Error('Local development database required.');
+const client=new Client({connectionString:env.DATABASE_URL,connectionTimeoutMillis:4000});
+const org=randomUUID(),otherOrg=randomUUID(),owner=randomUUID(),leaver=randomUUID(),foreign=randomUUID(),workflow=randomUUID(),task=randomUUID(),financialImport=randomUUID();
+let index=0;
+const db={query:(sql,params)=>sql.includes("WHERE deletion_status = 'requested'")?client.query(sql.replace('ORDER BY deletion_scheduled_at','AND id = $1 ORDER BY deletion_scheduled_at'),[leaver]):client.query(sql,params),
+ transaction:async fn=>{const name='personal_'+(++index);await client.query('SAVEPOINT '+name);try{const result=await fn(client);await client.query('RELEASE SAVEPOINT '+name);return result;}catch(error){await client.query('ROLLBACK TO SAVEPOINT '+name);await client.query('RELEASE SAVEPOINT '+name);throw error;}}};
+(async()=>{await client.connect();try{
+ await client.query('BEGIN');await client.query("SET LOCAL lock_timeout='5s'");
+ for(const id of [org,otherOrg])await client.query('INSERT INTO organizations(id,name,slug) VALUES($1,$2,$3)',[id,'Personal deletion fixture',id]);
+ for(const [id,scope,role]of[[owner,org,'owner'],[leaver,org,'member'],[foreign,otherOrg,'owner']])await client.query("INSERT INTO users(id,organization_id,email,name,role) VALUES($1,$2,$3,'Deletion fixture',$4)",[id,scope,id+'@example.invalid',role]);
+ await client.query("INSERT INTO workflows(id,name,trigger_type,trigger_config,steps,organization_id,created_by_id,status) VALUES($1,'Preserved company workflow','manual','{}',$2::jsonb,$3,$4,'active')",[workflow,JSON.stringify([{type:'task.create',config:{title:'Task after personal deletion',assignee:'unassigned'}}]),org,leaver]);
+ await client.query("INSERT INTO tasks(id,organization_id,created_by_id,title) VALUES($1,$2,$3,'Preserved shared task')",[task,org,leaver]);
+ await client.query("INSERT INTO executive_imports(id,organization_id,created_by_id,dataset_type,file_name,file_sha256) VALUES($1,$2,$3,'transactions','fixture.csv',$4)",[financialImport,org,leaver,'a'.repeat(64)]);
+ await client.query("INSERT INTO oauth_accounts(user_id,provider,provider_id,access_token) VALUES($1,'google',$2,'fixture-only-not-a-secret')",[leaver,randomUUID()]);
+ db.findOne=async(table,conditions)=>{assert.equal(table,'users');const key=conditions.id?'id':'email';return (await client.query('SELECT * FROM users WHERE '+key+'=$1',[conditions[key]])).rows[0]||null;};
+ let photoUser;
+ await new GoogleStrategy({get:(_key,fallback)=>fallback},db).validate('not-retained','not-retained',{id:randomUUID(),emails:[{value:leaver+'@example.invalid'}],photos:[{value:'https://lh3.googleusercontent.com/fixture'}]},(error,user)=>{if(error)throw error;photoUser=user;});
+ assert.equal(photoUser.avatar_url,'https://lh3.googleusercontent.com/fixture');assert.equal(photoUser.organization_id,org);
+ const service=new GdprService(db);
+ // Restrict this fixture to personal deletion; never process other companies or retention jobs.
+ service.purgeScheduledOrganizationDeletions=async()=>({purged:0,failed:0,failedRequests:[]});
+ service.purgeExpiredRetentionData=async()=>({});
+ await assert.rejects(()=>service.requestDeletion(owner),/Transfer company ownership/);
+ const request=await service.requestDeletion(leaver);assert.equal(request.status,'requested');
+ await client.query("UPDATE users SET deletion_scheduled_at=NOW()-INTERVAL '1 second' WHERE id=$1",[leaver]);
+ const result=await service.purgeScheduledDeletions();assert.equal(result.purged,1);assert.equal(result.failed,0);
+ const deleted=(await client.query('SELECT * FROM users WHERE id=$1',[leaver])).rows[0];
+ assert.equal(deleted.organization_id,org);assert.equal(deleted.is_active,false);assert.equal(deleted.deletion_status,'completed');assert.equal(deleted.avatar_url,null);assert.equal(deleted.name,'Deleted User');
+ assert.equal((await client.query('SELECT id FROM oauth_accounts WHERE user_id=$1',[leaver])).rowCount,0);
+ assert.equal((await client.query('SELECT id FROM organizations WHERE id=$1',[org])).rowCount,1);
+ assert.equal((await client.query('SELECT created_by_id FROM workflows WHERE id=$1',[workflow])).rows[0].created_by_id,owner);
+ assert.equal((await client.query('SELECT id FROM tasks WHERE id=$1',[task])).rowCount,1);
+ assert.equal((await client.query('SELECT id FROM executive_imports WHERE id=$1',[financialImport])).rowCount,1);
+ assert.equal((await client.query('SELECT is_active FROM users WHERE id=$1',[foreign])).rows[0].is_active,true);
+ const run=randomUUID();
+ await client.query("INSERT INTO workflow_runs(id,workflow_id,organization_id,triggered_by_id,status,input_data) VALUES($1,$2,$3,$4,'running','{}')",[run,workflow,org,owner]);
+ await new WorkflowsProcessor(db).execute({data:{runId:run,workflowId:workflow,organizationId:org}});
+ assert.equal((await client.query('SELECT status FROM workflow_runs WHERE id=$1',[run])).rows[0].status,'completed');
+ assert.equal((await client.query("SELECT id FROM tasks WHERE organization_id=$1 AND title='Task after personal deletion'",[org])).rowCount,1);
+ console.log('PASS: sole owner protected; personal identity/credentials cleared; company, shared task, financial references and foreign tenant preserved; transferred workflow executed successfully.');
+}finally{await client.query('ROLLBACK');await client.end();}})().catch(error=>{console.error(error.message);process.exitCode=1;});

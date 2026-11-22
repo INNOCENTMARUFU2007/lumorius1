@@ -1,7 +1,7 @@
 
 'use client';
 
-import Image from 'next/image';
+import { BrandMark } from '@/components/brand-mark';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -62,16 +62,8 @@ export default function OnboardingPage() {
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-2xl">
-        {/* Official Lumorius Header Logo */}
-        <div className="flex items-center justify-center mb-8">
-          <Image
-            src="/logo-horizontal.svg"
-            alt="Lumorius AI"
-            width={340}
-            height={80}
-            priority
-            className="w-[280px] sm:w-[320px] h-auto max-w-[90%] object-contain"
-          />
+        <div className="mb-8 flex justify-center">
+          <BrandMark size="lg" />
         </div>
 
         {/* Progress */}
@@ -140,18 +132,6 @@ export default function OnboardingPage() {
           >
             {step === 0 && (
               <div className="text-center space-y-4">
-                {/* Official Lumorius Symbol */}
-                <div className="flex items-center justify-center mx-auto">
-                  <Image
-                    src="/logo.svg"
-                    alt="Official Lumorius logo"
-                    width={64}
-                    height={64}
-                    priority
-                    className="w-16 h-16 object-contain"
-                  />
-                </div>
-
                 <h2 className="text-2xl font-bold">
                   Welcome to Lumorius AI
                 </h2>

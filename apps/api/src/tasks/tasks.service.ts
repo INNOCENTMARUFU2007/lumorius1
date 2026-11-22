@@ -188,7 +188,8 @@ export class TasksService {
     userId: string,
     dto: TaskDto,
     actor: TaskAccessContext,
-    source?: { meetingActionItemId: string },
+    source?: { meetingActionItemId?: string; briefingItemKey?: string },
+    transaction?: import('pg').PoolClient,
   ) {
     this.assertRole(actor, 'member');
     if (userId !== actor.userId) throw new ForbiddenException('Task creator must match the authenticated actor.');
@@ -255,18 +256,30 @@ export class TasksService {
     const assigner = dto.assigneeId && dto.assigneeId !== userId
       ? await this.db.findOne<{ name: string }>('users', { id: userId })
       : null;
-    const createResult = await this.db.transaction(async (client) => {
+    const insert = async (client: import('pg').PoolClient) => {
+      const briefingItem = source?.briefingItemKey;
+      if (briefingItem) {
+        const lock = [organizationId, userId, briefingItem].join(':');
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [lock]);
+        const existing = await client.query<{ id: string }>(
+          `SELECT id FROM tasks WHERE organization_id = $1 AND created_by_id = $2
+             AND metadata ->> 'briefingItemKey' = $3 LIMIT 1`,
+          [organizationId, userId, briefingItem],
+        );
+        if (existing.rows[0]) return { taskId: existing.rows[0].id, createdFresh: false };
+      }
       const insertResult = await client.query<{ id: string; status: string; updated_at: Date | string }>(
         `INSERT INTO tasks (id, title, description, priority, organization_id, created_by_id,
-          assignee_id, project_id, team_id, due_date, tags, source_meeting_action_item_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::uuid)
+          assignee_id, project_id, team_id, due_date, tags, source_meeting_action_item_id${briefingItem ? ', metadata' : ''})
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::uuid${briefingItem ? ", jsonb_build_object('briefingItemKey', $13::text)" : ''})
          ON CONFLICT (organization_id, source_meeting_action_item_id)
          WHERE source_meeting_action_item_id IS NOT NULL
          DO NOTHING
          RETURNING id, status, updated_at`,
         [id, dto.title.trim(), dto.description ?? null, dto.priority ?? 'medium',
           organizationId, userId, dto.assigneeId ?? null, dto.projectId ?? null,
-          teamId, dto.dueDate ?? null, dto.tags ?? [], source?.meetingActionItemId ?? null],
+          teamId, dto.dueDate ?? null, dto.tags ?? [], source?.meetingActionItemId ?? null,
+          ...(briefingItem ? [briefingItem] : [])],
       );
 
       let taskId = id;
@@ -330,8 +343,9 @@ export class TasksService {
         }, ['luie.legacy-domain-bridge']);
       }
       return { taskId, createdFresh };
-    });
-
+    };
+    if (transaction) return { id: (await insert(transaction)).taskId };
+    const createResult = await this.db.transaction(insert);
     return this.findById(createResult.taskId, organizationId, actor);
   }
 
@@ -340,7 +354,7 @@ export class TasksService {
     query: {
       status?: string; priority?: string; assigneeId?: string;
       projectId?: string; teamId?: string; search?: string;
-      page?: number; pageSize?: number;
+      page?: number; pageSize?: number; overdue?: string;
     },
     actor: TaskAccessContext,
   ) {
@@ -372,22 +386,34 @@ export class TasksService {
     const values: unknown[] = [organizationId, this.isOrgAdmin(actor), actor.userId];
     let idx = 4;
 
-    if (query.status)     { conditions.push(`t.status = $${idx++}`);       values.push(query.status); }
     if (query.priority)   { conditions.push(`t.priority = $${idx++}`);     values.push(query.priority); }
     if (query.assigneeId) { conditions.push(`t.assignee_id = $${idx++}`);  values.push(query.assigneeId); }
     if (query.projectId)  { conditions.push(`t.project_id = $${idx++}`);   values.push(query.projectId); }
     if (query.teamId)     { conditions.push(`t.team_id = $${idx++}`);      values.push(query.teamId); }
     if (query.search)     { conditions.push(`t.title ILIKE $${idx++}`);    values.push(`%${query.search}%`); }
 
+    const overdue = `t.status NOT IN ('done', 'cancelled') AND t.due_date < NOW()`;
+    const filters: string[] = [];
+    if (query.status) { filters.push(`t.status = $${idx++}`); values.push(query.status); }
+    if (query.overdue === 'true') filters.push(overdue);
+    const matches = filters.join(' AND ') || 'TRUE';
     const where = conditions.join(' AND ');
     const [countRes, dataRes] = await Promise.all([
-      this.db.query<{ count: string }>(`SELECT COUNT(*) FROM tasks t WHERE ${where}`, values),
+      this.db.query<{ count: string; total: string; in_progress: string; done: string; overdue: string }>(
+        `SELECT COUNT(*) FILTER (WHERE ${matches}) AS count,
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE t.status = 'in_progress') AS in_progress,
+                COUNT(*) FILTER (WHERE t.status = 'done') AS done,
+                COUNT(*) FILTER (WHERE ${overdue}) AS overdue
+         FROM tasks t WHERE ${where}`,
+        values,
+      ),
       this.db.query(
         `SELECT t.*, u.name as assignee_name, p.name as project_name
          FROM tasks t
          LEFT JOIN users u ON t.assignee_id = u.id AND u.organization_id = t.organization_id
          LEFT JOIN projects p ON t.project_id = p.id AND p.organization_id = t.organization_id
-         WHERE ${where}
+         WHERE ${where} AND (${matches})
          ORDER BY
            CASE t.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
            t.due_date ASC NULLS LAST, t.created_at DESC
@@ -396,13 +422,20 @@ export class TasksService {
       ),
     ]);
 
-    const total = parseInt(countRes.rows[0]?.count ?? '0', 10);
+    const counts = countRes.rows[0];
+    const total = Number(counts?.count ?? 0);
     return {
       data: dataRes.rows,
       total,
       page,
       pageSize,
       totalPages: Math.ceil(total / pageSize),
+      summary: {
+        total: Number(counts?.total ?? 0),
+        inProgress: Number(counts?.in_progress ?? 0),
+        completed: Number(counts?.done ?? 0),
+        overdue: Number(counts?.overdue ?? 0),
+      },
     };
   }
 
@@ -711,7 +744,9 @@ export class TasksService {
     this.assertRole(actor, 'manager');
     if (userId !== actor.userId) throw new ForbiddenException('Project owner must match the authenticated actor.');
     const name = typeof dto.name === 'string' ? dto.name.trim() : '';
-    if (!name) throw new BadRequestException('Project name is required.');
+    if (!name || name.length > 255) {
+      throw new BadRequestException('Project name must contain between 1 and 255 characters.');
+    }
     if (dto.description !== undefined && typeof dto.description !== 'string') {
       throw new BadRequestException('Project description must be a string.');
     }
@@ -825,13 +860,30 @@ export class TasksService {
     return this.findProjectById(id, organizationId, actor);
   }
 
+  async findProjectTeams(organizationId: string, actor: TaskAccessContext) {
+    this.assertRole(actor, 'manager');
+    const result = await this.db.query<{ id: string; name: string }>(
+      `SELECT t.id, t.name
+       FROM teams t
+       WHERE t.organization_id = $1 AND ($2::boolean = TRUE OR EXISTS (
+         SELECT 1 FROM team_members member WHERE member.team_id = t.id AND member.user_id = $3
+       ))
+       ORDER BY t.name, t.id`,
+      [organizationId, this.isOrgAdmin(actor), actor.userId],
+    );
+    return result.rows;
+  }
+
   async findProjects(organizationId: string, actor: TaskAccessContext) {
     this.assertRole(actor, 'member');
     const res = await this.db.query(
-      `SELECT p.*,
+      `SELECT p.*, p.start_date::text AS start_date, p.end_date::text AS end_date,
+              team.name AS team_name, owner.name AS owner_name,
               COUNT(t.id) as task_count,
               COUNT(t.id) FILTER (WHERE t.status = 'done') as completed_task_count
        FROM projects p
+       LEFT JOIN teams team ON team.id = p.team_id AND team.organization_id = p.organization_id
+       LEFT JOIN users owner ON owner.id = p.owner_id AND owner.organization_id = p.organization_id
        LEFT JOIN tasks t ON t.project_id = p.id
          AND t.organization_id = p.organization_id
          AND (COALESCE(t.team_id, p.team_id) IS NULL OR $2::boolean = TRUE OR EXISTS (
@@ -844,7 +896,7 @@ export class TasksService {
            SELECT 1 FROM team_members scope_member
            WHERE scope_member.team_id = p.team_id AND scope_member.user_id = $3
          ))
-       GROUP BY p.id
+       GROUP BY p.id, team.name, owner.name
        ORDER BY p.created_at DESC`,
       [organizationId, this.isOrgAdmin(actor), actor.userId],
     );

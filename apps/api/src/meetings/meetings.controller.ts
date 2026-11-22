@@ -1,3 +1,4 @@
+import { RequiresModule } from '../billing/entitlements';
 import {
   Controller, Get, Post, Patch, Delete, Body, Param,
   UseGuards, Query, UseInterceptors, UploadedFile,
@@ -22,6 +23,7 @@ interface MeetingTextImportBody {
 @ApiTags('meetings')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@RequiresModule('core')
 @Controller('meetings')
 export class MeetingsController {
   constructor(

@@ -20,7 +20,7 @@ const LEGACY_EVENTS = new Set([
   'project.created', 'project.updated', 'financial.import_committed',
   'financial.candidate_proposed', 'financial.candidate_approved',
   'financial.candidate_rejected', 'financial.candidate_committed',
-  'integration.sync_completed',
+  'integration.sync_completed', 'marketing.import_committed',
 ]);
 
 @Injectable()

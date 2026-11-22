@@ -1,564 +1,316 @@
 'use client';
 
-import { useMemo, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
-  BookOpen, ChevronDown, Clock3, Copy, FileSearch, Filter, Loader2,
-  MessageCircle, Search, Sparkles, Tags, X,
+  ArrowUpRight, Bookmark, BookOpen, Bot, Copy, FileSearch, Loader2,
+  MessageCircle, Search, Send, Sparkles, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
+import { useAuth } from '@/hooks/use-auth';
+import { repairDisplayText } from '@/lib/repair-text';
 import AdvisorChat from './advisor-chat';
 
-type Mode = 'ask' | 'search' | 'research' | 'advisor';
+const MODES = [
+  { id: 'ask', label: 'Ask AI', icon: Sparkles, hint: 'Get an answer with citations from company sources.' },
+  { id: 'search', label: 'Search', icon: Search, hint: 'Find matching passages in your indexed documents.' },
+  { id: 'research', label: 'Research', icon: FileSearch, hint: 'Save evidence as you work. Ask a question across your selected documents.' },
+  { id: 'advisor', label: 'Strategy chat', icon: MessageCircle, hint: 'Discuss trade-offs, pressure-test a plan, or continue a saved conversation.' },
+] as const;
 
-interface SearchFacets {
-  types: Array<{ type: string; count: number }>;
-  tags: Array<{ tag: string; count: number }>;
-  total: number;
+const PROMPTS = ['What can we do to improve profit?', 'Which costs grew the most recently?', 'What decisions are recorded in our meeting notes?', 'Which commitments still need follow-up?'];
+const field = 'w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500';
+const button = 'inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-45';
+const MAX_SAVED = 12;
+
+type Mode = typeof MODES[number]['id'];
+type QueryMode = Exclude<Mode, 'advisor'>;
+type Filters = { type: string; tag: string; days: string; mine: boolean };
+type Facets = { types: Array<{ type: string; count: number }>; tags: Array<{ tag: string; count: number }>; total: number };
+type Evidence = {
+  id: string; citationId: string; documentId?: string; name: string; excerpt: string;
+  type?: string; tags: string[]; cited: boolean;
+};
+type Request = { mode: QueryMode; query: string; filters: Filters; documentIds: string[]; allowGeneralAnswer: boolean };
+type Result = { answer?: string; answerMode?: 'grounded' | 'general' | 'no_evidence'; sources: Evidence[] };
+type RecordValue = Record<string, unknown>;
+const EMPTY_FILTERS: Filters = { type: '', tag: '', days: '', mine: false };
+
+function record(value: unknown): RecordValue {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as RecordValue : {};
 }
-
-interface SearchFilters {
-  type?: string;
-  tag?: string;
-  createdAfter?: string;
-  myHistory?: boolean;
+function message(error: unknown) {
+  const payload = record(record(record(error).response).data).message;
+  return typeof payload === 'string' ? payload : 'The request could not be completed. Try again.';
 }
-
-interface Evidence {
-  chunkId: string;
-  documentId: string;
-  documentName: string;
-  content: string;
-  score?: number;
-  type?: string;
-  tags?: string[];
-  createdAt?: string;
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value : '';
 }
-
-interface AnswerResult {
-  answer: string;
-  sources: Evidence[];
-  question: string;
-  mode: Mode;
-  filterKey: string;
-}
-
-const MODES: Array<{ id: Mode; label: string; icon: typeof Sparkles; helper: string }> = [
-  { id: 'ask', label: 'Ask AI', icon: Sparkles, helper: 'Get a grounded answer from indexed company documents.' },
-  { id: 'search', label: 'Company Search', icon: Search, helper: 'Search indexed company knowledge and review ranked evidence.' },
-  { id: 'research', label: 'Research', icon: FileSearch, helper: 'Refine evidence by source, tags, document type, and recency.' },
-  { id: 'advisor', label: 'Advisor Chat', icon: MessageCircle, helper: 'Continue the existing Lumorius strategy-advisor chat.' },
-];
-
-const SUGGESTIONS = [
-  'What are the key points in our indexed documents?',
-  'Summarize the policies and procedures available to the team.',
-  'What decisions or commitments appear in the meeting notes?',
-];
-
-function startOfLookback(days: string) {
-  if (!days) return undefined;
-  return new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString();
-}
-
-function errorText(error: unknown) {
-  const responseMessage = (error as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
-  if (Array.isArray(responseMessage)) return responseMessage.join(', ');
-  return responseMessage || 'Search could not be completed. Check source availability and try again.';
-}
-
-function getFilters(type: string, tag: string, days: string, myHistory: boolean): SearchFilters {
+function normalizeSource(value: unknown, index: number): Evidence {
+  const source = record(value);
+  const citationId = stringValue(source.citationId) || `S${index + 1}`;
+  const documentId = stringValue(source.documentId ?? source.document_id) || undefined;
+  const name = repairDisplayText(stringValue(source.documentName ?? source.document_name ?? record(source.entity).name) || 'Knowledge evidence');
+  const excerpt = repairDisplayText(stringValue(source.excerpt ?? source.content));
+  const tags = source.tags ?? source.document_tags;
   return {
-    type: type || undefined,
-    tag: tag || undefined,
-    createdAfter: startOfLookback(days),
-    myHistory: myHistory || undefined,
+    id: stringValue(source.chunkId ?? source.chunk_id ?? source.evidenceId) || `${documentId ?? name}:${excerpt}`,
+    citationId,
+    documentId,
+    name,
+    excerpt,
+    type: stringValue(source.type ?? source.document_type) || undefined,
+    tags: Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [],
+    cited: source.cited === true,
   };
 }
 
 export default function AiAdvisor() {
-  const [mode, setMode] = useState<Mode>('ask');
+  const { user, isLoading } = useAuth();
+  if (!user) return <p className="p-6 text-sm text-muted-foreground">{isLoading ? 'Loading AI Advisor…' : 'Sign in to use AI Advisor.'}</p>;
+  const account = `${user.organizationId}/${user.id}`;
+  return <AdvisorWorkspace key={account} account={account} />;
+}
+
+function AdvisorWorkspace({ account }: { account: string }) {
+  const [mode, setMode] = useState<Mode>('advisor');
   const [query, setQuery] = useState('');
-  const [type, setType] = useState('');
-  const [tag, setTag] = useState('');
-  const [days, setDays] = useState('');
-  const [myHistory, setMyHistory] = useState(false);
-  const [showFilters, setShowFilters] = useState(true);
-  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [saved, setSaved] = useState<Evidence[]>([]);
+  const [scope, setScope] = useState<Array<{ id: string; name: string }>>([]);
+  const [citedOnly, setCitedOnly] = useState(false);
+  const [generalFallback, setGeneralFallback] = useState(true);
+  const [opening, setOpening] = useState<string | null>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const selectedMode = MODES.find((item) => item.id === mode)!;
+  const ModeIcon = selectedMode.icon;
 
-  const docsQuery = useQuery<SearchFacets>({
-    queryKey: ['ai', 'indexed-document-facets'],
-    queryFn: async () => {
-      const response = await api.get('/documents/search-facets');
-      return response.data.data;
-    },
+  const facets = useQuery({
+    queryKey: ['ai', 'indexed-document-facets', account],
+    queryFn: async ({ signal }) => (await api.get<{ data: Facets }>('/documents/search-facets', { signal })).data.data,
+    enabled: mode !== 'advisor',
+    staleTime: 30_000,
   });
 
-  const types = useMemo(() => docsQuery.data?.types ?? [], [docsQuery.data]);
-  const tags = useMemo(() => docsQuery.data?.tags ?? [], [docsQuery.data]);
-
-  const answerMutation = useMutation({
-    mutationFn: async (request: { question: string; mode: Mode; filters: SearchFilters; filterKey: string }) => {
-      const response = await api.post('/documents/ask', {
-        question: request.question,
-        ...request.filters,
-      });
+  const request = useMutation<Result, unknown, Request>({
+    mutationFn: async ({ mode: target, query: text, filters: selected, documentIds, allowGeneralAnswer }) => {
+      const options = {
+        type: selected.type || undefined,
+        tag: selected.tag || undefined,
+        createdAfter: selected.days ? new Date(Date.now() - Number(selected.days) * 86_400_000).toISOString() : undefined,
+        myHistory: selected.mine || undefined,
+        documentIds: documentIds.length ? documentIds : undefined,
+      };
+      if (target !== 'ask') {
+        const { data } = await api.post<{ data: unknown[] }>('/documents/search', { query: text, topK: target === 'research' ? 20 : 12, ...options });
+        if (!Array.isArray(data.data)) throw new Error('Unexpected search response');
+        return { sources: data.data.map(normalizeSource) };
+      }
+      const { data } = await api.post<{ data: { answer: string; answerMode?: Result['answerMode']; sources?: unknown[]; knowledgeSources?: unknown[] } }>('/documents/ask', { question: text, allowGeneralAnswer, ...options });
       return {
-        ...response.data.data,
-        question: request.question,
-        mode: request.mode,
-        filterKey: request.filterKey,
-      } as AnswerResult;
+        answer: data.data.answer,
+        answerMode: data.data.answerMode,
+        sources: [...(data.data.sources ?? []), ...(data.data.knowledgeSources ?? [])].map(normalizeSource),
+      };
     },
   });
+  const documentIds = scope.map(({ id }) => id);
+  const hasFilters = Boolean(filters.type || filters.tag || filters.days || filters.mine);
+  const allowGeneralAnswer = mode === 'ask' && generalFallback && !hasFilters && !documentIds.length;
+  const current = request.variables?.mode === mode && request.variables.query === query.trim()
+    && request.variables.allowGeneralAnswer === allowGeneralAnswer
+    && JSON.stringify(request.variables.filters) === JSON.stringify(filters)
+    && JSON.stringify(request.variables.documentIds) === JSON.stringify(documentIds);
+  const result = current ? request.data : undefined;
+  const visibleSources = (result?.sources ?? []).filter((source) => !citedOnly || source.cited);
+  const citedIds = new Set(result?.sources.map(({ citationId }) => citationId));
 
-  const currentFilterKey = JSON.stringify([type, tag, days, myHistory]);
-  const currentResult = answerMutation.data?.mode === mode ? answerMutation.data : null;
-  const result = currentResult
-    && currentResult.question === query.trim()
-    && currentResult.filterKey === currentFilterKey
-    ? currentResult
-    : null;
-  const resultsNeedRefresh = Boolean(currentResult && !result && query.trim());
-  const hasFilters = Boolean(type || tag || days || myHistory);
-  const returnedTags = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const source of result?.sources ?? []) {
-      for (const sourceTag of source.tags ?? []) counts.set(sourceTag, (counts.get(sourceTag) ?? 0) + 1);
-    }
-    return counts;
-  }, [result]);
+  function changeMode(next: Mode) {
+    setMode(next);
+    setCitedOnly(false);
+    if (next !== 'ask') setScope([]);
+  }
 
-  const submit = (event?: FormEvent, value = query) => {
+  function submit(event?: FormEvent<HTMLFormElement>, text = query) {
     event?.preventDefault();
-    const question = value.trim();
-    if (!question || answerMutation.isPending) return;
-    answerMutation.mutate({
-      question,
-      mode,
-      filters: getFilters(type, tag, days, myHistory),
-      filterKey: currentFilterKey,
-    });
-  };
+    if (mode === 'advisor' || !text.trim() || request.isPending) return;
+    setQuery(text.trim());
+    setCitedOnly(false);
+    request.mutate({ mode, query: text.trim(), filters, documentIds, allowGeneralAnswer });
+  }
 
-  const clearFilters = () => {
-    if (answerMutation.isPending) return;
-    setType('');
-    setTag('');
-    setDays('');
-    setMyHistory(false);
-    if (query.trim()) {
-      answerMutation.mutate({
-        question: query.trim(),
-        mode,
-        filters: {},
-        filterKey: JSON.stringify(['', '', '', false]),
-      });
-    }
-  };
+  function askAbout(sources: Evidence[]) {
+    const documents = new Map<string, string>();
+    for (const source of sources) if (source.documentId) documents.set(source.documentId, source.name);
+    if (!documents.size) return;
+    changeMode('ask');
+    setFilters(EMPTY_FILTERS);
+    setScope(Array.from(documents, ([id, name]) => ({ id, name })));
+    setQuery('');
+    // The composer stays mounted when switching between document modes.
+    input.current?.focus();
+    input.current?.scrollIntoView({ block: 'center' });
+  }
 
-  const copyAnswer = async () => {
+  function toggleSaved(source: Evidence) {
+    if (saved.some((entry) => entry.id === source.id)) setSaved(saved.filter((entry) => entry.id !== source.id));
+    else if (saved.length < MAX_SAVED) setSaved([...saved, source]);
+  }
+
+  async function copyAnswer() {
     if (!result?.answer) return;
+    const references = result.sources.filter((source) => source.cited).map((source) => `[${source.citationId}] ${source.name}`);
     try {
-      await navigator.clipboard.writeText(result.answer);
+      await navigator.clipboard.writeText([query, result.answer, references.length ? 'Sources\n' + references.join('\n') : ''].filter(Boolean).join('\n\n'));
       toast.success('Answer copied');
     } catch {
       toast.error('Could not copy the answer');
     }
-  };
+  }
 
-  const openSource = async (documentId: string) => {
-    const sourceWindow = window.open('about:blank', '_blank');
-    if (!sourceWindow) {
+  async function openSource(documentId: string) {
+    if (opening) return;
+    const tab = window.open('about:blank', '_blank');
+    if (!tab) {
       toast.error('Allow pop-ups to open the source document.');
       return;
     }
-    sourceWindow.opener = null;
-    setOpeningId(documentId);
+    tab.opener = null;
+    setOpening(documentId);
     try {
-      const response = await api.get(`/documents/${documentId}/download`);
-      const url = response.data.data?.url;
-      if (!url) throw new Error('No source URL returned');
-      sourceWindow.location.href = url;
+      const { data } = await api.get<{ data: { url: string } }>(`/documents/${encodeURIComponent(documentId)}/download`);
+      const url = new URL(data.data.url);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported source URL');
+      tab.location.href = url.href;
     } catch {
-      sourceWindow.close();
-      toast.error('Could not open this document. Your access may have changed.');
+      tab.close();
+      toast.error('Could not open the document. Its access may have changed.');
     } finally {
-      setOpeningId(null);
+      setOpening(null);
     }
-  };
-
-  const indexedTotal = docsQuery.data?.total;
-  const currentMode = MODES.find((item) => item.id === mode)!;
+  }
 
   return (
-    <div className="mx-auto w-full max-w-[1450px] space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+    <main className="mx-auto max-w-[1460px] space-y-5 pb-10">
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-5">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-500">Company knowledge</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-            {mode === 'ask' ? 'Ask AI' : mode === 'search' ? 'Company Search' : mode === 'research' ? 'Research' : 'AI Advisor'}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">{currentMode.helper}</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI Advisor</h1>
+          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Ask about your business. Answers draw on your documents, meetings, decisions, tasks and committed financial records, with sources you can check.
+          </p>
         </div>
-        <Link href="/brain" className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition hover:bg-muted">
-          Open source library
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/agent-command" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted"><Bot className="h-4 w-4" /> Run an agent <ArrowUpRight className="h-3.5 w-3.5" /></Link>
+          <Link href="/brain" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted"><BookOpen className="h-4 w-4" /> Source library <ArrowUpRight className="h-3.5 w-3.5" /></Link>
+        </div>
+      </header>
+
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm">
+        <Sparkles className="h-5 w-5 text-cyan-500" />
+        <label htmlFor="advisor-tool" className="text-sm font-semibold">Advisor tools</label>
+        <select id="advisor-tool" value={mode} onChange={event=>changeMode(event.target.value as Mode)} className="rounded-xl border border-border bg-background px-4 py-2 text-sm">
+          <option value="advisor">Conversation & strategy</option><option value="ask">Ask company knowledge</option><option value="search">Find sources</option><option value="research">Research & saved evidence</option>
+        </select>
+        <p className="text-xs text-muted-foreground">{selectedMode.hint}</p>
+        {saved.length>0 && <button onClick={()=>changeMode('research')} className="ml-auto rounded-lg border border-border px-3 py-2 text-xs">{saved.length} saved sources</button>}
       </div>
 
-      <nav aria-label="AI Advisor modes" className="flex flex-wrap gap-2 border-b border-border pb-3">
-        {MODES.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setMode(id)}
-            aria-pressed={mode === id}
-            className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
-              mode === id ? 'bg-brand-500/10 text-brand-500' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      {mode === 'advisor' ? (
-        <AdvisorChat />
-      ) : (
-        <>
-          <form onSubmit={(event) => submit(event)} className="rounded-xl border border-brand-500/30 bg-card p-4 shadow-sm sm:p-5">
-            <label htmlFor="knowledge-query" className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Search your accessible company knowledge
-            </label>
-            <textarea
-              id="knowledge-query"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              rows={3}
-              placeholder="Ask a question or search for a topic in indexed documents…"
-              className="w-full resize-y bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
-            />
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1.5 text-muted-foreground">
-                  <span className={`h-1.5 w-1.5 rounded-full ${
-                    docsQuery.isLoading ? 'bg-amber-500' : docsQuery.isError ? 'bg-red-500' : (indexedTotal ?? 0) > 0 ? 'bg-emerald-500' : 'bg-muted-foreground'
-                  }`} />
-                  {docsQuery.isLoading
-                    ? 'Checking indexed sources…'
-                    : docsQuery.isError
-                      ? 'Source status unavailable'
-                      : (indexedTotal ?? 0) > 0
-                        ? `Company Brain · ${indexedTotal} indexed`
-                        : 'No indexed documents'}
-                </span>
-                <span className="text-muted-foreground">No external source connectors are exposed to this search yet.</span>
+      <div hidden={mode !== 'advisor'}><AdvisorChat account={account} /></div>
+      {mode !== 'advisor' && (
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
+          <div className="min-w-0 space-y-4">
+            <form onSubmit={(event) => submit(event)} className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+              <label htmlFor="advisor-query" className="flex items-center gap-2 border-b border-border px-4 py-3 text-sm font-semibold"><ModeIcon className="h-4 w-4 text-brand-500" /> {selectedMode.label}</label>
+              {scope.length > 0 && <div className="flex flex-wrap gap-1.5 px-4 pt-3" aria-label="Selected sources">
+                {scope.map((doc) => <button type="button" key={doc.id} onClick={() => setScope(scope.filter(({ id }) => id !== doc.id))}
+                  aria-label={`Remove source ${doc.name}`} className="inline-flex max-w-full items-center gap-1 rounded-md bg-brand-500/10 px-2 py-1 text-xs text-brand-600 dark:text-brand-300"><span className="truncate">{doc.name}</span><X className="h-3 w-3 shrink-0" /></button>)}
+              </div>}
+              <textarea id="advisor-query" ref={input} value={query} onChange={(event) => setQuery(event.target.value)} maxLength={2000} rows={3}
+                onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); } }}
+                placeholder={mode === 'ask' ? 'Ask a question about these sources…' : 'Enter a keyword, topic, or phrase…'}
+                className="block w-full resize-y bg-transparent px-4 py-3 text-sm leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500/40" />
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2.5">
+                <span className="text-xs text-muted-foreground">Enter to submit · Shift + Enter for a new line</span>
+                <button type="submit" disabled={!query.trim() || request.isPending} className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-45">
+                  {request.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {mode === 'ask' ? 'Ask' : 'Find evidence'}
+                </button>
               </div>
-              <button
-                type="submit"
-                disabled={!query.trim() || answerMutation.isPending}
-                className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {answerMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {mode === 'ask' ? 'Ask AI' : mode === 'search' ? 'Search' : 'Research'}
-              </button>
-            </div>
-          </form>
+              {mode === 'ask' && !hasFilters && !scope.length && <label className="flex items-center gap-2 border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+                <input type="checkbox" checked={generalFallback} onChange={(event) => setGeneralFallback(event.target.checked)} className="accent-brand-500" />
+                Use general AI if company sources do not match
+              </label>}
+            </form>
 
-          {!result && !answerMutation.isPending && (
-            <section aria-label="Suggested questions" className="flex flex-wrap gap-2">
-              {SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  onClick={() => { setQuery(suggestion); }}
-                  className="rounded-full border border-border bg-card px-3 py-2 text-left text-xs text-muted-foreground transition hover:border-brand-500/40 hover:text-foreground"
-                >
-                  {suggestion}
-                </button>
-              ))}
-            </section>
-          )}
-
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card/70 px-3 py-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                <span>File type</span>
-                <span className="relative">
-                  <select
-                    aria-label="Filter by file type"
-                    value={type}
-                    onChange={(event) => setType(event.target.value)}
-                    className="appearance-none rounded-md border border-border bg-card py-1.5 pl-2.5 pr-7 text-xs text-foreground outline-none focus:ring-2 focus:ring-brand-500"
-                  >
-                    <option value="">All types</option>
-                    {types.map(({ type: documentType }) => <option key={documentType} value={documentType}>{documentType.toUpperCase()}</option>)}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                </span>
-              </label>
-              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                <span>Recency</span>
-                <span className="relative">
-                  <select
-                    aria-label="Filter by recency"
-                    value={days}
-                    onChange={(event) => setDays(event.target.value)}
-                    className="appearance-none rounded-md border border-border bg-card py-1.5 pl-2.5 pr-7 text-xs text-foreground outline-none focus:ring-2 focus:ring-brand-500"
-                  >
-                    <option value="">Any time</option>
-                    <option value="7">Last 7 days</option>
-                    <option value="30">Last 30 days</option>
-                    <option value="90">Last 90 days</option>
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                </span>
-              </label>
-              <label className="inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted">
-                <input
-                  type="checkbox"
-                  checked={myHistory}
-                  onChange={(event) => setMyHistory(event.target.checked)}
-                  className="h-3.5 w-3.5 accent-brand-500"
-                />
-                Uploaded by me
-              </label>
-              {mode !== 'research' && (
-                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>Tag</span>
-                  <span className="relative">
-                    <select
-                      aria-label="Filter by document tag"
-                      value={tag}
-                      onChange={(event) => setTag(event.target.value)}
-                      className="appearance-none rounded-md border border-border bg-card py-1.5 pl-2.5 pr-7 text-xs text-foreground outline-none focus:ring-2 focus:ring-brand-500"
-                    >
-                      <option value="">All tags</option>
-                      {tags.map(({ tag: documentTag }) => <option key={documentTag} value={documentTag}>{documentTag}</option>)}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                  </span>
-                </label>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {mode === 'research' && (
-                <button
-                  type="button"
-                  onClick={() => setShowFilters((visible) => !visible)}
-                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <Filter className="h-3.5 w-3.5" />
-                  {showFilters ? 'Hide filters' : 'Show filters'}
-                </button>
-              )}
-              {hasFilters && (
-                <button type="button" onClick={clearFilters} disabled={answerMutation.isPending} className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
-                  <X className="h-3.5 w-3.5" />
-                  Clear filters
-                </button>
-              )}
-            </div>
-          </div>
-
-          {answerMutation.isError && (
-            <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-              {errorText(answerMutation.error)}
-            </div>
-          )}
-          {resultsNeedRefresh && !answerMutation.isPending && (
-            <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-foreground">
-              <span>The query or filters changed. Previous results are hidden until they are refreshed.</span>
-              <button type="button" onClick={() => submit()} disabled={!query.trim()} className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50">
-                Run current query
-              </button>
-            </div>
-          )}
-
-          <div className={`grid grid-cols-1 gap-4 ${mode === 'research' && showFilters ? 'xl:grid-cols-[minmax(0,1fr)_260px]' : ''}`}>
-            <section aria-label="Answer and evidence" className="min-w-0 space-y-4">
-              {answerMutation.isPending ? (
-                <div className="space-y-4 rounded-xl border border-border bg-card p-5" aria-live="polite">
-                  <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin text-brand-500" />
-                    Searching indexed documents and preparing an answer…
-                  </div>
-                  <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
-                  <div className="h-4 w-full animate-pulse rounded bg-muted" />
-                  <div className="h-4 w-5/6 animate-pulse rounded bg-muted" />
-                </div>
-              ) : result ? (
-                <>
-                  {mode !== 'ask' && (
-                    <div className="rounded-lg border border-border bg-card px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Query</p>
-                      <p className="mt-1 text-sm font-medium text-foreground">{result.question}</p>
-                    </div>
-                  )}
-                  <article className="rounded-xl border border-border bg-card p-5">
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <span className="rounded-lg bg-brand-500/10 p-2 text-brand-500"><Sparkles className="h-4 w-4" /></span>
-                        <div>
-                          <h2 className="font-semibold text-foreground">{mode === 'ask' ? 'AI answer' : 'AI summary'}</h2>
-                          <p className="text-xs text-muted-foreground">
-                            {result.sources.length} evidence passage{result.sources.length === 1 ? '' : 's'} returned
-                          </p>
-                        </div>
-                      </div>
-                      {result.answer && (
-                        <button type="button" onClick={copyAnswer} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground">
-                          <Copy className="h-3.5 w-3.5" />
-                          Copy answer
-                        </button>
-                      )}
-                    </div>
-                    <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{result.answer}</p>
-                  </article>
-
-                  <div>
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <h2 className="text-sm font-semibold text-foreground">Evidence</h2>
-                      <span className="text-xs text-muted-foreground">
-                        {result.sources.length ? 'Ranked passages from indexed documents' : 'No matching passages'}
-                      </span>
-                    </div>
-                    {result.sources.length ? (
-                      <div className="space-y-2">
-                        {result.sources.map((source, index) => (
-                          <article key={source.chunkId || `${source.documentId}-${index}`} className="rounded-xl border border-border bg-card p-4">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="flex min-w-0 items-start gap-3">
-                                <span className="mt-0.5 rounded-md bg-muted p-2 text-muted-foreground"><BookOpen className="h-4 w-4" /></span>
-                                <div className="min-w-0">
-                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-500">Source {index + 1}</p>
-                                  <h3 className="mt-0.5 truncate text-sm font-medium text-foreground">{source.documentName}</h3>
-                                  <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-                                    <span>{source.type ? source.type.toUpperCase() : 'Company Brain'}</span>
-                                    {source.createdAt && <span className="inline-flex items-center gap-1"><Clock3 className="h-3 w-3" />{new Date(source.createdAt).toLocaleDateString()}</span>}
-                                  </p>
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => openSource(source.documentId)}
-                                disabled={openingId === source.documentId}
-                                className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
-                              >
-                                {openingId === source.documentId ? 'Opening…' : 'Open source'}
-                              </button>
-                            </div>
-                            <p className="mt-3 border-l-2 border-brand-500/40 pl-3 text-sm leading-5 text-muted-foreground">{source.content}</p>
-                            {!!source.tags?.length && (
-                              <div className="mt-3 flex flex-wrap gap-1.5">
-                                {source.tags.map((sourceTag) => (
-                                  <span key={sourceTag} className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{sourceTag}</span>
-                                ))}
-                              </div>
-                            )}
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-border bg-card p-6 text-center">
-                        <FileSearch className="mx-auto h-6 w-6 text-muted-foreground" />
-                        <p className="mt-2 text-sm font-medium text-foreground">No matching indexed passages</p>
-                        <p className="mt-1 text-xs text-muted-foreground">Try a broader question, clear filters, or index more documents in Company Brain.</p>
-                      </div>
-                    )}
-                  </div>
-
-                  <section aria-label="Related questions" className="flex flex-wrap items-center gap-2">
-                    <span className="mr-1 text-xs text-muted-foreground">Ask next</span>
-                    {['What else should I know?', 'Summarize the evidence', 'What is still unclear?'].map((followup) => (
-                      <button key={followup} type="button" onClick={() => { setQuery(followup); }} className="rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
-                        {followup}
-                      </button>
-                    ))}
-                  </section>
-                </>
-              ) : (
-                <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card px-6 text-center">
-                  <span className="rounded-2xl bg-brand-500/10 p-3 text-brand-500"><Sparkles className="h-6 w-6" /></span>
-                  <p className="mt-3 text-sm font-semibold text-foreground">Answers use indexed company documents</p>
-                  <p className="mt-1 max-w-lg text-xs leading-5 text-muted-foreground">
-                    Results are scoped to your organization. Only indexed passages are searched; no external connector or unsupported source is implied.
-                  </p>
-                </div>
-              )}
-            </section>
-
-            {mode === 'research' && showFilters && (
-              <aside aria-label="Research filters" className="h-fit rounded-xl border border-border bg-card p-4">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-foreground">Filter results</h2>
-                  <button type="button" onClick={clearFilters} disabled={!hasFilters || answerMutation.isPending} className="text-xs text-brand-500 hover:underline disabled:text-muted-foreground disabled:no-underline">Clear all</button>
-                </div>
-                <div className="space-y-5">
-                  <section>
-                    <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sources</h3>
-                    <div className="rounded-lg bg-muted/40 px-3 py-2.5">
-                      <p className="flex items-center gap-2 text-xs font-medium text-foreground">
-                        <BookOpen className="h-3.5 w-3.5 text-brand-500" />
-                        Company Brain
-                      </p>
-                      <p className="mt-1 pl-5 text-[10px] text-muted-foreground">
-                        {result ? `${result.sources.length} passages in current results` : `${indexedTotal ?? 0} indexed documents`}
-                      </p>
-                    </div>
-                    <p className="mt-2 text-[10px] leading-4 text-muted-foreground">External sources are not connected to this search service.</p>
-                  </section>
-                  <section>
-                    <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Collections</h3>
-                    <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
-                      Collections are not modeled in the current document API.
-                    </div>
-                  </section>
-                  <section>
-                    <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><Tags className="h-3.5 w-3.5" />Tags</h3>
-                    {tags.length ? (
-                      <div className="max-h-64 space-y-1 overflow-y-auto">
-                        {tags.map(({ tag: documentTag }) => (
-                          <label key={documentTag} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted">
-                            <input
-                              type="radio"
-                              name="research-tag"
-                              checked={tag === documentTag}
-                              onChange={() => setTag(tag === documentTag ? '' : documentTag)}
-                              className="accent-brand-500"
-                            />
-                            <span className="min-w-0 flex-1 truncate">{documentTag}</span>
-                            <span className="tabular-nums">{returnedTags.get(documentTag) ?? 0}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">No document tags are available.</p>
-                    )}
-                    <p className="mt-2 text-[10px] text-muted-foreground">Counts show passages returned in the current search.</p>
-                  </section>
-                  <section className="space-y-2 border-t border-border pt-4">
-                    <label className="block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" htmlFor="research-type">File type</label>
-                    <select id="research-type" value={type} onChange={(event) => setType(event.target.value)} className="w-full rounded-md border border-border bg-card px-2.5 py-2 text-xs text-foreground">
-                      <option value="">All types</option>
-                      {types.map(({ type: documentType }) => <option key={documentType} value={documentType}>{documentType.toUpperCase()}</option>)}
-                    </select>
-                  </section>
-                </div>
-              </aside>
+            {current && request.isError && <p role="alert" className="rounded-xl border border-destructive/30 bg-card p-4 text-sm text-destructive">{message(request.error)}</p>}
+            {request.isPending && <p role="status" className="flex items-center gap-2 rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin text-brand-500" /> {request.variables?.mode === 'ask' ? 'Finding sources and preparing an answer…' : 'Finding matching passages…'}</p>}
+            {!request.isPending && !result && !query && mode === 'ask' && !scope.length && (
+              <div className="flex flex-wrap gap-2">{PROMPTS.map((prompt) => <button key={prompt} type="button" onClick={() => submit(undefined, prompt)} className={button}>{prompt}</button>)}</div>
             )}
+            {!request.isPending && request.data && !result && query.trim() && <p className="text-xs text-muted-foreground">Run the current query to see results for these settings.</p>}
+
+            {result?.answer && <article className="rounded-2xl border border-border bg-card p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-base font-semibold">{result.answerMode === 'general' ? 'General AI answer' : 'Answer'}</h2><button type="button" onClick={() => void copyAnswer()} className={button}><Copy className="h-3.5 w-3.5" /> Copy answer</button></div>
+              {result.answerMode === 'general' && <p className="mt-2 text-xs text-muted-foreground">No matching company sources were used for this answer.</p>}
+              <div className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">
+                {result.answer.split(/(\[[SK]\d+\])/g).map((part, index) => {
+                  const id = part.slice(1, -1);
+                  return /^\[[SK]\d+\]$/.test(part) && citedIds.has(id)
+                    ? <a key={index} href={`#advisor-evidence-${id}`} className="font-semibold text-brand-600 underline underline-offset-2 dark:text-brand-300">{part}</a>
+                    : part;
+                })}
+              </div>
+            </article>}
+
+            {result && <section className="space-y-2" aria-label="Evidence">
+              <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">Evidence <span className="ml-1 text-xs font-normal tabular-nums text-muted-foreground">{visibleSources.length}</span></h2>
+                {result.answer && result.sources.some(({ cited }) => cited) && <label className="flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={citedOnly} onChange={(event) => setCitedOnly(event.target.checked)} className="accent-brand-500" /> Cited only</label>}
+              </div>
+              {!visibleSources.length && <p className="rounded-xl border border-dashed border-border p-5 text-sm text-muted-foreground">No matching evidence. Try a different phrase or broaden the filters.</p>}
+              {visibleSources.map((source) => {
+                const isSaved = saved.some(({ id }) => id === source.id);
+                return <article id={`advisor-evidence-${source.citationId}`} key={source.citationId} className="scroll-mt-5 rounded-xl border border-border bg-card p-4 target:border-brand-500">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <span className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">{source.citationId}</span>
+                      <div className="min-w-0"><h3 className="break-words text-sm font-semibold">{source.name}</h3><p className="mt-0.5 text-xs text-muted-foreground">{[source.type?.toUpperCase(), source.cited && 'Cited in answer', ...source.tags].filter(Boolean).join(' · ')}</p></div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {source.documentId && <button type="button" onClick={() => void openSource(source.documentId!)} disabled={Boolean(opening)} className={button}>Open <ArrowUpRight className="h-3.5 w-3.5" /></button>}
+                      {source.documentId && mode !== 'ask' && <button type="button" onClick={() => askAbout([source])} className={button}>Ask about this</button>}
+                      <button type="button" aria-pressed={isSaved} onClick={() => toggleSaved(source)} disabled={!isSaved && saved.length >= MAX_SAVED} className={button}><Bookmark className={`h-3.5 w-3.5 ${isSaved ? 'fill-current' : ''}`} /> {isSaved ? 'Saved' : 'Save'}</button>
+                    </div>
+                  </div>
+                  {source.excerpt && <p className="mt-3 break-words border-l-2 border-brand-500/40 pl-3 text-sm leading-6 text-muted-foreground">{source.excerpt}</p>}
+                </article>;
+              })}
+            </section>}
           </div>
-        </>
+
+          <aside className="space-y-3">
+            <section aria-label="Source filters" className="space-y-3 rounded-2xl border border-border bg-card p-4">
+              <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Source filters</h2>{hasFilters && <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} className="text-xs underline">Clear</button>}</div>
+              <p className="text-xs text-muted-foreground">{typeof facets.data?.total === 'number' ? `${facets.data.total.toLocaleString()} accessible indexed documents` : facets.isError ? 'Source counts unavailable' : 'Loading source counts…'}</p>
+              {facets.isError && <button type="button" onClick={() => void facets.refetch()} className="text-xs underline">Retry source counts</button>}
+              <label className="block space-y-1 text-xs font-medium"><span>File type</span><select value={filters.type} onChange={(e) => setFilters({ ...filters, type: e.target.value })} className={field}><option value="">All types</option>{facets.data?.types.map(({ type, count }) => <option key={type} value={type}>{type.toUpperCase()} ({count})</option>)}</select></label>
+              <label className="block space-y-1 text-xs font-medium"><span>Tag</span><select value={filters.tag} onChange={(e) => setFilters({ ...filters, tag: e.target.value })} className={field}><option value="">All tags</option>{facets.data?.tags.map(({ tag, count }) => <option key={tag} value={tag}>{tag} ({count})</option>)}</select></label>
+              <label className="block space-y-1 text-xs font-medium"><span>Uploaded</span><select value={filters.days} onChange={(e) => setFilters({ ...filters, days: e.target.value })} className={field}><option value="">Any time</option>{[7, 30, 90].map((days) => <option key={days} value={days}>Last {days} days</option>)}</select></label>
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={filters.mine} onChange={(e) => setFilters({ ...filters, mine: e.target.checked })} className="accent-brand-500" /> Uploaded by me</label>
+            </section>
+            {(mode === 'research' || saved.length > 0) && <section aria-label="Saved evidence" className="rounded-2xl border border-border bg-card p-4">
+              <div className="flex items-center justify-between gap-2"><h2 className="flex items-center gap-1.5 text-sm font-semibold"><Bookmark className="h-4 w-4 text-brand-500" /> Saved evidence</h2><span className="text-xs text-muted-foreground">{saved.length}/{MAX_SAVED}</span></div>
+              {!saved.length ? <p className="mt-2 text-xs text-muted-foreground">Save passages from your results to build a shortlist for this session.</p> : <>
+                <ul className="mt-2 max-h-64 divide-y divide-border overflow-auto">{saved.map((source) => <li key={source.id} className="flex items-start justify-between gap-2 py-2">
+                  <details className="min-w-0"><summary className="cursor-pointer break-words text-xs font-medium">{source.name}</summary><p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{source.excerpt || 'No excerpt available.'}</p></details>
+                  <button type="button" onClick={() => toggleSaved(source)} aria-label={`Remove saved passage from ${source.name}`} className="rounded p-0.5 text-muted-foreground hover:bg-muted"><X className="h-3.5 w-3.5" /></button>
+                </li>)}</ul>
+                <button type="button" onClick={() => askAbout(saved)} disabled={!saved.some(({ documentId }) => documentId)} className={button + ' mt-3'}><Sparkles className="h-3.5 w-3.5" /> Ask across saved documents</button>
+              </>}
+            </section>}
+          </aside>
+        </div>
       )}
-    </div>
+    </main>
   );
 }

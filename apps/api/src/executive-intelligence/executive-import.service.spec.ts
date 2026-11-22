@@ -31,6 +31,69 @@ describe('ExecutiveImportService', () => {
     service = new ExecutiveImportService(db, publisher);
   });
 
+  it('accepts files with blank spacer columns, blank headers over data and repeated headers', () => {
+    const parse = (rows: unknown[][]) =>
+      (service as unknown as { parseWorkbook: (b: Buffer) => { headers: string[]; rows: Array<{ rawData: Record<string, unknown> }> } })
+        .parseWorkbook(makeFile(rows).buffer);
+
+    const parsed = parse([
+      ['Date', null, 'Amount', null, 'Amount', null],
+      ['2026-11-01', null, 120, 'note', 5, null],
+      ['2026-11-02', null, 80, null, 6, null],
+    ]);
+    // Column B (blank, no data) and F (blank, no data) are dropped; D gets a letter name; the second Amount is numbered.
+    expect(parsed.headers).toEqual(['Date', 'Amount', 'Column D', 'Amount (2)']);
+    expect(parsed.rows[0].rawData).toEqual({ Date: '2026-11-01', Amount: 120, 'Column D': 'note', 'Amount (2)': 5 });
+  });
+
+  it('finds the real header row below a form title block (expense report layout)', () => {
+    const parse = (rows: unknown[][]) =>
+      (service as unknown as { parseWorkbook: (b: Buffer) => { headers: string[]; rows: Array<{ rowNumber: number; rawData: Record<string, unknown> }> } })
+        .parseWorkbook(makeFile(rows).buffer);
+    const parsed = parse([
+      ['Your Company Name', 'INMARTECH PVT LTD', null, null, null],
+      ['Expense Report', null, null, null, null],
+      ['PURPOSE:', 'Business meeting', null, 'STATEMENT NUMBER:', 1106],
+      ['Date', 'Account', 'Description', 'Hotel', 'Total'],
+      ['2026-06-30', 5524366200, 'approved', 5500, 17550],
+    ]);
+    expect(parsed.headers).toEqual(['Date', 'Account', 'Description', 'Hotel', 'Total']);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0].rawData.Total).toBe(17550);
+  });
+
+  it('accepts a fixed value for a field the file has no column for, and lets one column feed two fields', () => {
+    const validate = (mapping: Record<string, string>) =>
+      (service as unknown as { validateMapping: (t: string, m: unknown, h: string[]) => Record<string, string> })
+        .validateMapping('transactions', mapping, ['Date', 'Total', 'Description']);
+    const mapping = validate({
+      transaction_date: 'Date',
+      transaction_type: '__fixed__:operating_expense',
+      amount: 'Total',
+      currency: '__fixed__:USD',
+      description: 'Description',
+      external_reference: 'Description',
+    });
+    expect(mapping.currency).toBe('__fixed__:USD');
+    expect(() => validate({ transaction_date: 'Date', transaction_type: 'Nope', amount: 'Total', currency: '__fixed__:USD' }))
+      .toThrow('Choose a source column or enter a fixed value');
+  });
+
+  it('turns an expense-report row into a valid transaction using fixed type and currency', () => {
+    const normalize = (service as unknown as {
+      normalizeRow: (t: string, raw: Record<string, unknown>, m: Record<string, string>, id: string) => { normalized: Record<string, unknown> | null; errors: string[] };
+    }).normalizeRow.bind(service);
+    const result = normalize('transactions', { Date: '2026-06-30', Total: 17550, Description: 'approved' }, {
+      transaction_date: 'Date',
+      transaction_type: '__fixed__:operating_expense',
+      amount: 'Total',
+      currency: '__fixed__:usd',
+      description: 'Description',
+    }, 'row-9');
+    expect(result.errors).toEqual([]);
+    expect(result.normalized).toMatchObject({ transaction_type: 'operating_expense', currency: 'USD', transaction_date: '2026-06-30' });
+  });
+
   it('rejects non-administrator access before touching the database', async () => {
     await expect(service.listImports({ ...actor, role: 'member' })).rejects.toThrow(
       'Only organisation owners and administrators',
@@ -190,7 +253,11 @@ describe('ExecutiveImportService', () => {
     const result = await service.commitImport('import-1', false, actor);
     expect(result).toMatchObject({ status: 'committed', alreadyCommitted: false, committedRows: 1 });
     const sql = client.query.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(sql.some((query: string) => query.includes('INSERT INTO executive_financial_transactions'))).toBe(true);
+    const insert = sql.find((query: string) => query.includes('INSERT INTO executive_financial_transactions'));
+    expect(insert).toBeDefined();
+    // Postgres will not assign JSONB text to a DATE column without an explicit cast.
+    expect(insert).toContain("(r.normalized_data->>'transaction_date')::date");
+    expect(insert).toContain("(r.normalized_data->>'amount')::numeric");
     expect(sql.some((query: string) => query.includes("'import_committed'"))).toBe(true);
     expect(publisher.append).toHaveBeenCalledWith(
       client,

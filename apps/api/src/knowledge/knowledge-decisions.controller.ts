@@ -7,6 +7,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { FeatureGuard, RequiresFeature, RequiresModule } from '../billing/entitlements';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -15,6 +16,7 @@ import { KnowledgeDecisionsService } from './knowledge-decisions.service';
 @ApiTags('knowledge-decisions')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@RequiresModule('decisions')
 @Controller('knowledge/decisions')
 export class KnowledgeDecisionsController {
   constructor(
@@ -63,30 +65,52 @@ export class KnowledgeDecisionsController {
     return this.decisions.getPortfolioAnalytics(user.organizationId, user.sub, user.role);
   }
 
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('advanced_governance')
   @Get('governance/overview')
   @ApiOperation({ summary: 'Get organisation-scoped approval governance overview' })
   governanceOverview(@CurrentUser() user: JwtPayload) {
     return this.decisions.getGovernanceOverview(user.organizationId, user.sub, user.role);
   }
 
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('advanced_governance')
+  @Get('governance/audit')
+  @ApiOperation({ summary: 'Get a page of governance events visible to the current user' })
+  governanceAudit(
+    @CurrentUser() user: JwtPayload,
+    @Query('category') category = 'all',
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.decisions.listGovernanceEvents(user.organizationId, user.sub, user.role, category, cursor);
+  }
+
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('advanced_governance')
   @Post('governance/policies')
   @ApiOperation({ summary: 'Create or update an organisation approval policy' })
   saveApprovalPolicy(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.decisions.saveApprovalPolicy(user.organizationId, user.sub, user.role, body ?? {});
   }
 
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('advanced_governance')
   @Post('governance/policies/:id/deactivate')
   @ApiOperation({ summary: 'Deactivate an organisation approval policy' })
   deactivateApprovalPolicy(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.decisions.deactivateApprovalPolicy(user.organizationId, user.sub, user.role, id);
   }
 
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('advanced_governance')
   @Post('governance/delegations')
   @ApiOperation({ summary: 'Grant scoped approval delegation' })
   createApprovalDelegation(@CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
     return this.decisions.createApprovalDelegation(user.organizationId, user.sub, user.role, body ?? {});
   }
 
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('advanced_governance')
   @Post('governance/delegations/:id/revoke')
   @ApiOperation({ summary: 'Revoke an approval delegation' })
   revokeApprovalDelegation(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

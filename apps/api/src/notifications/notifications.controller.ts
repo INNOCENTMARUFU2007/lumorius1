@@ -45,6 +45,12 @@ export class NotificationsController {
     );
   }
 
+  @Get('feed')
+  @ApiOperation({ summary: 'List pages of notifications with unread totals' })
+  feed(@CurrentUser() user: JwtPayload, @Query('unreadOnly') unreadOnly?: string, @Query('page') page?: string) {
+    return this.notificationsService.feed(user.sub, user.organizationId, unreadOnly === 'true', page);
+  }
+
   @Get('unread-count')
   @ApiOperation({
     summary: 'Get unread notification count',

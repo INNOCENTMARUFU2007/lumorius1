@@ -1,6 +1,6 @@
 'use client';
 
-import Image from 'next/image';
+import { BrandMark } from '@/components/brand-mark';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -141,28 +141,8 @@ export default function VerifyEmailPage() {
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md"
       >
-        <div className="text-center mb-8">
-          <div className="flex justify-center">
-            <Image
-              src="/logo.svg"
-              alt="Lumorius"
-              width={56}
-              height={56}
-              priority
-              className="w-14 h-14 object-contain"
-            />
-          </div>
-
-          <div className="mt-3 flex justify-center">
-            <Image
-              src="/logo-wordmark.svg"
-              alt="Lumorius AI"
-              width={170}
-              height={40}
-              priority
-              className="w-auto h-9"
-            />
-          </div>
+        <div className="mb-8 flex justify-center">
+          <BrandMark size="lg" className="[&_span]:text-white" />
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 text-center">

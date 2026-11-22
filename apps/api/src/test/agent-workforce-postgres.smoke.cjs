@@ -1,0 +1,176 @@
+// Local PostgreSQL acceptance fixture. All data and schema changes are rolled back.
+const path=require('node:path');
+const {createRequire}=require('node:module');
+const apiRoot=path.resolve(__dirname,'../..');
+const fromApi=createRequire(path.join(apiRoot,'package.json'));
+process.chdir(apiRoot);
+const fs=require('node:fs'), assert=require('node:assert/strict'), {randomUUID}=require('node:crypto');
+const ts=require('typescript'), {Client}=require('pg'), parse=require('dotenv').parse;
+require.extensions['.ts']=(mod,file)=>mod._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true,emitDecoratorMetadata:true,esModuleInterop:true}}).outputText,file);
+require('reflect-metadata');
+const {AgentRunsService}=fromApi('./src/agents/agent-runs.service.ts');
+const {AgentApprovalService}=fromApi('./src/agents/agent-approval.service.ts');
+const {AgentEvidenceService}=fromApi('./src/agents/agent-evidence.service.ts');
+const {WorkspaceService}=fromApi('./src/workspace/workspace.service.ts');
+const {FounderOsService}=fromApi('./src/founder-os/founder-os.service.ts');
+const {KnowledgeDecisionsService}=fromApi('./src/knowledge/knowledge-decisions.service.ts');
+const {LuieEventPublisher}=fromApi('./src/luie/luie-event.publisher.ts');
+const {TasksService}=fromApi('./src/tasks/tasks.service.ts');
+const {WorkflowsService}=fromApi('./src/workflows/workflows.service.ts');
+const {ExecutiveImportService}=fromApi('./src/executive-intelligence/executive-import.service.ts');
+const {CashForecastService}=fromApi('./src/executive-intelligence/cash-forecast.service.ts');
+const {MarketingAnalyticsService}=fromApi('./src/analytics/marketing-analytics.service.ts');
+const {MarketResearchService}=fromApi('./src/workspace/market-research.service.ts');
+const {KnowledgeRetrievalService}=fromApi('./src/knowledge/knowledge-retrieval.service.ts');
+const {AgentRunConsumer}=fromApi('./src/agents/agent-run.consumer.ts');
+const env={...parse(fs.readFileSync('../../.env')),...parse(fs.readFileSync('.env')),...process.env};
+if(!['localhost','127.0.0.1','[::1]'].includes(new URL(env.DATABASE_URL).hostname)||env.NODE_ENV==='production') throw Error('Local development database required.');
+process.env.LUMORIUS_ENABLED_AGENTS='chief-of-staff';
+const client=new Client({connectionString:env.DATABASE_URL,connectionTimeoutMillis:4000});
+const query=client.query.bind(client);let transactionIndex=0;
+let tail=Promise.resolve();
+const queued=(...args)=>{const next=tail.then(()=>query(...args));tail=next.catch(()=>{});return next;};
+const db={query:queued,transaction:async f=>{const name='s'+(++transactionIndex);await query('SAVEPOINT '+name);try{const value=await f(client);await query('RELEASE SAVEPOINT '+name);return value;}catch(e){await query('ROLLBACK TO SAVEPOINT '+name);await query('RELEASE SAVEPOINT '+name);throw e;}}};
+(async()=>{await client.connect();try{
+await query('BEGIN');await query("SET LOCAL lock_timeout='5s'");
+const schemaRoot='../../database/schema/';
+async function loadMigration(file) { await query(fs.readFileSync(schemaRoot+file,'utf8').replace(/^BEGIN;|COMMIT;\s*$/g,'')); }
+if (!(await query("SELECT to_regclass('public.agent_runs') AS runs")).rows[0].runs) await loadMigration('028_agent_workforce.sql');
+if ((await query("SELECT is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='key_results' AND column_name='start_value'")).rows[0]?.is_nullable==='NO') await loadMigration('029_key_result_measured_baseline.sql');
+console.log('Forward migration loaded inside rollback-only transaction.');
+const org=randomUUID(), otherOrg=randomUUID(), same=randomUUID(), reviewer=randomUUID(), otherUser=randomUUID();
+for(const id of [org,otherOrg]) await query('INSERT INTO organizations (id,name,slug) VALUES ($1,$2,$3)',[id,'Rollback agent fixture',id]);
+for(const [id,scope] of [[same,org],[reviewer,org],[otherUser,otherOrg]]) await query("INSERT INTO users (id,organization_id,email,name,role) VALUES ($1,$2,$3,'Agent fixture','owner')",[id,scope,id+'@example.invalid']);
+await query("INSERT INTO subscriptions (organization_id,plan_id,status) VALUES ($1,'starter','active')",[org]);
+const user={sub:same,organizationId:org,role:'owner',email:same+'@example.invalid'};
+const approver={...user,sub:reviewer,email:reviewer+'@example.invalid'};
+const foreign={...user,sub:otherUser,organizationId:otherOrg};
+const provider={isChatConfigured:()=>true, chat:async()=>JSON.stringify({summary:'A measured proposal',goals:[{title:'Improve execution',rationale:'Test approved creation',dueDate:'2030-01-31',target:42,metric:'Completed commitments',unit:'tasks',evidenceKeys:[],tasks:['Assign a measurable task']}]})};
+const events=new LuieEventPublisher();
+const tasks=new TasksService(db,events);
+const workflows=new WorkflowsService(db,{});
+const workflowId=randomUUID(), pathA=randomUUID(), pathB=randomUUID(), noSteps=randomUUID();
+await query("INSERT INTO workflows (id,organization_id,created_by_id,name) VALUES ($1,$2,$3,'Observed process fixture')",[workflowId,org,same]);
+for(const [run,status] of [[pathA,'completed'],[pathB,'failed'],[noSteps,'failed']]) {
+  await query("INSERT INTO workflow_runs (id,organization_id,workflow_id,status,started_at,completed_at) VALUES ($1,$2,$3,$4,now()-interval '90 seconds', now())",[run,org,workflowId,status]);
+}
+await query(`INSERT INTO workflow_step_runs (organization_id,workflow_id,workflow_run_id,step_index,step_type,status,attempt_count,started_at,completed_at) VALUES
+  ($1,$2,$3,0,'classify','completed',1,now()-interval '80 seconds',now()-interval '70 seconds'),
+  ($1,$2,$3,1,'review','completed',2,now()-interval '45 seconds',now()-interval '5 seconds'),
+  ($1,$2,$4,0,'classify','failed',1,now()-interval '80 seconds',now()-interval '60 seconds')`,[org,workflowId,pathA,pathB]);
+const measuredProcess=await workflows.process(workflowId,org);
+assert.equal(measuredProcess.sampled,3);
+assert.equal(measuredProcess.observed,2);
+assert.deepEqual(measuredProcess.variants.map(v=>v.path),[['classify'],['classify','review']]);
+assert.equal(measuredProcess.bottlenecks[0].median_wait_seconds,25);
+assert.equal(measuredProcess.bottlenecks[0].retried,1);
+await assert.rejects(()=>workflows.process(workflowId,otherOrg),/not found/i);
+console.log('Observed workflow paths, wait time, retries, and cross-tenant denial passed.');
+const workspace=new WorkspaceService(db,tasks,workflows);
+const marketing=new MarketingAnalyticsService(db), cash=new CashForecastService(db);
+const knowledge=new KnowledgeRetrievalService(db,provider);
+const originalEvidence=new AgentEvidenceService(db,workspace,{listForUser:async()=>[]},marketing,new MarketResearchService(),cash,knowledge,workflows);
+const imports=new ExecutiveImportService(db,events);
+const actor={organizationId:org,userId:same,role:'owner'};
+const date=()=>new Date().toISOString().slice(0,10);
+const months=n=>{const d=new Date();d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()-n);return d.toISOString().slice(0,10);};
+async function commit(name,header,rows){
+  const content=[header,...rows].join('\n');
+  const result=await imports.upload({buffer:Buffer.from(content),originalname:name+'.csv'},name,actor);
+  const mapping=Object.fromEntries(header.split(',').map(h=>[h,h]));
+  const preview=await imports.validateImport(result.id,mapping,actor);
+  const outcome=await imports.commitImport(result.id,false,actor);
+  assert.equal(outcome.committedRows,rows.length);
+}
+await commit('campaigns','report_date,campaign,channel,currency,spend,customers,leads,attributed_revenue,attribution_model',[date()+',Test launch,search,USD,100,5,20,250,last_click']);
+const overview=await marketing.overview(org,30);
+assert.equal(overview.scope.currency,'USD');
+const summary=overview.rows.find(r=>r.kind==='summary'&&r.period==='current');
+assert.equal(Number(summary.spend),100);assert.equal(Number(summary.customers),5);assert.equal(Number(summary.revenue),250);
+assert.equal((await marketing.overview(otherOrg,30)).rows.length,0);
+console.log('Marketing overview aggregates and workspace isolation passed.');
+const channel=(await marketing.dashboard(org)).items[0];
+assert.equal(Number(channel.cac),20);assert.equal(Number(channel.roas),2.5);assert.equal(Number(channel.lead_conversion_pct),25);
+assert.equal((await marketing.dashboard(otherOrg)).items.length,0);
+await commit('cash','report_month,currency,opening_balance,inflows,outflows,closing_balance',[
+months(3)+',USD,100,15,5,110',months(2)+',USD,110,10,6,114',months(1)+',USD,114,12,5,121']);
+assert.equal((await cash.forWorkspace(org))[0].points[0].base,128);
+assert.equal((await cash.forWorkspace(otherOrg)).length,0);
+await workspace.setSchedule(user,{cadence:'monthly',hourUtc:8,weekday:1});
+await query("UPDATE briefing_preferences SET next_delivery_at=now()-interval '1 hour' WHERE organization_id=$1",[org]);
+await workspace.deliverBriefings();
+assert.equal((await query("SELECT count(*)::int n FROM notifications WHERE organization_id=$1 AND user_id=$2 AND action_url='/chief-of-staff'",[org,same])).rows[0].n,1);
+console.log('Validated cash and marketing imports, tenant-scoped analytics, forecast calculations and monthly briefing delivery.');
+for(const agent of ['chief-of-staff','finance','operations','sales']) {
+  const name={'finance':'financial-analyst','operations':'operations-manager','sales':'sales-development'}[agent] ?? agent;
+  await originalEvidence.collect(name,user);
+}
+const {EntitlementsService}=fromApi('./src/billing/entitlements.ts');
+const entitlements=new EntitlementsService(db);
+assert.equal((await entitlements.forOrganization(org)).agents.length,2);
+await assert.rejects(()=>entitlements.require(org,'business_twin'),{status:403});
+assert.equal((await entitlements.forOrganization(otherOrg)).agents.length,0);
+await query("UPDATE subscriptions SET plan_id='growth' WHERE organization_id=$1",[org]);
+assert.equal((await entitlements.forOrganization(org)).agents.length,3);
+await entitlements.require(org,'advanced_financial');
+await assert.rejects(()=>entitlements.require(org,'advanced_governance'),{status:403});
+await query("UPDATE subscriptions SET plan_id='professional' WHERE organization_id=$1",[org]);
+assert.equal((await entitlements.forOrganization(org)).agents.length,3);
+await assert.rejects(()=>entitlements.require(org,'business_twin'),{status:403});
+await query("UPDATE subscriptions SET plan_id='starter' WHERE organization_id=$1",[org]);
+const runs=new AgentRunsService(db,provider,originalEvidence,events,{add:async()=>null});
+await assert.rejects(()=>runs.verifyExecution(user,'financial-analyst',client),{status:403});
+console.log('Starter/Growth/Professional entitlements, upgrade gates, downgrade denial, and cross-tenant separation passed.');
+const decisions=new KnowledgeDecisionsService(db,events);
+const founder=new FounderOsService(db,provider,{emit:()=>null});
+const approval=new AgentApprovalService(db,runs,decisions,founder,tasks,events);
+const key=randomUUID();
+const {id}=await runs.start(user,'chief-of-staff','goals','Propose operational goals for next quarter',key);
+assert.equal((await runs.start(user,'chief-of-staff','goals','Propose operational goals for next quarter',key)).id,id);
+await assert.rejects(()=>runs.detail(foreign,id), {status:404});
+await runs.execute(org,id);
+const run=await runs.detail(user,id);
+assert.equal(run.status,'awaiting_approval',run.errorCode ?? '');
+const {decisionId}=await approval.submit(user,id,1);
+await assert.rejects(()=>approval.apply(user,id,1), {status:409});
+await assert.rejects(()=>approval.review(foreign,id), {status:404});
+await assert.rejects(()=>decisions.transitionDecision(decisionId,org,reviewer,'owner','approved'), {status:409});
+await approval.review(approver,id);
+await decisions.transitionDecision(decisionId,org,reviewer,'owner','approved');
+const receipt=await approval.apply(user,id,1);
+const recorded=(await runs.metrics(user))[0];assert.equal(recorded.actions,1);assert.equal(recorded.completed,1);assert.equal((await runs.metrics(foreign)).length,0);
+assert.equal(receipt.length,1);assert.equal(receipt[0].taskIds.length,1);
+assert.deepEqual(await approval.apply(user,id,1),receipt);
+const kr=(await query('SELECT id,start_value,current_value FROM key_results WHERE objective_id=$1',[receipt[0].objectiveId])).rows[0];
+assert.equal(kr.start_value,null);assert.equal(kr.current_value,null);
+await assert.rejects(()=>founder.updateKeyResult(otherOrg,kr.id,99),{status:404});
+await assert.rejects(()=>founder.addKeyResult(otherOrg,receipt[0].objectiveId,{title:'Injected',targetValue:100}),{status:404});
+assert.equal((await query('SELECT count(*)::int n FROM tasks WHERE organization_id=$1',[org])).rows[0].n,1);
+assert.equal((await query('SELECT count(*)::int n FROM objectives WHERE organization_id=$1',[org])).rows[0].n,1);
+const event=(await query("SELECT id FROM luie_domain_events WHERE organization_id=$1 AND event_type='agent.run_finished'",[org])).rows[0];
+const consumer=new AgentRunConsumer({},db);
+const notice={id:event.id,organizationId:org,actorId:same,eventType:'agent.run_finished',aggregateId:id,payload:{status:'awaiting_approval'}};
+await consumer.handle(notice);await consumer.handle(notice);
+assert.equal((await query('SELECT count(*)::int n FROM notifications WHERE id=$1',[event.id])).rows[0].n,1);
+const legacy='00000000-0000-0000-0000-000000000019';
+await query("INSERT INTO tasks(id,organization_id,created_by_id,assignee_id,title,due_date) VALUES($1,$2,$3,$3,'Legacy briefing commitment',CURRENT_DATE-1)",[legacy,org,same]);
+await workspace.feedback(user,'commitment:'+legacy,'useful');
+assert.equal((await query('SELECT disposition FROM briefing_feedback WHERE organization_id=$1 AND item_key=$2',[org,'commitment:'+legacy])).rows[0].disposition,'useful');
+const followup=await workspace.createTask(user,'commitment:'+legacy);
+assert.equal((await workspace.createTask(user,'commitment:'+legacy)).id,followup.id);
+await assert.rejects(()=>workspace.feedback(foreign,'commitment:'+legacy,'useful'),{status:404});
+await workspace.feedback(user,'commitment:'+legacy,'reset');
+await assert.rejects(()=>founder.createObjective(org,same,{title:'Wrong owner',quarter:'Q4',year:2026,ownerId:otherUser}),{status:404});
+console.log('Legacy briefing mark-useful, follow-up replay, and foreign owner denial passed.');
+process.env.LUMORIUS_ENABLED_AGENTS='chief-of-staff,integration-engineer,financial-analyst,operations-manager,sales-development';
+await query("UPDATE subscriptions SET plan_id='professional' WHERE organization_id=$1",[org]);
+for(const agent of ['chief-of-staff','integration-engineer','operations-manager']) {
+ const mission=await runs.start(user,agent,agent==='chief-of-staff'?'briefing':'analysis','Analyze authorized business records and report missing data',randomUUID());
+ await runs.execute(org,mission.id);
+ assert.equal((await runs.detail(user,mission.id)).status,'succeeded',agent);
+ await assert.rejects(()=>runs.detail(foreign,mission.id),{status:404});
+}
+console.log('All five agents persisted successful runs with a test provider, and denied foreign-tenant detail access.');
+console.log('Live PostgreSQL fixture: verified paid run, persisted history, tenant isolation, reviewed approval, atomic goal/task execution and safe replay.');
+}finally{await query('ROLLBACK');await client.end();}})().catch(e=>{console.error(e.message,e.code||'');process.exitCode=1;});

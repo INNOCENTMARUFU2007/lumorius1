@@ -91,7 +91,7 @@ export class BillingService {
        FROM subscriptions s
        JOIN billing_plans bp ON s.plan_id = bp.id
        WHERE s.organization_id = $1
-       ORDER BY s.created_at DESC
+       ORDER BY (s.status IN ('active', 'trialing', 'past_due')) DESC, s.created_at DESC
        LIMIT 1`,
       [organizationId],
     );

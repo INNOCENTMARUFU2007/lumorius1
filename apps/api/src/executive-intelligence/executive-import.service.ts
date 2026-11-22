@@ -13,7 +13,7 @@ import { DatabaseService } from '../database/database.service';
 import type { PoolClient } from 'pg';
 import { LuieEventPublisher } from '../luie/luie-event.publisher';
 
-export type ExecutiveDatasetType = 'transactions' | 'contracts' | 'pipeline';
+export type ExecutiveDatasetType = 'transactions' | 'contracts' | 'pipeline' | 'campaigns' | 'cash';
 
 export interface ExecutiveImportActor {
   organizationId: string;
@@ -92,6 +92,11 @@ const DATASET_FIELDS: Record<ExecutiveDatasetType, { required: string[]; optiona
     required: ['external_contract_id', 'customer_key', 'status', 'recurring_amount', 'currency', 'billing_interval', 'start_date'],
     optional: ['end_date', 'cancelled_at'],
   },
+  cash: { required: ['report_month','currency','opening_balance','inflows','outflows','closing_balance'], optional: [] },
+  campaigns: {
+    required: ['report_date','campaign','channel','currency','spend'],
+    optional: ['segment','impressions','clicks','leads','customers','attributed_revenue','attribution_model','budget'],
+  },
   pipeline: {
     required: ['external_opportunity_id', 'title', 'stage', 'status', 'amount', 'currency', 'probability'],
     optional: ['customer_key', 'expected_close_date', 'closed_at'],
@@ -102,6 +107,8 @@ const TRANSACTION_TYPES = [
   'revenue', 'refund', 'acquisition_cost', 'cost_of_goods_sold',
   'operating_expense', 'other_income', 'tax', 'capital_expenditure',
 ] as const;
+/** Mapping value prefix meaning "use this fixed value for every row". */
+export const FIXED_VALUE_PREFIX = '__fixed__:';
 const CONTRACT_STATUSES = ['trialing', 'active', 'paused', 'cancelled', 'expired'] as const;
 const BILLING_INTERVALS = ['weekly', 'monthly', 'quarterly', 'annual'] as const;
 const PIPELINE_STATUSES = ['open', 'won', 'lost'] as const;
@@ -446,7 +453,7 @@ export class ExecutiveImportService {
              customer_key, external_reference, description, fingerprint,
              metadata, created_by_id)
           SELECT $1, $2, r.id,
-                 r.normalized_data->>'transaction_date',
+                 (r.normalized_data->>'transaction_date')::date,
                  r.normalized_data->>'transaction_type',
                  (r.normalized_data->>'amount')::numeric,
                  r.normalized_data->>'currency',
@@ -509,6 +516,14 @@ export class ExecutiveImportService {
         )
         SELECT COUNT(*)::int AS committed_rows FROM marked`;
         commitValues = [actor.organizationId, importId, actor.userId];
+      } else if (item.dataset_type === 'campaigns' || item.dataset_type === 'cash') {
+        const key = item.dataset_type === 'cash' ? 'cash_key' : 'campaign_key';
+        commitSql = `WITH marked AS (
+          UPDATE executive_import_rows SET validation_status='committed', target_record_id=id, updated_at=now()
+          WHERE organization_id=$1 AND import_id=$2 AND validation_status='valid' AND fingerprint IS NOT NULL AND normalized_data ? $3::text
+          RETURNING id)
+          SELECT count(*)::int AS committed_rows FROM marked`;
+        commitValues = [actor.organizationId,importId,key];
       } else {
         commitSql = `WITH inserted AS (
           INSERT INTO executive_pipeline_opportunities
@@ -576,9 +591,9 @@ export class ExecutiveImportService {
       );
       await this.luiePublisher.append(client, {
         organizationId: actor.organizationId,
-        eventKey: `financial.import_committed:${importId}`,
-        eventType: 'financial.import_committed',
-        aggregateType: 'financial_import',
+        eventKey: `${item.dataset_type === 'campaigns' ? 'marketing' : 'financial'}.import_committed:${importId}`,
+        eventType: item.dataset_type === 'campaigns' ? 'marketing.import_committed' : 'financial.import_committed',
+        aggregateType: item.dataset_type === 'campaigns' ? 'campaign_import' : 'financial_import',
         aggregateId: importId,
         actorId: actor.userId,
         payload: {
@@ -1021,8 +1036,8 @@ export class ExecutiveImportService {
   }
 
   private parseDatasetType(value: unknown): ExecutiveDatasetType {
-    if (value === 'transactions' || value === 'contracts' || value === 'pipeline') return value;
-    throw new BadRequestException('datasetType must be transactions, contracts or pipeline.');
+    if (value === 'transactions' || value === 'contracts' || value === 'pipeline' || value === 'campaigns' || value === 'cash') return value;
+    throw new BadRequestException('datasetType must be transactions, contracts or pipeline, campaigns, or cash.');
   }
 
   private parseWorkbook(buffer: Buffer): ParsedImportFile {
@@ -1047,29 +1062,63 @@ export class ExecutiveImportService {
     if (matrix.length < 2) throw new BadRequestException('The file must contain a header row and at least one data row.');
     if (matrix.length - 1 > this.maxRows) throw new BadRequestException(`Imports are limited to ${this.maxRows} data rows.`);
 
-    const headerCells = matrix[0] ?? [];
-    if (headerCells.length < 1 || headerCells.length > this.maxColumns) {
-      throw new BadRequestException(`The file must contain between 1 and ${this.maxColumns} columns.`);
+    // Spreadsheets often carry blank columns (a spacer column, a trailing comma in a CSV).
+    // Blank columns with no data are dropped; a blank header over real data is named after
+    // its column letter so it can still be mapped; repeated headers are numbered.
+    const isBlank = (value: unknown) => value === null || value === undefined || String(value).trim() === '';
+    const width = matrix.reduce((max, row) => Math.max(max, (row ?? []).length), 0);
+    const columnLetter = (index: number) => {
+      let name = '';
+      for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) name = String.fromCharCode(65 + ((n - 1) % 26)) + name;
+      return name;
+    };
+    // Forms and reports (expense reports, invoices) put a title block above the table.
+    // Use the row that looks most like column headings: the most text cells, with data
+    // underneath. Row 1 stays the header unless a later row has clearly more headings.
+    const headingCount = (row: unknown[] | undefined) =>
+      (row ?? []).filter((value) => typeof value === 'string' && value.trim() !== '' && !/^-?[\d.,]+$/.test(value.trim())).length;
+    const hasDataBelow = (rowIndex: number) =>
+      matrix.slice(rowIndex + 1, rowIndex + 4).some((row) => (row ?? []).filter((value) => !isBlank(value)).length >= 2);
+    let headerIndex = 0;
+    const firstRowScore = headingCount(matrix[0]);
+    let bestScore = firstRowScore;
+    for (let rowIndex = 1; rowIndex < Math.min(matrix.length - 1, 30); rowIndex += 1) {
+      const score = headingCount(matrix[rowIndex]);
+      if (score >= 3 && score >= firstRowScore + 2 && score > bestScore && hasDataBelow(rowIndex)) {
+        headerIndex = rowIndex;
+        bestScore = score;
+      }
     }
-    const headers = headerCells.map((value) => String(value ?? '').trim());
-    if (headers.some((header) => !header)) throw new BadRequestException('Every source column must have a non-empty header.');
-    const seenHeaders = new Set<string>();
-    for (const header of headers) {
-      const normalized = header.toLocaleLowerCase();
-      if (seenHeaders.has(normalized)) throw new BadRequestException(`Duplicate source column header: ${header}`);
-      seenHeaders.add(normalized);
+    const dataRows = matrix.slice(headerIndex + 1);
+
+    const columns: Array<{ index: number; header: string }> = [];
+    const seenHeaders = new Map<string, number>();
+    for (let index = 0; index < width; index += 1) {
+      const rawHeader = String(matrix[headerIndex]?.[index] ?? '').trim();
+      const hasData = dataRows.some((row) => !isBlank(row?.[index]));
+      if (!rawHeader && !hasData) continue;
+      let header = rawHeader || `Column ${columnLetter(index)}`;
+      const key = header.toLocaleLowerCase();
+      const seen = seenHeaders.get(key) ?? 0;
+      seenHeaders.set(key, seen + 1);
+      if (seen > 0) header = `${header} (${seen + 1})`;
+      columns.push({ index, header });
     }
+    if (columns.length < 1 || columns.length > this.maxColumns) {
+      throw new BadRequestException(`The file must contain between 1 and ${this.maxColumns} columns with data.`);
+    }
+    const headers = columns.map((column) => column.header);
 
     const rows: ParsedImportFile['rows'] = [];
-    matrix.slice(1).forEach((values, index) => {
+    dataRows.forEach((values, index) => {
       const cells = values ?? [];
-      if (!cells.some((value) => value !== null && value !== undefined && String(value).trim() !== '')) return;
+      if (!cells.some((value) => !isBlank(value))) return;
       const rawData: Record<string, unknown> = {};
-      headers.forEach((header, columnIndex) => {
+      columns.forEach(({ index: columnIndex, header }) => {
         const value = cells[columnIndex];
         rawData[header] = value instanceof Date ? value.toISOString().slice(0, 10) : (value ?? null);
       });
-      rows.push({ rowNumber: index + 2, rawData });
+      rows.push({ rowNumber: headerIndex + index + 2, rawData });
     });
     if (rows.length < 1) throw new BadRequestException('The file contains no non-empty data rows.');
     if (rows.length > this.maxRows) throw new BadRequestException(`Imports are limited to ${this.maxRows} data rows.`);
@@ -1090,25 +1139,29 @@ export class ExecutiveImportService {
       if (!allowed.includes(key)) throw new BadRequestException(`Unsupported mapping field '${key}' for ${datasetType}.`);
     }
     const mapping: Record<string, string> = {};
+    // A mapping is either a source column header or a fixed value for every row
+    // ("__fixed__:USD"), used when the file has no column for that field.
+    const isValidSource = (header: unknown): header is string =>
+      typeof header === 'string' &&
+      (headers.includes(header) ||
+        (header.startsWith(FIXED_VALUE_PREFIX) && header.length > FIXED_VALUE_PREFIX.length && header.length <= FIXED_VALUE_PREFIX.length + 100));
     for (const field of DATASET_FIELDS[datasetType].required) {
       const header = input[field];
-      if (typeof header !== 'string' || !headers.includes(header)) {
-        throw new BadRequestException(`A valid source column must be mapped to required field '${field}'.`);
+      if (!isValidSource(header)) {
+        throw new BadRequestException(`Choose a source column or enter a fixed value for required field '${field}'.`);
       }
       mapping[field] = header;
     }
     for (const field of DATASET_FIELDS[datasetType].optional) {
       const header = input[field];
       if (header === undefined || header === null || header === '') continue;
-      if (typeof header !== 'string' || !headers.includes(header)) {
-        throw new BadRequestException(`Mapping for '${field}' must reference an existing source column.`);
+      if (!isValidSource(header)) {
+        throw new BadRequestException(`Mapping for '${field}' must reference an existing source column or a fixed value.`);
       }
       mapping[field] = header;
     }
-    const mappedHeaders = Object.values(mapping);
-    if (new Set(mappedHeaders).size !== mappedHeaders.length) {
-      throw new BadRequestException('Each source column can be mapped to only one destination field.');
-    }
+    // One source column may feed several fields (e.g. a "Customer" column used for both the
+    // customer key and the description); the review screen warns when that happens.
     return mapping;
   }
 
@@ -1119,7 +1172,11 @@ export class ExecutiveImportService {
     sourceRowId: string,
   ): NormalizedRow {
     const errors: string[] = [];
-    const read = (field: string): unknown => mapping[field] ? raw[mapping[field]] : null;
+    const read = (field: string): unknown => {
+      const source = mapping[field];
+      if (!source) return null;
+      return source.startsWith(FIXED_VALUE_PREFIX) ? source.slice(FIXED_VALUE_PREFIX.length) : raw[source];
+    };
     const text = (field: string, max: number, required = false): string | null => {
       const value = read(field);
       if (value === null || value === undefined || String(value).trim() === '') {
@@ -1233,6 +1290,52 @@ export class ExecutiveImportService {
         };
         duplicateKey = externalContractId;
       }
+    } else if (datasetType === 'cash') {
+      const month = date('report_month', true);
+      if (month && (!month.endsWith('-01') || month.slice(0,7) >= new Date().toISOString().slice(0,7))) errors.push('report_month must be the first day of a completed month.');
+      const currencyValue=currency();
+      const fixed=(key:string,signed:boolean) => {
+        const value=String(read(key) ?? '').trim();
+        if (!(signed ? /^-?\d{1,10}(?:\.\d{1,4})?$/ : /^\d{1,10}(?:\.\d{1,4})?$/).test(value)) { errors.push(key+' is an invalid amount.');return null; }
+        return Math.round(Number(value)*10000);
+      };
+      const opening=fixed('opening_balance',true),closing=fixed('closing_balance',true),inflows=fixed('inflows',false),outflows=fixed('outflows',false);
+      if (opening!==null && closing!==null && inflows!==null && outflows!==null && month && currencyValue) {
+        if (opening+inflows-outflows!==closing) errors.push('Opening balance plus inflows less outflows must equal the closing balance.');
+        duplicateKey=this.hash({month,currency:currencyValue});
+        normalized={cash_key:duplicateKey,report_month:month,currency:currencyValue,opening_balance:opening/10000,inflows:inflows/10000,outflows:outflows/10000,closing_balance:closing/10000};
+      }
+    } else if (datasetType === 'campaigns') {
+      const reportDate = date('report_date',true);
+      if (reportDate && reportDate > new Date().toISOString().slice(0,10)) errors.push('report_date cannot be in the future.');
+      const campaign = text('campaign',160,true);
+      const channel = text('channel',80,true);
+      const segment = text('segment',80);
+      const currencyValue = currency();
+      const amount = (key: string, required = false, integer = false) => {
+        const raw=read(key);
+        if (raw === null || raw === undefined || String(raw).trim()==='') {
+          if (required) errors.push(key+' is required.');
+          return null;
+        }
+        const value=String(raw).trim();
+        if (!(integer ? /^\d{1,10}$/ : /^\d{1,10}(?:\.\d{1,6})?$/).test(value)) {
+          errors.push(key+' must be a valid nonnegative '+(integer ? 'whole number.' : 'amount.')); return null;
+        }
+        return value;
+      };
+      const spend=amount('spend',true), revenue=amount('attributed_revenue'), budget=amount('budget');
+      const impressions=amount('impressions',false,true), clicks=amount('clicks',false,true);
+      const leads=amount('leads',false,true), customers=amount('customers',false,true);
+      if (clicks!==null && impressions!==null && Number(clicks)>Number(impressions)) errors.push('clicks cannot exceed impressions.');
+      if (customers!==null && leads!==null && Number(customers)>Number(leads)) errors.push('customers cannot exceed leads.');
+      const attributionModel=text('attribution_model',80);
+      if (revenue!==null && !attributionModel) errors.push('attribution_model is required when attributed_revenue is supplied.');
+      if (reportDate && campaign && channel && currencyValue && spend!==null) {
+        duplicateKey=this.hash({date:reportDate,campaign:campaign.toLowerCase(),channel:channel.toLowerCase(),segment:segment?.toLowerCase() ?? '',currency:currencyValue});
+        normalized={campaign_key:duplicateKey,report_date:reportDate,campaign,channel:channel.toLowerCase(),segment,currency:currencyValue,
+          spend,impressions,clicks,leads,customers,attributed_revenue:revenue,attribution_model:attributionModel?.toLowerCase(),budget};
+      }
     } else {
       const externalOpportunityId = text('external_opportunity_id', 200, true);
       const customerKey = text('customer_key', 200);
@@ -1269,7 +1372,7 @@ export class ExecutiveImportService {
 
     if (errors.length > 0) return { normalized: null, fingerprint: null, duplicateKey: null, errors };
     if (!normalized) return { normalized: null, fingerprint: null, duplicateKey: null, errors: ['Row could not be normalized.'] };
-    const fingerprint = datasetType === 'transactions'
+    const fingerprint = datasetType === 'cash' ? this.hash({cash_key:duplicateKey}) : datasetType === 'campaigns' ? this.hash({campaign_key:duplicateKey}) : datasetType === 'transactions'
       ? (duplicateKey ?? this.hash({ ...normalized, source_row_id: sourceRowId }))
       : this.hash(normalized);
     return { normalized, fingerprint, duplicateKey, errors };
@@ -1298,6 +1401,12 @@ export class ExecutiveImportService {
          WHERE organization_id = $1 AND external_contract_id = ANY($2::text[])`,
         [organizationId, uniqueKeys],
       );
+    } else if (datasetType === 'campaigns' || datasetType === 'cash') {
+      const key=datasetType==='cash'?'cash_key':'campaign_key';
+      result = await client.query<{ duplicate_key: string }>(
+        `SELECT normalized_data->>$3::text AS duplicate_key FROM executive_import_rows
+         WHERE organization_id=$1 AND validation_status='committed' AND normalized_data ? $3::text
+           AND fingerprint=ANY($2::char(64)[])`, [organizationId,uniqueKeys.map(id=>this.hash({[key]:id})),key]);
     } else {
       result = await client.query<{ duplicate_key: string }>(
         `SELECT external_opportunity_id AS duplicate_key

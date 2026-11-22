@@ -1,9 +1,10 @@
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { v4 as uuidv4 } from 'uuid';
+import type { PoolClient } from 'pg';
 
-import { DatabaseService } from '../database/database.service';
+import { DatabaseService, SqlRunner } from '../database/database.service';
 import { AiService } from '../ai/ai.service';
 
 type HealthScore = {
@@ -17,7 +18,8 @@ type HealthScore = {
     overdueTaskRate: number | null;
     documentIndexRate: number | null;
     weeklyActiveUsers: number | null;
-    meetings30d: number;
+    openTaskOwnership?: number | null;
+    meetings30d: number | null;
     okrProgress: number | null;
   };
 };
@@ -31,6 +33,15 @@ export class FounderOsService {
     private readonly aiService: AiService,
     private readonly eventEmitter: EventEmitter2
   ) {}
+
+  private async readSection<T>(label: string, result: Promise<T>): Promise<T | null> {
+    try {
+      return await result;
+    } catch (error) {
+      this.logger.warn(`Founder OS ${label} could not be loaded.`, error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  }
 
   // ── OKRs ────────────────────────────────────────────────────
 
@@ -82,10 +93,11 @@ export class FounderOsService {
       dueDate?: string;
       ownerId?: string;
     },
+    client?: PoolClient,
   ) {
     const id = uuidv4();
-
-    await this.db.query(
+    const runner: SqlRunner = client ?? this.db;
+    const result = await runner.query(
       `INSERT INTO objectives (
          id,
          organization_id,
@@ -96,20 +108,23 @@ export class FounderOsService {
          year,
          due_date
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       SELECT $1, u.organization_id, u.id, $4, $5, $6, $7, $8
+       FROM users u WHERE u.organization_id = $2 AND u.id = $3 AND u.is_active
+       RETURNING *`,
       [
         id,
         organizationId,
         dto.ownerId ?? userId,
-        dto.title,
-        dto.description ?? null,
+        dto.title.trim(),
+        dto.description?.trim() || null,
         dto.quarter,
         dto.year,
         dto.dueDate ?? null,
       ],
     );
 
-    return this.db.findOne('objectives', { id });
+    if (!result.rows[0]) throw new NotFoundException('The selected goal owner is unavailable in this workspace.');
+    return result.rows[0];
   }
 
   async updateObjective(
@@ -169,18 +184,20 @@ export class FounderOsService {
   }
 
   async addKeyResult(
+    organizationId: string,
     objectiveId: string,
     dto: {
       title: string;
       metricType?: string;
       targetValue: number;
-      startValue?: number;
+      startValue?: number | null;
       unit?: string;
     },
+    client?: PoolClient,
   ) {
     const id = uuidv4();
-
-    await this.db.query(
+    const runner: SqlRunner = client ?? this.db;
+    const result = await runner.query(
       `INSERT INTO key_results (
          id,
          objective_id,
@@ -191,36 +208,39 @@ export class FounderOsService {
          current_value,
          unit
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $6, $7)`,
+       SELECT $1, o.id, $3, $4, $5, $6, $6, $7 FROM objectives o
+       WHERE o.id = $2 AND o.organization_id = $8
+       RETURNING *`,
       [
         id,
         objectiveId,
         dto.title,
         dto.metricType ?? 'percentage',
         dto.targetValue,
-        dto.startValue ?? 0,
+        dto.startValue === undefined ? 0 : dto.startValue,
         dto.unit ?? null,
+        organizationId,
       ],
     );
 
-    return this.db.findOne('key_results', { id });
+    if (!result.rows[0]) throw new NotFoundException('Objective not found.');
+    return result.rows[0];
   }
 
   async updateKeyResult(
+    organizationId: string,
     krId: string,
     currentValue: number,
+    baseline?: number,
   ) {
-    await this.db.query(
-      `UPDATE key_results
-       SET current_value = $1,
-           updated_at = NOW()
-       WHERE id = $2`,
-      [currentValue, krId],
+    const result = await this.db.query(
+      `UPDATE key_results k SET current_value = $1, start_value = COALESCE($4::numeric,k.start_value), updated_at = NOW()
+       FROM objectives o WHERE k.id = $2 AND k.objective_id = o.id AND o.organization_id = $3
+       RETURNING k.*`,
+      [currentValue, krId, organizationId, baseline ?? null],
     );
-
-    return this.db.findOne('key_results', {
-      id: krId,
-    });
+    if (!result.rows[0]) throw new NotFoundException('Key result not found.');
+    return result.rows[0];
   }
 
   // ── KPI Snapshots ───────────────────────────────────────────
@@ -332,7 +352,7 @@ export class FounderOsService {
          ) AS series
        FROM kpi_snapshots
        WHERE organization_id = $1
-         AND snapshot_date >= CURRENT_DATE - $2::integer
+         AND snapshot_date BETWEEN CURRENT_DATE - $2::integer AND CURRENT_DATE
        GROUP BY metric_key
        ORDER BY metric_key`,
       [organizationId, safeDays],
@@ -345,7 +365,10 @@ export class FounderOsService {
 
   async computeHealthScore(
     organizationId: string,
+    persist = true,
   ): Promise<HealthScore> {
+    const now = new Date();
+    const quarter = `Q${Math.ceil((now.getMonth() + 1) / 3)}`;
     const [
       taskStats,
       docStats,
@@ -353,7 +376,7 @@ export class FounderOsService {
       memberStats,
       objectiveStats,
     ] = await Promise.all([
-      this.db.query(
+      this.readSection('task health', this.db.query(
         `SELECT
            COUNT(*) AS total,
            COUNT(*) FILTER (
@@ -362,13 +385,15 @@ export class FounderOsService {
            COUNT(*) FILTER (
              WHERE due_date < NOW()
                AND status != 'done'
-           ) AS overdue
+           ) AS overdue,
+           COUNT(*) FILTER (WHERE status != 'done') AS open,
+           COUNT(*) FILTER (WHERE status != 'done' AND assignee_id IS NOT NULL) AS open_assigned
          FROM tasks
          WHERE organization_id = $1`,
         [organizationId],
-      ),
+      )),
 
-      this.db.query(
+      this.readSection('document health', this.db.query(
         `SELECT
            COUNT(*) AS total,
            COUNT(*) FILTER (
@@ -377,55 +402,60 @@ export class FounderOsService {
          FROM documents
          WHERE organization_id = $1`,
         [organizationId],
-      ),
+      )),
 
-      this.db.query(
+      this.readSection('meeting activity', this.db.query(
         `SELECT COUNT(*) AS total_30d
          FROM meetings
          WHERE organization_id = $1
-           AND created_at > NOW() - INTERVAL '30 days'`,
+           AND created_at > NOW() - INTERVAL '30 days'
+           AND created_at <= NOW()`,
         [organizationId],
-      ),
+      )),
 
-      this.db.query(
+      this.readSection('team health', this.db.query(
         `SELECT
            COUNT(*) AS active_users,
            COUNT(*) FILTER (
              WHERE last_login_at > NOW() - INTERVAL '7 days'
+               AND last_login_at <= NOW()
            ) AS wau
          FROM users
          WHERE organization_id = $1
            AND is_active = TRUE`,
         [organizationId],
-      ),
+      )),
 
-      this.db.query(
+      this.readSection('objective health', this.db.query(
         `SELECT
            COUNT(*) AS total,
            AVG(progress) AS avg_progress
          FROM objectives
          WHERE organization_id = $1
-           AND year = $2`,
-        [organizationId, new Date().getFullYear()],
-      ),
+           AND year = $2
+           AND quarter = $3`,
+        [organizationId, now.getFullYear(), quarter],
+      )),
     ]);
 
-    const t = (taskStats.rows[0] ?? {}) as Record<string, unknown>;
-    const d = (docStats.rows[0] ?? {}) as Record<string, unknown>;
-    const m = (meetingStats.rows[0] ?? {}) as Record<string, unknown>;
-    const mb = (memberStats.rows[0] ?? {}) as Record<string, unknown>;
-    const k = (objectiveStats.rows[0] ?? {}) as Record<string, unknown>;
+    const t = taskStats?.rows[0] ?? {};
+    const d = docStats?.rows[0] ?? {};
+    const m = meetingStats?.rows[0] ?? {};
+    const mb = memberStats?.rows[0] ?? {};
+    const k = objectiveStats?.rows[0] ?? {};
 
     const totalTasks = Number(t.total ?? 0);
     const completedTasks = Number(t.completed ?? 0);
     const overdueTasks = Number(t.overdue ?? 0);
+    const openTasks = Number(t.open ?? 0);
+    const openAssigned = Number(t.open_assigned ?? 0);
 
     const totalDocuments = Number(d.total ?? 0);
     const indexedDocuments = Number(d.indexed ?? 0);
 
     const activeUsers = Number(mb.active_users ?? 0);
     const weeklyActiveUsers = Number(mb.wau ?? 0);
-    const totalMeetings30d = Number(m.total_30d ?? 0);
+    const totalMeetings30d = m.total_30d == null ? null : Number(m.total_30d);
     const totalObjectives = Number(k.total ?? 0);
 
     const completionRate: number | null =
@@ -465,17 +495,18 @@ export class FounderOsService {
           )
         : null;
 
+    // Team health = participation (members active this week, 40%)
+    //             + ownership (open tasks with an assignee, 30%)
+    //             + on time (open tasks that are not overdue, 30%).
+    // With no open tasks, only participation can be measured.
+    const ownership = openTasks > 0 ? (openAssigned / openTasks) * 100 : null;
+    const onTime = openTasks > 0 ? Math.max(0, 100 - (overdueTasks / openTasks) * 100) : null;
     const teamScore: number | null =
-      activeUsers > 0 && wau !== null
-        ? Math.min(
-            100,
-            Math.max(
-              0,
-              wau * 0.6 +
-                (Math.min(totalMeetings30d, 20) / 20) * 100 * 0.4,
-            ),
-          )
-        : null;
+      wau === null
+        ? null
+        : ownership === null || onTime === null
+          ? wau
+          : wau * 0.4 + ownership * 0.3 + onTime * 0.3;
 
     const growthInputs = [
       okrProgress,
@@ -499,7 +530,7 @@ export class FounderOsService {
           )
         : null;
 
-    // Revenue data is not integrated; do not invent a financial score.
+    // This dashboard has no verified financial scoring benchmark.
     const financialScore: number | null = null;
 
     const scoreInputs: Array<{
@@ -565,6 +596,8 @@ export class FounderOsService {
             : Math.round(docIndexRate),
         weeklyActiveUsers:
           wau === null ? null : Math.round(wau),
+        openTaskOwnership:
+          ownership === null ? null : Math.round(ownership),
         meetings30d: totalMeetings30d,
         okrProgress:
           okrProgress === null
@@ -572,6 +605,8 @@ export class FounderOsService {
             : Math.round(okrProgress),
       },
     };
+
+    if (!persist || overall === null) return healthScore;
 
     // A failure to persist history must not break the dashboard.
     try {
@@ -640,134 +675,86 @@ export class FounderOsService {
   async getDashboard(
     organizationId: string,
     userId: string,
+    includeInsights = true,
   ) {
-    const currentQ =
-      `Q${Math.ceil((new Date().getMonth() + 1) / 3)}`;
+    const now = new Date();
+    const quarter = `Q${Math.ceil((now.getMonth() + 1) / 3)}`;
+    const year = now.getFullYear();
 
-    const currentYear = new Date().getFullYear();
-
-    const healthScore =
-      await this.computeHealthScore(organizationId);
-
-    // Only send measured numerical values to the AI.
-    const healthNumbers: Record<string, number> = {};
-
-    const scoreEntries: Array<
-      [string, number | null]
-    > = [
-      ['overall', healthScore.overall],
-      ['financial', healthScore.financial],
-      ['growth', healthScore.growth],
-      ['team', healthScore.team],
-      ['product', healthScore.product],
-    ];
-
-    for (const [key, value] of scoreEntries) {
-      if (
-        value !== null &&
-        Number.isFinite(value)
-      ) {
-        healthNumbers[key] = value;
-      }
-    }
-
-    const [
-      okrs,
-      kpis,
-      taskBreakdown,
-      teamVelocity,
-      aiInsights,
-    ] = await Promise.all([
-      this.getOkrs(
-        organizationId,
-        currentQ,
-        currentYear,
-      ),
-
-      this.getAllKpiSnapshots(
-        organizationId,
-        30,
-      ),
-
-      this.db.query(
-        `SELECT
-           status,
-           priority,
-           COUNT(*) AS count
+    const [healthScore, okrs, kpis, taskBreakdown, teamVelocity] = await Promise.all([
+      this.computeHealthScore(organizationId),
+      this.readSection('OKRs', this.getOkrs(organizationId, quarter, year)),
+      this.readSection('KPI snapshots', this.getAllKpiSnapshots(organizationId)),
+      this.readSection('task status', this.db.query(
+        `SELECT status, priority, COUNT(*) AS count
          FROM tasks
          WHERE organization_id = $1
          GROUP BY status, priority`,
         [organizationId],
-      ),
-
-      // Return 12 consecutive calendar weeks, including weeks with
-      // zero completed tasks, so the frontend can draw a continuous
-      // timeline instead of a single-point vertical line.
-      this.db.query(
+      )),
+      this.readSection('team velocity', this.db.query(
         `WITH weeks AS (
            SELECT generate_series(
-             date_trunc('week', NOW()) - INTERVAL '11 weeks',
-             date_trunc('week', NOW()),
+             date_trunc('week', NOW() AT TIME ZONE 'UTC') - INTERVAL '11 weeks',
+             date_trunc('week', NOW() AT TIME ZONE 'UTC'),
              INTERVAL '1 week'
            ) AS week_start
          ),
          weekly_completed AS (
-           SELECT
-             date_trunc('week', t.completed_at) AS week_start,
-             COUNT(*)::int AS completed
-           FROM tasks t
-           WHERE t.organization_id = $1
-             AND t.status = 'done'
-             AND t.completed_at IS NOT NULL
-             AND t.completed_at >=
-                 date_trunc('week', NOW()) - INTERVAL '11 weeks'
-             AND t.completed_at <
-                 date_trunc('week', NOW()) + INTERVAL '1 week'
+           SELECT date_trunc('week', completed_at AT TIME ZONE 'UTC') AS week_start,
+                  COUNT(*)::int AS completed
+           FROM tasks
+           WHERE organization_id = $1
+             AND status = 'done'
+             AND completed_at >= ((SELECT MIN(week_start) FROM weeks) AT TIME ZONE 'UTC')
+             AND completed_at <= NOW()
            GROUP BY 1
          ),
          weekly_created AS (
-           SELECT
-             date_trunc('week', t.created_at) AS week_start,
-             COUNT(*)::int AS total
-           FROM tasks t
-           WHERE t.organization_id = $1
-             AND t.created_at >=
-                 date_trunc('week', NOW()) - INTERVAL '11 weeks'
-             AND t.created_at <
-                 date_trunc('week', NOW()) + INTERVAL '1 week'
+           SELECT date_trunc('week', created_at AT TIME ZONE 'UTC') AS week_start,
+                  COUNT(*)::int AS total
+           FROM tasks
+           WHERE organization_id = $1
+             AND created_at >= ((SELECT MIN(week_start) FROM weeks) AT TIME ZONE 'UTC')
+             AND created_at <= NOW()
            GROUP BY 1
          )
-         SELECT
-           w.week_start AS week,
-           COALESCE(wc.completed, 0)::int AS completed,
-           COALESCE(wcr.total, 0)::int AS total
+         SELECT TO_CHAR(w.week_start, 'YYYY-MM-DD') AS week,
+                COALESCE(wc.completed, 0)::int AS completed,
+                COALESCE(wcr.total, 0)::int AS total
          FROM weeks w
-         LEFT JOIN weekly_completed wc
-           ON wc.week_start = w.week_start
-         LEFT JOIN weekly_created wcr
-           ON wcr.week_start = w.week_start
+         LEFT JOIN weekly_completed wc ON wc.week_start = w.week_start
+         LEFT JOIN weekly_created wcr ON wcr.week_start = w.week_start
          ORDER BY w.week_start ASC`,
         [organizationId],
-      ),
-
-      this.generateAiInsights(
-        organizationId,
-        userId,
-        healthNumbers,
-      ),
+      )),
     ]);
 
-    // Notify members only when genuine AI insight results exist.
-    const generatedInsightExists =
-      Array.isArray(aiInsights)
-        ? aiInsights.length > 0
-        : aiInsights !== null &&
-          typeof aiInsights === 'object' &&
-          Object.keys(aiInsights as Record<string, unknown>).length > 0;
+    return {
+      quarter,
+      year,
+      healthScore,
+      okrs,
+      kpis,
+      taskBreakdown: taskBreakdown?.rows ?? null,
+      teamVelocity: teamVelocity?.rows ?? null,
+      aiInsights: includeInsights
+        ? await this.getHealthInsights(organizationId, userId, healthScore)
+        : null,
+      generatedAt: new Date().toISOString(),
+    };
+  }
 
-    if (generatedInsightExists) {
+  async getHealthInsights(organizationId: string, userId: string, health: HealthScore) {
+    const { overall, financial, growth, team, product } = health;
+    const measured: Record<string, number> = {};
+    for (const [key, score] of Object.entries({ overall, financial, growth, team, product })) {
+      if (score !== null && Number.isFinite(score)) measured[key] = score;
+    }
+
+    const aiInsights = await this.generateAiInsights(organizationId, userId, measured);
+    if (aiInsights?.insights.length) {
       const eventDate = new Date().toISOString().slice(0, 10);
-
       void this.eventEmitter.emitAsync('ai.insight.created', {
         organizationId,
         eventKey: `founder-os-insights:${organizationId}:${eventDate}`,
@@ -778,23 +765,12 @@ export class FounderOsService {
         sendEmail: false,
         data: {
           source: 'founder-os',
-          overallHealthScore: Number(healthScore.overall ?? 0),
+          overallHealthScore: overall,
           generatedDate: eventDate,
         },
       }).catch(() => undefined);
     }
-
-    return {
-      quarter: currentQ,
-      year: currentYear,
-      healthScore,
-      okrs,
-      kpis,
-      taskBreakdown: taskBreakdown.rows,
-      teamVelocity: teamVelocity.rows,
-      aiInsights,
-      generatedAt: new Date().toISOString(),
-    };
+    return aiInsights;
   }
 
   // ── AI Insights ─────────────────────────────────────────────

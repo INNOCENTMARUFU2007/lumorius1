@@ -169,34 +169,34 @@ export default function DecisionPortfolioPanel() {
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
             <div className={numberCardClass}>
-              <p className="text-[11px] text-muted-foreground">Total decisions</p>
+              <p className="text-xs text-muted-foreground">Total decisions</p>
               <p className="mt-2 text-2xl font-semibold tabular-nums">{displayCount(summary.total)}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">Visible portfolio</p>
+              <p className="mt-1 text-xs text-muted-foreground">Visible portfolio</p>
             </div>
             <div className={numberCardClass}>
-              <p className="text-[11px] text-muted-foreground">Active pipeline</p>
+              <p className="text-xs text-muted-foreground">Active pipeline</p>
               <p className="mt-2 text-2xl font-semibold tabular-nums">{displayCount(summary.active)}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">Proposed, approved or implemented</p>
+              <p className="mt-1 text-xs text-muted-foreground">Proposed, approved or implemented</p>
             </div>
             <div className={numberCardClass}>
-              <p className="text-[11px] text-muted-foreground">Implemented</p>
+              <p className="text-xs text-muted-foreground">Implemented</p>
               <p className="mt-2 text-2xl font-semibold tabular-nums">{displayCount(summary.implemented)}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">Awaiting or completed review</p>
+              <p className="mt-1 text-xs text-muted-foreground">Awaiting or completed review</p>
             </div>
             <div className={numberCardClass}>
-              <p className="text-[11px] text-muted-foreground">Reviewed</p>
+              <p className="text-xs text-muted-foreground">Reviewed</p>
               <p className="mt-2 text-2xl font-semibold tabular-nums">{displayCount(summary.reviewed)}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">Outcome assessment recorded</p>
+              <p className="mt-1 text-xs text-muted-foreground">Outcome assessment recorded</p>
             </div>
             <div className={numberCardClass}>
-              <p className="text-[11px] text-muted-foreground">Achieved outcomes</p>
+              <p className="text-xs text-muted-foreground">Achieved outcomes</p>
               <p className="mt-2 text-2xl font-semibold tabular-nums">{displayRate(summary.achievementRate)}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">{displayCount(summary.assessed)} assessments</p>
+              <p className="mt-1 text-xs text-muted-foreground">{displayCount(summary.assessed)} assessments</p>
             </div>
             <div className={numberCardClass}>
-              <p className="text-[11px] text-muted-foreground">Positive outcomes</p>
+              <p className="text-xs text-muted-foreground">Positive outcomes</p>
               <p className="mt-2 text-2xl font-semibold tabular-nums">{displayRate(summary.positiveOutcomeRate)}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">Achieved or partially achieved</p>
+              <p className="mt-1 text-xs text-muted-foreground">Achieved or partially achieved</p>
             </div>
           </div>
 
@@ -206,18 +206,18 @@ export default function DecisionPortfolioPanel() {
                 <Clock3 className="h-4 w-4 text-brand-500" />
                 <h3 className="text-xs font-semibold">Decision velocity</h3>
               </div>
-              <p className="mt-1 text-[10px] text-muted-foreground">Average elapsed time between audited lifecycle transitions</p>
+              <p className="mt-1 text-xs text-muted-foreground">Average elapsed time between audited lifecycle transitions</p>
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="min-w-0">
-                  <p className="text-[10px] leading-4 text-muted-foreground">Proposal → approval</p>
+                  <p className="text-xs leading-4 text-muted-foreground">Proposal → approval</p>
                   <p className="mt-1 break-words text-lg font-semibold tabular-nums">{formatHours(data.velocity.proposalToApprovalHours)}</p>
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[10px] leading-4 text-muted-foreground">Approval → implementation</p>
+                  <p className="text-xs leading-4 text-muted-foreground">Approval → implementation</p>
                   <p className="mt-1 break-words text-lg font-semibold tabular-nums">{formatHours(data.velocity.approvalToImplementationHours)}</p>
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[10px] leading-4 text-muted-foreground">Implementation → review</p>
+                  <p className="text-xs leading-4 text-muted-foreground">Implementation → review</p>
                   <p className="mt-1 break-words text-lg font-semibold tabular-nums">{formatHours(data.velocity.implementationToReviewHours)}</p>
                 </div>
               </div>
@@ -230,27 +230,27 @@ export default function DecisionPortfolioPanel() {
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div>
-                  <p className="text-[10px] text-muted-foreground">Overdue decisions</p>
+                  <p className="text-xs text-muted-foreground">Overdue decisions</p>
                   <p className="mt-1 text-xl font-semibold tabular-nums">{displayCount(bottlenecks.overdueDecisions)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-muted-foreground">Overdue reviews</p>
+                  <p className="text-xs text-muted-foreground">Overdue reviews</p>
                   <p className="mt-1 text-xl font-semibold tabular-nums">{displayCount(bottlenecks.overdueReviews)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-muted-foreground">Unassigned active</p>
+                  <p className="text-xs text-muted-foreground">Unassigned active</p>
                   <p className="mt-1 text-xl font-semibold tabular-nums">{displayCount(bottlenecks.unassignedActive)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-muted-foreground">Missing review dates</p>
+                  <p className="text-xs text-muted-foreground">Missing review dates</p>
                   <p className="mt-1 text-xl font-semibold tabular-nums">{displayCount(bottlenecks.missingReviewDates)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-muted-foreground">Missing expected outcomes</p>
+                  <p className="text-xs text-muted-foreground">Missing expected outcomes</p>
                   <p className="mt-1 text-xl font-semibold tabular-nums">{displayCount(bottlenecks.missingExpectedOutcomes)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-muted-foreground">Pending approval</p>
+                  <p className="text-xs text-muted-foreground">Pending approval</p>
                   <p className="mt-1 text-xl font-semibold tabular-nums">{displayCount(bottlenecks.pendingApproval)}</p>
                 </div>
               </div>
@@ -263,7 +263,7 @@ export default function DecisionPortfolioPanel() {
                 <TrendingUp className="h-4 w-4 text-brand-500" />
                 <h3 className="text-xs font-semibold">Six-month decision throughput</h3>
               </div>
-              <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+              <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-slate-400" />Created</span>
                 <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-sky-500" />Approved</span>
                 <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-violet-500" />Implemented</span>
@@ -275,7 +275,7 @@ export default function DecisionPortfolioPanel() {
                 <div className="mt-3 space-y-3">
                   {trend.map(point => (
                     <div key={point.month} className="grid grid-cols-[52px_minmax(0,1fr)] items-center gap-3">
-                      <span className="text-[10px] text-muted-foreground">{point.label}</span>
+                      <span className="text-xs text-muted-foreground">{point.label}</span>
                       <div className="space-y-1.5">
                         {([
                           ['created', point.created, 'bg-slate-400'],
@@ -317,7 +317,7 @@ export default function DecisionPortfolioPanel() {
                           style={{ width: `${Math.max(0, Math.min(100, Number(item.positiveOutcomeRate ?? 0)))}%` }}
                         />
                       </div>
-                      <p className="text-[10px] text-muted-foreground">{displayCount(item.decisions)} decisions in portfolio</p>
+                      <p className="text-xs text-muted-foreground">{displayCount(item.decisions)} decisions in portfolio</p>
                     </div>
                   ))}
                 </div>
@@ -335,7 +335,7 @@ export default function DecisionPortfolioPanel() {
             ) : (
               <div className="mt-3 overflow-x-auto">
                 <table className="w-full min-w-[560px] text-left text-xs">
-                  <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <thead className="text-xs  text-muted-foreground">
                     <tr>
                       <th className="pb-2 pr-3 font-semibold">Team</th>
                       <th className="pb-2 pr-3 text-right font-semibold">Decisions</th>
@@ -360,7 +360,7 @@ export default function DecisionPortfolioPanel() {
             )}
           </div>
 
-          <p className="text-[10px] leading-4 text-muted-foreground">
+          <p className="text-xs leading-4 text-muted-foreground">
             Portfolio metrics include only decisions visible to your organisation role and team membership. Outcome rates use assessed decisions as the denominator; velocity uses audited lifecycle transition timestamps.
           </p>
         </>

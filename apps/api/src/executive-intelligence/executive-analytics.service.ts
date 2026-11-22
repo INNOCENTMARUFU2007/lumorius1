@@ -51,6 +51,158 @@ export interface ExecutiveDashboardResult {
   sections: ExecutivePdfSection[];
   sources: ExecutivePdfSource[];
   assumptions: string[];
+  /** Months covered by trends and monthlySeries (YYYY-MM-DD, inclusive). */
+  trendWindow: { start: string; end: string };
+  monthlySeries: ExecutiveMonthlySeries[];
+}
+
+export interface KpiScorecardItem {
+  targetId: string;
+  metricKey: string;
+  label: string;
+  currency: string | null;
+  unit: string;
+  direction: 'higher_is_better' | 'lower_is_better';
+  targetPeriod: string;
+  periodStart: string;
+  periodEnd: string;
+  targetValue: number;
+  actualValue: number | null;
+  status: 'actual' | 'estimated' | 'unavailable';
+  progressPct: number | null;
+  targetStatus: 'on_track' | 'behind' | 'insufficient_data' | 'not_started';
+  sampleSize: number;
+  trend: Array<{ label: string; value: number }>;
+  ownerName: string | null;
+  /** The period has not ended; the actual covers the period start to today. */
+  toDate: boolean;
+}
+
+export const TRANSACTION_TYPES = [
+  'revenue', 'refund', 'cost_of_goods_sold', 'operating_expense',
+  'acquisition_cost', 'other_income', 'tax', 'capital_expenditure',
+] as const;
+export type TransactionType = typeof TRANSACTION_TYPES[number];
+
+export type ExecutiveMonthlyPoint = Record<TransactionType, number> & {
+  /** YYYY-MM */
+  month: string;
+  /** Committed transactions dated in this month. */
+  recordCount: number;
+  /** Recurring run-rate at month end (or period end); null when this currency has no eligible contracts in the window. */
+  mrr: number | null;
+};
+
+export interface ExecutiveMonthlySeries {
+  currency: string;
+  /** Transaction types with at least one committed record in the window. */
+  typesPresent: TransactionType[];
+  points: ExecutiveMonthlyPoint[];
+}
+
+type TrendPoint = { label: string; value: number };
+
+const round6 = (value: number) => Number(value.toFixed(6));
+
+/**
+ * Months used for trends: at least the 12 months ending at the period end, the whole
+ * period when it is longer, and never more than 36 (the PDF trend limit).
+ */
+export function monthlyTrendWindow(periodStart: string, periodEnd: string): { start: string; months: string[]; snapshotDates: string[] } {
+  const endMonth = new Date(`${periodEnd.slice(0, 7)}-01T00:00:00Z`);
+  const startMonth = new Date(`${periodStart.slice(0, 7)}-01T00:00:00Z`);
+  const twelveBack = new Date(endMonth);
+  twelveBack.setUTCMonth(twelveBack.getUTCMonth() - 11);
+  const limit = new Date(endMonth);
+  limit.setUTCMonth(limit.getUTCMonth() - 35);
+  let cursor = startMonth < twelveBack ? startMonth : twelveBack;
+  if (cursor < limit) cursor = limit;
+
+  const months: string[] = [];
+  const snapshotDates: string[] = [];
+  for (const date = new Date(cursor); date <= endMonth; date.setUTCMonth(date.getUTCMonth() + 1)) {
+    months.push(date.toISOString().slice(0, 7));
+    const monthEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+    snapshotDates.push(monthEnd < periodEnd ? monthEnd : periodEnd);
+  }
+  return { start: `${months[0]}-01`, months, snapshotDates };
+}
+
+/** One zero-filled point per month and currency from monthly transaction totals and MRR snapshots. */
+export function buildMonthlySeries(
+  months: string[],
+  transactionRows: Array<{ currency: string; month: string; transaction_type: string; total_amount: number | string; record_count: number | string }>,
+  mrrRows: Array<{ snapshot_date: string; currency: string; mrr: number | string }>,
+): ExecutiveMonthlySeries[] {
+  const byCurrency = new Map<string, { types: Set<TransactionType>; points: Map<string, ExecutiveMonthlyPoint>; hasMrr: boolean }>();
+  const entry = (currencyInput: string) => {
+    const currency = String(currencyInput).trim();
+    let found = byCurrency.get(currency);
+    if (!found) {
+      const points = new Map<string, ExecutiveMonthlyPoint>();
+      for (const month of months) {
+        const point = { month, recordCount: 0, mrr: null } as ExecutiveMonthlyPoint;
+        for (const type of TRANSACTION_TYPES) point[type] = 0;
+        points.set(month, point);
+      }
+      found = { types: new Set(), points, hasMrr: false };
+      byCurrency.set(currency, found);
+    }
+    return found;
+  };
+
+  for (const row of transactionRows) {
+    const type = row.transaction_type as TransactionType;
+    if (!TRANSACTION_TYPES.includes(type)) continue;
+    const series = entry(row.currency);
+    const point = series.points.get(row.month);
+    if (!point) continue;
+    point[type] = round6(point[type] + numeric(row.total_amount));
+    point.recordCount += numeric(row.record_count);
+    series.types.add(type);
+  }
+  for (const row of mrrRows) {
+    const series = entry(row.currency);
+    series.hasMrr = true;
+    const point = series.points.get(String(row.snapshot_date).slice(0, 7));
+    if (point) point.mrr = round6(numeric(row.mrr));
+  }
+
+  return Array.from(byCurrency.entries())
+    .filter(([currency]) => currency !== '')
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, series]) => ({
+      currency,
+      typesPresent: TRANSACTION_TYPES.filter((type) => series.types.has(type)),
+      points: Array.from(series.points.values()).map((point) => ({
+        ...point,
+        mrr: series.hasMrr ? (point.mrr ?? 0) : null,
+      })),
+    }));
+}
+
+/**
+ * Monthly trend per metric key for one currency. Derived metrics get a trend only when
+ * the inputs their period value needs are present, mirroring the KPI rules.
+ */
+export function metricTrendsFromSeries(series: ExecutiveMonthlySeries): Record<string, TrendPoint[]> {
+  const has = (type: TransactionType) => series.typesPresent.includes(type);
+  const line = (value: (point: ExecutiveMonthlyPoint) => number) =>
+    series.points.map((point) => ({ label: point.month, value: round6(value(point)) }));
+  const trends: Record<string, TrendPoint[]> = {};
+  for (const type of series.typesPresent) trends[type] = line((point) => point[type]);
+  if (has('revenue')) trends.net_revenue = line((p) => p.revenue - p.refund);
+  if (has('revenue') && has('cost_of_goods_sold')) {
+    trends.gross_profit = line((p) => p.revenue - p.refund - p.cost_of_goods_sold);
+    if (has('operating_expense')) {
+      trends.operating_result = line((p) => p.revenue - p.refund - p.cost_of_goods_sold - p.operating_expense - p.acquisition_cost);
+    }
+  }
+  if (series.points.some((point) => point.mrr !== null)) {
+    trends.mrr = line((p) => p.mrr ?? 0);
+    trends.arr = line((p) => (p.mrr ?? 0) * 12);
+  }
+  return trends;
 }
 
 interface AmountRow {
@@ -60,11 +212,18 @@ interface AmountRow {
   total_amount: number | string;
 }
 
-interface RevenueTrendRow {
+interface MonthlyTransactionRow {
   currency: string;
   month: string;
   transaction_type: string;
   total_amount: number | string;
+  record_count: number | string;
+}
+
+interface MonthlyMrrRow {
+  snapshot_date: string;
+  currency: string;
+  mrr: number | string;
 }
 
 interface ContractSnapshotRow {
@@ -179,6 +338,7 @@ export class ExecutiveAnalyticsService {
     const period = this.parsePeriod(startInput, endInput);
     const todayUtc = new Date().toISOString().slice(0, 10);
     const isHistoricalPeriod = period.end < todayUtc;
+    const trendWindow = monthlyTrendWindow(period.start, period.end);
     return this.db.transaction(async (client) => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
 
@@ -189,7 +349,7 @@ export class ExecutiveAnalyticsService {
       const organizationName = orgResult.rows[0]?.name;
       if (!organizationName) throw new NotFoundException('Organisation not found.');
 
-      const [transactionsResult, trendResult, contractsResult, pipelineResult, taskResult, documentResult,
+      const [transactionsResult, trendResult, monthlyMrrResult, contractsResult, pipelineResult, taskResult, documentResult,
         meetingResult, projectResult, aiResult, aiBreakdownResult, targetsResult, sourcesResult] = await Promise.all([
         client.query<AmountRow>(
           `SELECT currency, transaction_type, COUNT(*)::int AS record_count,
@@ -199,15 +359,41 @@ export class ExecutiveAnalyticsService {
            GROUP BY currency, transaction_type ORDER BY currency, transaction_type`,
           [actor.organizationId, period.start, period.end],
         ),
-        client.query<RevenueTrendRow>(
+        // Monthly totals per type over the trend window (at least 12 months, see monthlyTrendWindow).
+        client.query<MonthlyTransactionRow>(
           `SELECT currency, TO_CHAR(DATE_TRUNC('month', transaction_date), 'YYYY-MM') AS month,
-                  transaction_type, COALESCE(SUM(amount), 0)::numeric AS total_amount
+                  transaction_type, COUNT(*)::int AS record_count,
+                  COALESCE(SUM(amount), 0)::numeric AS total_amount
            FROM executive_financial_transactions
            WHERE organization_id = $1 AND transaction_date BETWEEN $2::date AND $3::date
-             AND transaction_type IN ('revenue', 'refund')
            GROUP BY currency, DATE_TRUNC('month', transaction_date), transaction_type
            ORDER BY currency, DATE_TRUNC('month', transaction_date), transaction_type`,
-          [actor.organizationId, period.start, period.end],
+          [actor.organizationId, trendWindow.start, period.end],
+        ),
+        // Recurring run-rate at each month end in the window, same eligibility rules as the period snapshot.
+        client.query<MonthlyMrrRow>(
+          `WITH snapshot_dates AS (SELECT UNNEST($2::date[]) AS snapshot_date)
+           SELECT d.snapshot_date::text AS snapshot_date, c.currency,
+                  COALESCE(SUM(CASE c.billing_interval
+                    WHEN 'weekly' THEN c.recurring_amount * 52 / 12
+                    WHEN 'monthly' THEN c.recurring_amount
+                    WHEN 'quarterly' THEN c.recurring_amount / 3
+                    WHEN 'annual' THEN c.recurring_amount / 12
+                    ELSE 0 END), 0)::numeric AS mrr
+           FROM snapshot_dates d
+           JOIN executive_customer_contracts c
+             ON c.organization_id = $1
+            AND (
+              c.status = 'active'
+              OR (c.status = 'cancelled' AND c.cancelled_at IS NOT NULL AND c.cancelled_at > d.snapshot_date)
+              OR (c.status = 'expired' AND c.end_date IS NOT NULL AND c.end_date >= d.snapshot_date)
+            )
+            AND c.start_date <= d.snapshot_date
+            AND (c.end_date IS NULL OR c.end_date >= d.snapshot_date)
+            AND (c.cancelled_at IS NULL OR c.cancelled_at > d.snapshot_date)
+           GROUP BY d.snapshot_date, c.currency
+           ORDER BY d.snapshot_date, c.currency`,
+          [actor.organizationId, trendWindow.snapshotDates],
         ),
         client.query<ContractSnapshotRow>(
           `WITH snapshot_dates AS (
@@ -395,9 +581,6 @@ export class ExecutiveAnalyticsService {
         if (row.currency) currencySet.add(String(row.currency).trim());
       }
       currencySet.delete('');
-      if (currencySet.size > 7) {
-        throw new BadRequestException('This report contains more than seven currencies. Split the source data into separate currency-specific imports before generating the report.');
-      }
 
       const byCurrencyType = new Map<string, { count: number; amount: number }>();
       for (const row of transactionRows) {
@@ -405,14 +588,8 @@ export class ExecutiveAnalyticsService {
           count: numeric(row.record_count), amount: numeric(row.total_amount),
         });
       }
-      const revenueTrendByCurrency = new Map<string, Array<{ label: string; value: number }>>();
-      for (const row of trendResult.rows) {
-        if (row.transaction_type !== 'revenue') continue;
-        const currency = String(row.currency).trim();
-        const points = revenueTrendByCurrency.get(currency) ?? [];
-        points.push({ label: row.month, value: numeric(row.total_amount) });
-        revenueTrendByCurrency.set(currency, points);
-      }
+      const monthlySeries = buildMonthlySeries(trendWindow.months, trendResult.rows, monthlyMrrResult.rows);
+      const trendsByCurrency = new Map(monthlySeries.map((series) => [series.currency, metricTrendsFromSeries(series)]));
       const contractsByCurrencyDate = new Map<string, ContractSnapshotRow>();
       for (const row of contractRows) contractsByCurrencyDate.set(`${String(row.snapshot_date).slice(0, 10)}|${String(row.currency).trim()}`, row);
       const pipelineByCurrencyStatus = new Map<string, PipelineRow>();
@@ -448,7 +625,6 @@ export class ExecutiveAnalyticsService {
             formula: `SUM(amount) WHERE transaction_type = '${type}'`,
             sourceLabels: ['Imported financial transactions'],
             sampleSize: value?.count ?? 0,
-            ...(type === 'revenue' && currency ? { trend: (revenueTrendByCurrency.get(currency) ?? []).slice(-36) } : {}),
             note: present ? undefined : 'No committed records of this type were found for this currency and reporting period.',
           });
         }
@@ -641,7 +817,11 @@ export class ExecutiveAnalyticsService {
         sourceLabels: ['AI usage pricing snapshots'], sampleSize: pricedCount,
         note: pricedCount === 0 ? 'No priced AI usage records are available.' : (unpricedCount > 0 ? `${unpricedCount} operations are unpriced; the displayed amount is partial.` : undefined) });
 
-      if (metrics.length > 150) throw new BadRequestException('Executive report exceeds the PDF engine metric limit of 150. Narrow the reporting scope.');
+      for (const metric of metrics) {
+        if (!metric.currency || metric.category === 'AI economics') continue;
+        const trend = trendsByCurrency.get(metric.currency)?.[metric.metricKey];
+        if (trend && trend.length > 1) metric.trend = trend;
+      }
 
       const targetMap = new Map<string, TargetRow>();
       for (const target of targetsResult.rows) {
@@ -726,6 +906,7 @@ export class ExecutiveAnalyticsService {
         'Currency values are grouped and reported independently; no foreign-exchange conversion is performed.',
         'AI expenditure includes only usage rows with a pricing_id and priced_at timestamp. Unpriced usage is reported separately.',
         'CAC, LTV and customer retention are unavailable until customer acquisition attribution and cohort history are supplied.',
+        `Monthly trends cover ${trendWindow.months.length} months ending at the period end (at least 12, at most 36) so short periods still show direction. KPI values themselves use the selected period only.`,
       ];
 
       return {
@@ -739,8 +920,77 @@ export class ExecutiveAnalyticsService {
         sections,
         sources,
         assumptions,
+        trendWindow: { start: trendWindow.start, end: period.end },
+        monthlySeries,
       };
     });
+  }
+
+  /**
+   * Every KPI target with its actual over the target's own period (to date while the
+   * period is running), computed by the same engine as the dashboard. Analytics and
+   * Executive Intelligence both read this, so they always agree.
+   */
+  async getScorecard(actor: ExecutiveAnalyticsActor): Promise<{ generatedAt: string; items: KpiScorecardItem[] }> {
+    this.assertAdmin(actor);
+    const today = new Date().toISOString().slice(0, 10);
+    const targets = await this.db.query<{
+      id: string; metric_key: string; target_value: string; unit: string; currency: string | null;
+      direction: 'higher_is_better' | 'lower_is_better'; target_period: string; period_start: string; period_end: string;
+      minimum_sample_size: number | string; owner_name: string | null;
+    }>(
+      `SELECT t.id, t.metric_key, t.target_value::text, t.unit, NULLIF(BTRIM(t.currency::text), '') AS currency,
+              t.direction, t.target_period, t.period_start::text, t.period_end::text, t.minimum_sample_size,
+              u.name AS owner_name
+         FROM executive_metric_targets t
+         LEFT JOIN users u ON u.organization_id = t.organization_id AND u.id = t.owner_id
+        WHERE t.organization_id = $1
+        ORDER BY t.period_end DESC, t.created_at DESC
+        LIMIT 24`,
+      [actor.organizationId],
+    );
+
+    // One dashboard per distinct period (to date), most recent periods first.
+    const periods = new Map<string, { start: string; end: string }>();
+    for (const target of targets.rows) {
+      if (target.period_start > today) continue;
+      const end = target.period_end < today ? target.period_end : today;
+      const key = `${target.period_start}|${end}`;
+      if (!periods.has(key) && periods.size < 6) periods.set(key, { start: target.period_start, end });
+    }
+    const dashboards = new Map<string, ExecutiveDashboardResult>();
+    for (const [key, period] of periods) dashboards.set(key, await this.getDashboard(actor, period.start, period.end));
+
+    const items = targets.rows.map((target): KpiScorecardItem => {
+      const targetValue = numeric(target.target_value);
+      const base = {
+        targetId: target.id, metricKey: target.metric_key, currency: target.currency, unit: target.unit,
+        direction: target.direction, targetPeriod: target.target_period, periodStart: target.period_start,
+        periodEnd: target.period_end, targetValue, ownerName: target.owner_name,
+      };
+      if (target.period_start > today) {
+        return { ...base, label: target.metric_key.replace(/_/g, ' '), actualValue: null, status: 'unavailable', progressPct: null,
+          targetStatus: 'not_started', sampleSize: 0, trend: [], toDate: false };
+      }
+      const end = target.period_end < today ? target.period_end : today;
+      const dashboard = dashboards.get(`${target.period_start}|${end}`);
+      const metric = dashboard?.metrics.find((item) => item.metricKey === target.metric_key && (item.currency ?? null) === (target.currency ?? null))
+        ?? dashboard?.metrics.find((item) => item.metricKey === target.metric_key && !target.currency);
+      const label = metric?.label ?? target.metric_key.replace(/_/g, ' ');
+      const value = typeof metric?.value === 'number' && metric.status !== 'unavailable' ? metric.value : null;
+      const enough = numeric(metric?.sampleSize) >= numeric(target.minimum_sample_size);
+      const assessment = value !== null && enough ? calculateTargetAssessment(value, targetValue, target.direction) : null;
+      return {
+        ...base, label, actualValue: value,
+        status: (metric?.status ?? 'unavailable') as KpiScorecardItem['status'],
+        progressPct: assessment?.progressPct ?? null,
+        targetStatus: value === null || !enough ? 'insufficient_data' : assessment!.met ? 'on_track' : 'behind',
+        sampleSize: numeric(metric?.sampleSize),
+        trend: metric?.trend ?? [],
+        toDate: target.period_end > today,
+      };
+    });
+    return { generatedAt: new Date().toISOString(), items };
   }
 
   async getReport(actor: ExecutiveAnalyticsActor, startInput?: unknown, endInput?: unknown): Promise<ExecutivePdfReport> {

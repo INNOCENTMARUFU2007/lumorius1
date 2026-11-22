@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
 import { AiService } from '../ai/ai.service';
+import { readWorkspaceAiSettings } from '../ai/ai-models';
 import { KnowledgeClaimsService } from './knowledge-claims.service';
 import { ExecutiveImportService } from '../executive-intelligence/executive-import.service';
 
@@ -10,6 +11,12 @@ interface DocumentEvent {
   documentId: string;
   organizationId: string;
   documentName?: string;
+  /**
+   * automatic: fired by an upload. Runs only if the workspace turned on automatic
+   * knowledge extraction (it costs AI tokens). manual: the user pressed Sync.
+   * retry: resuming a run that was already approved.
+   */
+  trigger?: 'automatic' | 'manual' | 'retry';
 }
 
 interface Chunk {
@@ -87,6 +94,14 @@ export class KnowledgeExtractionService {
 
   async processDocument(event: DocumentEvent): Promise<void> {
     if (!event?.documentId || !event?.organizationId) return;
+
+    if ((event.trigger ?? 'automatic') === 'automatic') {
+      const settings = await readWorkspaceAiSettings(this.db, event.organizationId);
+      if (!settings.autoKnowledgeExtraction) {
+        this.logger.debug(`Automatic knowledge extraction is off for workspace ${event.organizationId}; skipped ${event.documentId}.`);
+        return;
+      }
+    }
 
     const workerId = await this.claimExtractionRun(
       event.organizationId,
@@ -401,6 +416,7 @@ export class KnowledgeExtractionService {
           await this.processDocument({
             documentId: row.document_id,
             organizationId: row.organization_id,
+            trigger: 'retry',
           });
         } catch (error) {
           this.logger.warn(

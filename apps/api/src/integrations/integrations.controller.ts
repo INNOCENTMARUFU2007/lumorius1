@@ -1,3 +1,4 @@
+import { RequiresModule } from '../billing/entitlements';
 import {
   Body, Controller, Delete, Get, Param, Post, Query, Res, UseGuards,
 } from '@nestjs/common';
@@ -10,6 +11,7 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 @ApiTags('integrations')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@RequiresModule('core')
 @Controller('integrations')
 export class IntegrationsController {
   constructor(private readonly integrationsService: IntegrationsService) {}
@@ -42,6 +44,12 @@ export class IntegrationsController {
     return this.integrationsService.syncForUser(user, provider);
   }
 
+  @Post(':provider/test')
+  @ApiOperation({ summary: 'Send a synthetic event to a configured webhook' })
+  test(@CurrentUser() user: JwtPayload, @Param('provider') provider: string) {
+    return this.integrationsService.sendTestEvent(user, provider);
+  }
+
   @Delete(':provider')
   @ApiOperation({ summary: 'Disconnect a provider from the current organisation' })
   disconnect(@CurrentUser() user: JwtPayload, @Param('provider') provider: string) {
@@ -51,6 +59,7 @@ export class IntegrationsController {
 
 // OAuth callbacks use one-time, short-lived state stored by the server, not a session cookie.
 @ApiTags('integration-oauth')
+@RequiresModule('core')
 @Controller('integrations')
 export class IntegrationsOAuthController {
   constructor(private readonly integrationsService: IntegrationsService) {}

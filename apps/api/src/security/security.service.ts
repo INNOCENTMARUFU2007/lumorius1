@@ -91,6 +91,7 @@ export class SecurityService {
       from?: string;
       to?: string;
       limit?: number;
+      page?: number;
     },
   ) {
     const conditions: string[] = ['al.organization_id = $1'];
@@ -125,22 +126,45 @@ export class SecurityService {
       ),
     );
 
-    params.push(limit);
+    params.push(limit, ((filters.page ?? 1) - 1) * limit);
 
     const res = await this.db.query(
       `SELECT
-         al.*,
+         al.id, al.organization_id, al.user_id, al.action, al.resource_type,
+         al.resource_id, al.metadata, al.ip_address, al.created_at,
          u.name AS user_name,
          u.email AS user_email
        FROM audit_logs al
-       LEFT JOIN users u ON al.user_id = u.id
+       LEFT JOIN users u ON al.user_id = u.id AND u.organization_id = al.organization_id
        WHERE ${conditions.join(' AND ')}
-       ORDER BY al.created_at DESC
-       LIMIT $${idx}`,
+       ORDER BY al.created_at DESC, al.id DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
       params,
     );
 
     return res.rows.map((row) => this.removeAuditSecrets(row as Record<string, unknown>));
+  }
+
+  async accessReview(organizationId: string, page: number) {
+    const [members, usage] = await Promise.all([
+      this.db.query(
+        `SELECT u.id, u.name, u.email, u.role, u.is_active, u.mfa_enabled, u.last_login_at,
+                (SELECT COUNT(*)::int FROM sessions s WHERE s.user_id = u.id AND s.is_valid AND s.expires_at > NOW()) AS sessions,
+                (SELECT COUNT(*)::int FROM api_keys k WHERE k.created_by_id = u.id AND k.organization_id = $1
+                  AND k.is_active AND (k.expires_at IS NULL OR k.expires_at > NOW())) AS api_keys
+         FROM users u WHERE u.organization_id = $1
+         ORDER BY u.is_active DESC, lower(u.name), u.id LIMIT 26 OFFSET $2`,
+        [organizationId, (page - 1) * 25],
+      ),
+      this.db.query(
+        `SELECT feature, COUNT(*)::int AS operations,
+                SUM(CASE WHEN token_usage_reported THEN total_tokens ELSE 0 END)::text AS tokens
+         FROM ai_usage WHERE organization_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
+         GROUP BY feature ORDER BY operations DESC, feature LIMIT 20`,
+        [organizationId],
+      ),
+    ]);
+    return { members: members.rows.slice(0, 25), hasMore: members.rows.length > 25, usage: usage.rows };
   }
 
   private removeAuditSecrets(value: unknown): unknown {
@@ -339,7 +363,7 @@ export class SecurityService {
   async validateApiKey(
     rawKey: string,
   ): Promise<Record<string, unknown> | null> {
-    if (!rawKey.startsWith('nxs_')) {
+    if (!/^nxs_[a-f0-9]{64}$/.test(rawKey)) {
       return null;
     }
 
@@ -369,13 +393,16 @@ export class SecurityService {
       );
 
       if (matches) {
-        await this.db.query(
+        const active = await this.db.query(
           `UPDATE api_keys
            SET last_used_at = NOW()
-           WHERE id = $1 AND organization_id = $2 AND is_active = TRUE`,
+           WHERE id = $1 AND organization_id = $2 AND is_active = TRUE
+             AND (expires_at IS NULL OR expires_at > NOW())
+           RETURNING id`,
           [candidate.id, candidate.organization_id],
         );
 
+        if (!active.rows[0]) continue;
         const safeCandidate = { ...candidate };
         delete safeCandidate.key_hash;
         return safeCandidate;

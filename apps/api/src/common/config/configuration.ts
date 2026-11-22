@@ -45,7 +45,6 @@ export function validateEnvironment(
   const provider = String(env.AI_DEFAULT_PROVIDER || 'openai').toLowerCase();
   const providerKeys: Record<string, string> = {
     openai: 'OPENAI_API_KEY',
-    openrouter: 'OPENROUTER_API_KEY',
     anthropic: 'ANTHROPIC_API_KEY',
   };
   const providerKey = providerKeys[provider];
@@ -80,6 +79,7 @@ export default () => ({
     sslCa: process.env.DATABASE_SSL_CA,
     poolMin: parseInt(process.env.DATABASE_POOL_MIN || '2', 10),
     poolMax: parseInt(process.env.DATABASE_POOL_MAX || '20', 10),
+    connectionTimeoutMs: parseInt(process.env.DATABASE_CONNECTION_TIMEOUT_MS || '15000', 10),
   },
 
   redis: {

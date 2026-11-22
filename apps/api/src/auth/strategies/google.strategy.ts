@@ -29,7 +29,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
     const photos = profile.photos as Array<{ value: string }>;
     const email = emails?.[0]?.value;
     const name = profile.displayName as string;
-    const avatarUrl = photos?.[0]?.value;
+    const photo = photos?.[0]?.value;
+    const avatarUrl = typeof photo === 'string' && /^https:\/\//i.test(photo) ? photo : undefined;
 
     if (!email) return done(new Error('No email from Google'), false);
 
@@ -47,12 +48,24 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       user = await this.db.findOne<Record<string, unknown>>('users', { id: userId });
     }
 
+    if (user && avatarUrl && user.avatar_url !== avatarUrl) {
+      await this.db.query('UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2', [avatarUrl, user.id]);
+      user = { ...user, avatar_url: avatarUrl };
+    }
+
+    // Two historical schemas use different identity column names. Never accept a column from request data.
+    const columns = await this.db.query<{column_name:string}>(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'oauth_accounts' AND column_name IN ('provider_id','provider_user_id')",
+    );
+    const identityColumn = columns.rows.some(row=>row.column_name==='provider_id') ? 'provider_id'
+      : columns.rows.some(row=>row.column_name==='provider_user_id') ? 'provider_user_id' : null;
+    if (!identityColumn) return done(new Error('OAuth account schema is not configured.'),false);
+    // Authentication needs the provider identity, not retained provider access/refresh secrets.
     await this.db.query(
-      `INSERT INTO oauth_accounts (user_id, provider, provider_user_id, access_token, refresh_token)
-       VALUES ($1, 'google', $2, $3, $4)
-       ON CONFLICT (provider, provider_user_id) DO UPDATE
-       SET access_token = EXCLUDED.access_token, refresh_token = EXCLUDED.refresh_token`,
-      [user!.id, profile.id, accessToken, refreshToken],
+      `INSERT INTO oauth_accounts (user_id, provider, ${identityColumn})
+       VALUES ($1, 'google', $2)
+       ON CONFLICT (provider, ${identityColumn}) DO NOTHING`,
+      [user!.id, profile.id],
     );
 
     done(null, user);

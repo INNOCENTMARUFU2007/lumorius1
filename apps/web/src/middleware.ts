@@ -34,7 +34,8 @@ export function middleware(request: NextRequest) {
 
   // Authentication token is stored in a cookie so middleware
   // can protect server-rendered routes.
-  const token = request.cookies.get('lumorius_access')?.value;
+  // The session marker outlives the 15-minute access token; the client refreshes the token on load.
+  const token = request.cookies.get('lumorius_access')?.value || request.cookies.get('lumorius_session')?.value;
 
   if (!token && pathname !== '/login') {
     const loginUrl = new URL('/login', request.url);

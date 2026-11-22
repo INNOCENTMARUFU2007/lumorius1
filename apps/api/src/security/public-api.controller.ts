@@ -139,7 +139,7 @@ export class PublicApiController {
     const cursor = this.decodeCursor(cursorValue);
     const sql = `SELECT d.id, d.name, d.original_name, d.type, d.status, d.size_bytes, d.created_at, d.updated_at
       FROM documents d
-      WHERE d.organization_id = $1
+      WHERE d.organization_id = $1 AND d.team_id IS NULL
         AND ($2::timestamptz IS NULL OR (d.created_at, d.id) < ($2::timestamptz, $3::uuid))
       ORDER BY d.created_at DESC, d.id DESC
       LIMIT $4`;
@@ -156,7 +156,8 @@ export class PublicApiController {
     const cursor = this.decodeCursor(cursorValue);
     const sql = `SELECT t.id, t.title, t.description, t.status, t.priority, t.due_date, t.completed_at, t.project_id, t.team_id, t.created_at, t.updated_at
       FROM tasks t
-      WHERE t.organization_id = $1
+      LEFT JOIN projects p ON p.id = t.project_id AND p.organization_id = t.organization_id
+      WHERE t.organization_id = $1 AND COALESCE(t.team_id, p.team_id) IS NULL
         AND ($2::timestamptz IS NULL OR (t.created_at, t.id) < ($2::timestamptz, $3::uuid))
       ORDER BY t.created_at DESC, t.id DESC
       LIMIT $4`;
@@ -173,7 +174,7 @@ export class PublicApiController {
     const cursor = this.decodeCursor(cursorValue);
     const sql = `SELECT p.id, p.name, p.description, p.status, p.start_date, p.end_date, p.created_at, p.updated_at
       FROM projects p
-      WHERE p.organization_id = $1
+      WHERE p.organization_id = $1 AND p.team_id IS NULL
         AND ($2::timestamptz IS NULL OR (p.created_at, p.id) < ($2::timestamptz, $3::uuid))
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT $4`;

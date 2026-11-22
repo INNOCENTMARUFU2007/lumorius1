@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { AiService } from '../ai/ai.service';
+import { FinancialDigestService, isFinanceQuestion } from '../executive-intelligence/financial-digest.service';
 
 interface RetrievalRequest {
   organizationId: string;
@@ -10,6 +11,9 @@ interface RetrievalRequest {
   limit?: number;
   documentIds?: string[];
   teamId?: string;
+  lexicalOnly?: boolean;
+  /** Owners/admins asking about money get the financial digest unless this is false. */
+  includeFinancialDigest?: boolean;
 }
 
 interface RetrievalRow extends Record<string, unknown> {
@@ -57,6 +61,7 @@ export class KnowledgeRetrievalService {
   constructor(
     private readonly db: DatabaseService,
     private readonly ai: AiService,
+    @Optional() private readonly financialDigest?: FinancialDigestService,
   ) {}
 
   async retrieve(input: RetrievalRequest) {
@@ -89,7 +94,7 @@ export class KnowledgeRetrievalService {
     // when the embedding provider is temporarily unavailable.
     let embedding: number[] | null = null;
 
-    try {
+    if (!input.lexicalOnly) try {
       const generated = await this.ai.createEmbedding(query, {
         organizationId: input.organizationId,
         userId: input.userId,
@@ -398,9 +403,23 @@ export class KnowledgeRetrievalService {
       String(input.role ?? '').toLowerCase(),
     );
 
+    // Owners and admins asking about money also get a computed digest of committed financial records.
+    const digestPromise = privileged && input.includeFinancialDigest !== false && this.financialDigest && isFinanceQuestion(query)
+      ? this.financialDigest.build(input.organizationId).catch((error: unknown) => {
+          this.logger.warn(`Financial digest unavailable: ${error instanceof Error ? error.message : String(error)}`);
+          return null;
+        })
+      : Promise.resolve(null);
+
+    // Match any of the question's words (ranked by how many match), not all of them,
+    // so "how can we cut hotel costs" still finds a "Hotel - Dubai trip" record.
     const structured = await this.db.query<StructuredRetrievalRow>(
       `WITH search_terms AS (
-         SELECT plainto_tsquery('english', $2) AS query
+         SELECT COALESCE(
+           (SELECT to_tsquery('english', string_agg(quote_literal(lexeme) || ':*', ' | '))
+              FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS lexeme),
+           plainto_tsquery('english', $2)
+         ) AS query
        ),
        matches AS (
          SELECT 'task'::text AS source_type,
@@ -505,6 +524,38 @@ export class KnowledgeRetrievalService {
 
          UNION ALL
 
+         -- Best-matching passage per document straight from indexed text, so documents
+         -- without extracted knowledge are still found. Same access rule as document search.
+         SELECT * FROM (
+           SELECT DISTINCT ON (document.id)
+                  'document_passage'::text,
+                  document.id,
+                  document.name,
+                  LEFT(chunk.content, 1600),
+                  document.updated_at,
+                  document.team_id,
+                  ts_rank_cd(to_tsvector('english', chunk.content), search_terms.query)::double precision AS rank
+             FROM document_chunks chunk
+             JOIN documents document ON document.id = chunk.document_id
+             CROSS JOIN search_terms
+            WHERE document.organization_id = $1::uuid
+              AND document.status = 'indexed'
+              AND to_tsvector('english', chunk.content) @@ search_terms.query
+              AND (
+                document.team_id IS NULL
+                OR $3::boolean = TRUE
+                OR EXISTS (
+                  SELECT 1 FROM team_members member
+                   WHERE member.team_id = document.team_id
+                     AND member.user_id = $4::uuid
+                )
+              )
+              AND ($5::uuid IS NULL OR document.team_id IS NULL OR document.team_id = $5::uuid)
+            ORDER BY document.id, rank DESC
+         ) passages
+
+         UNION ALL
+
          SELECT 'financial_transaction'::text,
                 transaction.id,
                 concat(transaction.transaction_type, ' - ', transaction.transaction_date::text),
@@ -515,20 +566,16 @@ export class KnowledgeRetrievalService {
                 transaction.created_at,
                 NULL::uuid,
                 ts_rank_cd(
-                  to_tsvector('english', concat_ws(
-                    ' ', transaction.description, transaction.transaction_type,
-                    transaction.amount::text, transaction.currency
-                  )),
+                  (setweight(to_tsvector('english', COALESCE(transaction.description, '')), 'A')
+                   || setweight(to_tsvector('english', concat_ws(' ', transaction.transaction_type, transaction.amount::text, transaction.currency)), 'D')),
                   search_terms.query
                 )::double precision
            FROM executive_financial_transactions transaction
            CROSS JOIN search_terms
           WHERE transaction.organization_id = $1::uuid
             AND $3::boolean = TRUE
-            AND to_tsvector('english', concat_ws(
-                  ' ', transaction.description, transaction.transaction_type,
-                  transaction.amount::text, transaction.currency
-                )) @@ search_terms.query
+            AND (setweight(to_tsvector('english', COALESCE(transaction.description, '')), 'A')
+                   || setweight(to_tsvector('english', concat_ws(' ', transaction.transaction_type, transaction.amount::text, transaction.currency)), 'D')) @@ search_terms.query
        )
        SELECT source_type, source_id, title, excerpt, updated_at, team_id, relevance_score
          FROM matches
@@ -544,7 +591,8 @@ export class KnowledgeRetrievalService {
       ],
     );
 
-    const sources = [
+    const digest = await digestPromise;
+    const ranked = [
       ...documents.sources.map((source) => ({
         citationId: '',
         sourceType: 'document',
@@ -566,8 +614,23 @@ export class KnowledgeRetrievalService {
       })),
     ]
       .sort((left, right) => right.relevanceScore - left.relevanceScore)
-      .slice(0, limit)
-      .map((source, index) => ({ ...source, citationId: `S${index + 1}` }));
+      .filter((source, index, all) => {
+        // A document found through extracted knowledge and as a raw passage is listed once.
+        const key = (item: typeof source) => `${item.sourceType === 'document_passage' ? 'document' : item.sourceType}:${item.sourceId}`;
+        return all.findIndex((other) => key(other) === key(source)) === index;
+      })
+      .slice(0, limit);
+    const sources = [
+      ...(digest ? [{
+        citationId: '',
+        sourceType: 'financial_summary',
+        sourceId: 'financial-digest',
+        title: `Financial records digest (${digest.currencies.join(', ') || 'no currency'}, ${digest.windowStart} to ${digest.windowEnd})`,
+        excerpt: digest.text.slice(0, 6000),
+        relevanceScore: 1,
+      }] : []),
+      ...ranked,
+    ].map((source, index) => ({ ...source, citationId: `S${index + 1}` }));
 
     return {
       query,

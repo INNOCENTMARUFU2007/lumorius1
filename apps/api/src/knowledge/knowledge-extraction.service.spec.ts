@@ -62,9 +62,11 @@ describe('KnowledgeExtractionService extraction validation', () => {
 
     expect(db.query).toHaveBeenCalledWith(expect.stringContaining("run.status = 'failed'"));
     expect(db.query.mock.calls[0][0]).toContain('run.attempt_count < 5');
+    // Retries resume runs that were already approved, so they bypass the automatic-extraction switch.
     expect(processSpy).toHaveBeenCalledWith({
       documentId: 'doc-2',
       organizationId: 'org-2',
+      trigger: 'retry',
     });
   });
 });

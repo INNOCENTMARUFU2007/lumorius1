@@ -58,8 +58,8 @@ export class AuthService {
           .replace(/^-+|-+$/g, '')
           .substring(0, 50);
         await client.query(
-          `INSERT INTO organizations (id, name, slug, plan_id)
-           VALUES ($1, $2, $3, 'free')`,
+          `INSERT INTO organizations (id, name, slug, plan_id, trial_ends_at)
+           VALUES ($1, $2, $3, 'free', NOW() + INTERVAL '14 days')`,
           [orgId, dto.organizationName, `${slug}-${Date.now()}`],
         );
       }

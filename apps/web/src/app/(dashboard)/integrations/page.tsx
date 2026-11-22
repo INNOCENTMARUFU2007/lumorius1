@@ -5,10 +5,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
   AlertCircle, CheckCircle2, Loader2, PlugZap, Puzzle, RefreshCw, Search,
-  ShieldCheck, Unplug, CloudDownload, Settings2,
+  ShieldCheck, Unplug, CloudDownload, Settings2, X, Send,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import api from '@/lib/api';
+import { useAuth } from '@/hooks/use-auth';
 
 type IntegrationStatus = 'connected' | 'not_connected' | 'setup_required' | 'managed' | 'error';
 type AuthMode = 'oauth' | 'api_key' | 'webhook';
@@ -27,8 +28,16 @@ interface IntegrationItem {
   canConfigure: boolean;
   canDisconnect: boolean;
   canSync: boolean;
+  canTest?: boolean;
+  callbackUrl?: string;
   authMode: AuthMode;
   platformOnly?: boolean;
+  requiresPaidPlan?: boolean;
+}
+
+function monogram(name: string) {
+  const words = name.replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? '?').slice(0, 2)).toUpperCase();
 }
 
 function payload<T>(response: any): T {
@@ -56,12 +65,26 @@ function statusLabel(item: IntegrationItem) {
 }
 
 export default function IntegrationsPage() {
+  const { user, isLoading } = useAuth();
+  if (!user) return <p className="p-6 text-sm text-muted-foreground">{isLoading ? 'Loading integrations…' : 'Sign in to manage integrations.'}</p>;
+  const account = `${user.organizationId}/${user.id}`;
+  return <IntegrationWorkspace key={account} account={account} />;
+}
+
+type SyncReceipt = { provider: string; fetched: number; imported: number; skipped: number; unsupported: number };
+type Credentials = { apiKey?: string; appKey?: string; webhookUrl?: string };
+
+function IntegrationWorkspace({ account }: { account: string }) {
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
+  const [status, setStatus] = useState('all');
+  const [setup, setSetup] = useState<IntegrationItem | null>(null);
+  const [credentials, setCredentials] = useState<Credentials>({});
+  const [receipt, setReceipt] = useState<SyncReceipt | null>(null);
 
   const integrationsQuery = useQuery<IntegrationItem[]>({
-    queryKey: ['integrations'],
+    queryKey: ['integrations', account],
     queryFn: async () => {
       const response = await api.get('/integrations');
       const result = payload<IntegrationItem[]>(response);
@@ -108,6 +131,8 @@ export default function IntegrationsPage() {
     },
     onSuccess: (provider) => {
       toast.success(`${provider} configured securely.`);
+      setSetup(null);
+      setCredentials({});
       qc.invalidateQueries({ queryKey: ['integrations'] });
     },
     onError: (error) => toast.error(errorText(error)),
@@ -116,14 +141,22 @@ export default function IntegrationsPage() {
   const syncMutation = useMutation({
     mutationFn: async (provider: string) => {
       const response = await api.post(`/integrations/${provider}/sync`);
-      return payload<{ provider: string; fetched: number; imported: number; skipped: number; unsupported: number }>(response);
+      return payload<SyncReceipt>(response);
     },
     onSuccess: (result) => {
+      setReceipt(result);
       toast.success(`${result.imported} imported, ${result.skipped} already imported, ${result.unsupported} unsupported. ${result.fetched} source items checked.`);
       qc.invalidateQueries({ queryKey: ['integrations'] });
       qc.invalidateQueries({ queryKey: ['documents'] });
     },
+    onError: (error) => { toast.error(errorText(error)); void qc.invalidateQueries({ queryKey: ['integrations'] }); },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: (provider: string) => api.post('/integrations/' + encodeURIComponent(provider) + '/test'),
+    onSuccess: () => toast.success('The webhook accepted the test event.'),
     onError: (error) => toast.error(errorText(error)),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
   });
 
   const disconnectMutation = useMutation({
@@ -138,40 +171,26 @@ export default function IntegrationsPage() {
     onError: (error) => toast.error(errorText(error)),
   });
 
-  const configure = (item: IntegrationItem) => {
-    if (item.authMode === 'api_key') {
-      const apiKey = window.prompt('Enter the Datadog API key. It will be encrypted before saving:')?.trim();
-      if (!apiKey) return;
-      const appKey = window.prompt('Enter the Datadog application key. It will be encrypted before saving:')?.trim();
-      if (!appKey) return;
-      configureMutation.mutate({ provider: item.id, credentials: { apiKey, appKey } });
-      return;
-    }
-    if (item.authMode === 'webhook') {
-      const webhookUrl = window.prompt(`Paste the ${item.name} webhook URL. Use a provider-generated HTTPS URL:`)?.trim();
-      if (!webhookUrl) return;
-      configureMutation.mutate({ provider: item.id, credentials: { webhookUrl } });
-    }
-  };
+  const configure = (item: IntegrationItem) => { setCredentials({}); setSetup(item); };
 
   const items = integrationsQuery.data ?? [];
   const categories = useMemo(() => ['All', ...Array.from(new Set(items.map((item) => item.category)))], [items]);
   const filtered = useMemo(() => items.filter((item) => {
     const q = search.trim().toLowerCase();
     const matchesSearch = !q || `${item.name} ${item.category} ${item.description}`.toLowerCase().includes(q);
-    return matchesSearch && (category === 'All' || item.category === category);
-  }), [items, search, category]);
+    return matchesSearch && (category === 'All' || item.category === category) && (status === 'all' || item.status === status);
+  }), [items, search, category, status]);
   const connectedCount = items.filter((item) => item.status === 'connected').length;
-  const busy = connectMutation.isPending || configureMutation.isPending || syncMutation.isPending || disconnectMutation.isPending;
+  const busy = connectMutation.isPending || configureMutation.isPending || syncMutation.isPending || disconnectMutation.isPending || testMutation.isPending;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto max-w-[1460px] space-y-5 pb-10">
+      <header className="flex flex-col gap-4 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-indigo-500/10 p-2.5"><Puzzle className="h-6 w-6 text-indigo-500" /></div>
+          
           <div>
-            <h1 className="text-2xl font-bold">Integrations</h1>
-            <p className="text-sm text-muted-foreground">{connectedCount} connected integration(s). Credentials and content are scoped to your organisation.</p>
+            <h1 className="text-2xl font-semibold tracking-tight">Integrations</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Connect source accounts, sync documents, and test outbound webhooks.</p>
           </div>
         </div>
         <button type="button" onClick={() => void integrationsQuery.refetch()} disabled={integrationsQuery.isFetching} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50">
@@ -179,6 +198,35 @@ export default function IntegrationsPage() {
         </button>
       </header>
 
+      {integrationsQuery.data && <section aria-label="Connection summary" className="grid grid-cols-3 gap-2">
+        {[
+          { label: 'Connected', key: 'connected', count: connectedCount },
+          { label: 'Setup required', key: 'setup_required', count: items.filter((item) => item.status === 'setup_required').length },
+          { label: 'Needs attention', key: 'error', count: items.filter((item) => item.status === 'error').length },
+        ].map((item) => <button key={item.key} type="button" aria-pressed={status === item.key} onClick={() => setStatus(status === item.key ? 'all' : item.key)} className="rounded-xl border border-border bg-card p-3 text-left hover:border-brand-500/40 aria-pressed:border-brand-500">
+          <span className="block text-xl font-semibold tabular-nums">{item.count}</span><span className="text-xs text-muted-foreground">{item.label}</span>
+        </button>)}
+      </section>}
+      {receipt && <div role="status" className="flex items-start justify-between gap-3 rounded-xl border border-teal-500/25 bg-teal-500/5 p-4">
+        <div><p className="text-sm font-semibold capitalize">{receipt.provider.replace(/-/g, ' ')} sync result</p><p className="mt-1 text-xs text-muted-foreground">{receipt.fetched} checked · {receipt.imported} queued for indexing · {receipt.skipped} skipped · {receipt.unsupported} unsupported</p></div>
+        <button type="button" onClick={() => setReceipt(null)} aria-label="Dismiss sync result"><X className="h-4 w-4" /></button>
+      </div>}
+      {setup && <form role="dialog" aria-label={`Configure ${setup.name}`} onSubmit={(event) => {
+        event.preventDefault();
+        if (!busy) configureMutation.mutate({ provider: setup.id, credentials });
+      }} className="rounded-2xl border border-brand-500/30 bg-card p-4 shadow-sm sm:p-5">
+        <div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">Configure {setup.name}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{setup.authMode === 'webhook' ? 'Paste the HTTPS hook URL from your receiving workflow.' : 'Enter the API key and application key for your Datadog site.'}</p></div>
+          <button type="button" onClick={() => { setSetup(null); setCredentials({}); }} disabled={busy} aria-label="Close setup" className="rounded-lg p-2 hover:bg-muted"><X className="h-4 w-4" /></button></div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {(setup.authMode === 'webhook' ? [['webhookUrl', 'Webhook URL']] : [['apiKey', 'API key'], ['appKey', 'Application key']]).map(([key, label]) => (
+            <label key={key} className="block text-xs font-medium">{label}
+              <input type="password" required autoComplete="off" maxLength={2048} value={credentials[key as keyof typeof credentials] ?? ''} onChange={(event) => setCredentials({ ...credentials, [key]: event.target.value })} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
+            </label>
+          ))}
+        </div>
+        <button type="submit" disabled={busy} className="mt-4 rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40">{configureMutation.isPending ? 'Saving…' : 'Save connection'}</button>
+      </form>}
       <div className="flex flex-col gap-3 sm:flex-row">
         <label className="relative block max-w-sm flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -203,22 +251,26 @@ export default function IntegrationsPage() {
             return (
               <motion.article key={item.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.015 }} className="flex min-h-[245px] flex-col rounded-xl border border-border bg-card p-4 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted text-2xl">{item.emoji}</div><div className="min-w-0"><h2 className="truncate text-sm font-semibold">{item.name}</h2><p className="mt-0.5 text-xs text-muted-foreground">{item.category}</p></div></div>
-                  <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(item.status)}`}>{statusLabel(item)}</span>
+                  <div className="flex min-w-0 items-start gap-3"><div aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 font-mono text-xs font-semibold text-foreground/80">{monogram(item.name)}</div><div className="min-w-0"><h2 className="truncate text-sm font-semibold">{item.name}</h2><p className="mt-0.5 text-xs text-muted-foreground">{item.category}{item.requiresPaidPlan ? ' · Paid plans' : ''}</p></div></div>
+                  <span className={`shrink-0 rounded-full border px-2 py-1 text-xs font-medium ${statusStyle(item.status)}`}>{statusLabel(item)}</span>
                 </div>
                 <p className="mt-3 flex-1 text-xs leading-relaxed text-muted-foreground">{item.description}</p>
-                <div className="mt-3 flex items-start gap-2 text-[11px] text-muted-foreground">
+                <div className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
                   {item.status === 'connected' || item.status === 'managed' ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" /> : item.status === 'error' ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" /> : <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
                   <span className="break-words">{item.accountEmail ? `${item.accountEmail} · ` : ''}{item.statusText}</span>
                 </div>
                 <div className="mt-4 grid grid-cols-1 gap-2">
-                  {item.canConnect && <button type="button" disabled={busy} onClick={() => connectMutation.mutate(item.id)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50">{connectPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}{connectPending ? 'Starting secure connection…' : 'Connect account'}</button>}
-                  {item.canConfigure && item.status !== 'connected' && <button type="button" disabled={busy} onClick={() => configure(item)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"><Settings2 className="h-3.5 w-3.5" /> Configure integration</button>}
-                  {item.canSync && <button type="button" disabled={busy} onClick={() => syncMutation.mutate(item.id)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-violet-500/40 px-3 py-2 text-xs font-semibold text-violet-500 hover:bg-violet-500/10 disabled:opacity-50">{syncPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5" />}{syncPending ? 'Syncing into Company Brain…' : 'Sync now'}</button>}
-                  {item.canDisconnect && <button type="button" disabled={busy} onClick={() => disconnectMutation.mutate(item.id)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted-foreground hover:border-red-500/40 hover:text-red-500 disabled:opacity-50">{disconnectPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}{disconnectPending ? 'Removing…' : 'Disconnect'}</button>}
+                  {item.canConnect && <button type="button" disabled={busy} onClick={() => connectMutation.mutate(item.id)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50">{connectPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}{connectPending ? 'Starting secure connection…' : 'Connect account'}</button>}
+                  {item.canConfigure && item.status !== 'connected' && <button type="button" disabled={busy} onClick={() => configure(item)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"><Settings2 className="h-3.5 w-3.5" /> Configure integration</button>}
+                  {item.canSync && <button type="button" disabled={busy} onClick={() => syncMutation.mutate(item.id)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border-strong px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50">{syncPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5" />}{syncPending ? 'Syncing into Company Brain…' : 'Sync now'}</button>}
+                  {item.canTest && <button type="button" disabled={busy} onClick={() => testMutation.mutate(item.id)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-muted disabled:opacity-40">
+                    <Send className="h-3.5 w-3.5" /> {testMutation.isPending && testMutation.variables === item.id ? 'Sending test…' : 'Send test event'}
+                  </button>}
+                  {item.callbackUrl && item.status === 'setup_required' && <details className="rounded-lg border border-border p-2 text-xs"><summary className="cursor-pointer">OAuth setup details</summary>
+                    <p className="mt-1 text-muted-foreground">Register this callback URL with the provider:</p><code className="mt-1 block break-all">{item.callbackUrl}</code></details>}
+                  {item.canDisconnect && <button type="button" disabled={busy} onClick={() => { if (window.confirm(`Disconnect ${item.name}?`)) disconnectMutation.mutate(item.id); }} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted-foreground hover:border-red-500/40 hover:text-red-500 disabled:opacity-50">{disconnectPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />}{disconnectPending ? 'Removing…' : 'Disconnect'}</button>}
                   {item.status === 'managed' && <span className="inline-flex w-full items-center justify-center gap-1 rounded-lg border border-blue-500/30 px-3 py-2 text-xs text-blue-500"><ShieldCheck className="h-3.5 w-3.5" /> Platform managed</span>}
-                  {item.status === 'setup_required' && item.authMode === 'oauth' && <p className="rounded-lg border border-amber-500/30 px-3 py-2 text-center text-[11px] text-amber-500">Server OAuth credentials required</p>}
-                  {!item.canManage && <p className="rounded-lg border border-border px-3 py-2 text-center text-[11px] text-muted-foreground">Owner/admin access required</p>}
+                  {!item.canManage && <p className="rounded-lg border border-border px-3 py-2 text-center text-xs text-muted-foreground">Owner/admin access required</p>}
                 </div>
               </motion.article>
             );

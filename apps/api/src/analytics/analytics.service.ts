@@ -11,6 +11,23 @@ export class AnalyticsService {
     private readonly aiService: AiService,
   ) {}
 
+  async getMyAiUsage(organizationId: string, userId: string) {
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const { rows: [usage] } = await this.db.query<{ operations: string; tokens: string }>(
+      `SELECT COUNT(*)::bigint AS operations,
+              COALESCE(SUM(total_tokens), 0)::bigint AS tokens
+       FROM ai_usage
+       WHERE organization_id = $1
+         AND user_id = $2
+         AND created_at >= $3
+         AND created_at <= $4`,
+      [organizationId, userId, monthStart, now],
+    );
+
+    return usage;
+  }
+
   async getFounderDashboard(
     organizationId: string,
     userId: string,
@@ -32,7 +49,7 @@ export class AnalyticsService {
       `SELECT id, title, priority, due_date, assignee_id
        FROM tasks
        WHERE organization_id = $1
-         AND status != 'done'
+         AND status NOT IN ('done', 'cancelled')
          AND (
            priority = 'urgent'
            OR (
@@ -98,11 +115,11 @@ export class AnalyticsService {
            )::int AS todo,
            COUNT(*) FILTER (
              WHERE t.priority = 'urgent'
-               AND t.status != 'done'
+               AND t.status NOT IN ('done', 'cancelled')
            )::int AS urgent_open,
            COUNT(*) FILTER (
              WHERE t.due_date < NOW()
-               AND t.status != 'done'
+               AND t.status NOT IN ('done', 'cancelled')
            )::int AS overdue,
            COUNT(*) FILTER (
              WHERE t.status = 'done'
@@ -395,7 +412,7 @@ export class AnalyticsService {
   }
 
   async getTeamDashboard(organizationId: string) {
-    const [members, tasks, meetings] = await Promise.all([
+    const [members, tasks, meetings, unallocated] = await Promise.all([
       this.db.query(
         `SELECT
            u.id,
@@ -403,11 +420,12 @@ export class AnalyticsService {
            u.role,
            u.avatar_url,
            COUNT(t.id) FILTER (
-             WHERE t.status != 'done'
+             WHERE t.status NOT IN ('done', 'cancelled')
            )::int AS open_tasks,
            COUNT(t.id) FILTER (
              WHERE t.status = 'done'
-               AND t.updated_at > NOW() - INTERVAL '7 days'
+               AND t.completed_at >= NOW() - INTERVAL '7 days'
+               AND t.completed_at <= NOW()
            )::int AS tasks_completed_this_week
          FROM users u
          LEFT JOIN tasks t
@@ -437,12 +455,37 @@ export class AnalyticsService {
          ORDER BY week`,
         [organizationId],
       ),
+      this.db.query<{
+        assignee_group: 'unassigned' | 'inactive';
+        open_tasks: number;
+        tasks_completed_this_week: number;
+      }>(
+        `SELECT CASE WHEN t.assignee_id IS NULL THEN 'unassigned' ELSE 'inactive' END AS assignee_group,
+                COUNT(*) FILTER (WHERE t.status NOT IN ('done', 'cancelled'))::int AS open_tasks,
+                COUNT(*) FILTER (
+                  WHERE t.status = 'done'
+                    AND t.completed_at >= NOW() - INTERVAL '7 days'
+                    AND t.completed_at <= NOW()
+                )::int AS tasks_completed_this_week
+           FROM tasks t
+           LEFT JOIN users assignee
+             ON assignee.id = t.assignee_id
+            AND assignee.organization_id = t.organization_id
+            AND assignee.is_active = TRUE
+          WHERE t.organization_id = $1
+            AND assignee.id IS NULL
+            AND (t.status NOT IN ('done', 'cancelled')
+                 OR (t.status = 'done' AND t.completed_at BETWEEN NOW() - INTERVAL '7 days' AND NOW()))
+          GROUP BY 1`,
+        [organizationId],
+      ),
     ]);
 
     return {
       members: members.rows,
       tasksByStatus: tasks.rows,
       meetingsByWeek: meetings.rows,
+      unallocatedWork: unallocated.rows,
     };
   }
 

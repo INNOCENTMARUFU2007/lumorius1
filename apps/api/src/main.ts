@@ -36,7 +36,14 @@ async function bootstrap() {
 
   // Transcript/notes imports are capped at 1,000,000 characters by the
   // meeting service. Eight MB accommodates UTF-8 and JSON escaping overhead.
-  app.use(express.json({ limit: '8mb' }));
+  app.use(express.json({
+    limit: '8mb',
+    verify: (request: { originalUrl?: string; rawBody?: Buffer }, _response: unknown, buffer: Buffer) => {
+      if (/^\/api\/v1\/billing\/(?:webhook(?:\/dodo)?)(?:\/)?(?:\?|$)/.test(request.originalUrl ?? '')) {
+        request.rawBody = buffer;
+      }
+    },
+  }));
   app.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
   const configService = app.get(ConfigService);

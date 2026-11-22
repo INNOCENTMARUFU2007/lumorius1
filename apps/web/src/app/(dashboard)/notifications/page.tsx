@@ -2,6 +2,8 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { useAuth } from '@/hooks/use-auth';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -82,68 +84,35 @@ const TYPE_META: Record<
   },
 };
 
-function parseNotifications(payload: unknown): NotificationItem[] {
-  let current = payload;
-
-  for (let i = 0; i < 3; i += 1) {
-    if (Array.isArray(current)) {
-      return current.filter(
-        (item): item is NotificationItem =>
-          Boolean(item) &&
-          typeof item === 'object' &&
-          typeof (item as NotificationItem).id === 'string',
-      );
-    }
-
-    if (!current || typeof current !== 'object') {
-      return [];
-    }
-
-    const record = current as Record<string, unknown>;
-
-    if (Array.isArray(record.notifications)) {
-      current = record.notifications;
-      continue;
-    }
-
-    if ('data' in record) {
-      current = record.data;
-      continue;
-    }
-
-    return [];
-  }
-
-  return Array.isArray(current) ? current as NotificationItem[] : [];
+export default function NotificationsPage() {
+  const { user } = useAuth();
+  if (!user) return <p className="p-6 text-sm text-muted-foreground">Loading notifications…</p>;
+  const account = `${user.organizationId}/${user.id}`;
+  return <NotificationInbox key={account} account={account} />;
 }
 
-export default function NotificationsPage() {
+type Feed = { items: NotificationItem[]; total: number; unread: number; page: number; pageSize: number };
+
+function NotificationInbox({ account }: { account: string }) {
   const qc = useQueryClient();
-
-  const {
-    data: notifications = [],
-    isLoading,
-    isError,
-    refetch,
-    isFetching,
-  } = useQuery<NotificationItem[]>({
-    queryKey: ['notifications'],
-    queryFn: async () => {
-      const response = await api.get('/notifications', {
-        params: { limit: 50 },
-      });
-
-      return parseNotifications(response.data);
-    },
-    refetchInterval: 30_000,
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ['notifications', 'feed', account, page, unreadOnly],
+    queryFn: async ({ signal }) => (await api.get<{ data: Feed }>('/notifications/feed', {
+      signal, params: { page, unreadOnly },
+    })).data.data,
+    refetchInterval: 10_000,
     refetchOnWindowFocus: true,
   });
+  const notifications = data?.items ?? [];
+  const lastPage = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+  useEffect(() => {
+    if (data && page > lastPage) setPage(lastPage);
+  }, [data, page, lastPage]);
 
   const refreshNotifications = async () => {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ['notifications'] }),
-      qc.invalidateQueries({ queryKey: ['notifications', 'unread-count'] }),
-    ]);
+    await qc.invalidateQueries({ queryKey: ['notifications'] });
   };
 
   const markAllRead = useMutation({
@@ -164,9 +133,7 @@ export default function NotificationsPage() {
     onSuccess: refreshNotifications,
   });
 
-  const unreadCount = notifications.filter(
-    (notification) => !notification.read_at,
-  ).length;
+  const unreadCount = data?.unread ?? 0;
 
   const mutationError =
     markAllRead.isError || markRead.isError || deleteNotif.isError;
@@ -181,7 +148,7 @@ export default function NotificationsPage() {
             </div>
 
             {unreadCount > 0 && (
-              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-xs font-bold text-white">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
@@ -192,7 +159,7 @@ export default function NotificationsPage() {
             <p className="text-sm text-muted-foreground">
               {unreadCount > 0
                 ? `${unreadCount} unread`
-                : 'All caught up'}
+                : data ? 'All caught up' : 'Checking your inbox…'}
             </p>
           </div>
         </div>
@@ -225,13 +192,19 @@ export default function NotificationsPage() {
         </div>
       </div>
 
+      <nav aria-label="Notification filters" className="flex gap-1 rounded-xl border border-border bg-muted/30 p-1">
+        {([false, true] as const).map((unread) => <button key={String(unread)} type="button" aria-pressed={unreadOnly === unread}
+          onClick={() => { setUnreadOnly(unread); setPage(1); }} className={`rounded-lg px-3 py-2 text-sm ${unreadOnly === unread ? 'bg-card font-semibold shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+          {unread ? `Unread${unreadCount ? ' (' + unreadCount + ')' : ''}` : 'All updates'}
+        </button>)}
+      </nav>
+
       {mutationError && (
         <div
           role="alert"
           className="rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-500"
         >
-          An action failed. Check that the corresponding notifications API
-          endpoint exists, then try again.
+          The notification could not be updated. Try again.
         </div>
       )}
 
@@ -270,10 +243,9 @@ export default function NotificationsPage() {
           ) : notifications.length === 0 ? (
             <div className="py-20 text-center text-muted-foreground">
               <Bell className="mx-auto mb-3 h-12 w-12 opacity-20" />
-              <p className="font-medium">No notifications yet</p>
+              <p className="font-medium">{unreadOnly ? 'No unread notifications' : 'No notifications yet'}</p>
               <p className="mt-1 text-sm">
-                AI insights, billing alerts, security events, and other
-                notifications will appear here.
+                {unreadOnly ? 'You’re all caught up.' : 'Updates about your work and workspace will appear here.'}
               </p>
             </div>
           ) : (
@@ -291,7 +263,7 @@ export default function NotificationsPage() {
                 const actionUrl =
                   typeof notification.action_url === 'string' &&
                   notification.action_url.startsWith('/') &&
-                  !notification.action_url.startsWith('//')
+                  !notification.action_url.startsWith('//') && !notification.action_url.includes('\\')
                     ? notification.action_url
                     : null;
 
@@ -403,6 +375,13 @@ export default function NotificationsPage() {
           )}
         </div>
       )}
+      {data && lastPage > 1 && <nav aria-label="Notification pages" className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="text-xs text-muted-foreground">Page {page} of {lastPage} · {data.total.toLocaleString()} updates</span>
+        <div className="flex gap-2">
+          <button type="button" disabled={page <= 1 || isFetching} onClick={() => setPage(page - 1)} className="rounded-lg border border-border px-3 py-1.5 disabled:opacity-40">Newer</button>
+          <button type="button" disabled={page >= lastPage || isFetching} onClick={() => setPage(page + 1)} className="rounded-lg border border-border px-3 py-1.5 disabled:opacity-40">Older</button>
+        </div>
+      </nav>}
     </div>
   );
 }

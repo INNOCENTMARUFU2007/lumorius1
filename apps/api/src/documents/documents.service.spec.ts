@@ -99,8 +99,8 @@ describe('DocumentsService deletion reliability with LUIE', () => {
   it('rejects uploads to teams the uploader does not belong to before writing to storage', async () => {
     db.query.mockResolvedValueOnce({ rows: [] });
     const file = {
-      buffer: Buffer.from('document'),
-      size: 8,
+      buffer: Buffer.from('%PDF-1.7 document'),
+      size: 17,
       mimetype: 'application/pdf',
       originalname: 'report.pdf',
     } as Express.Multer.File;

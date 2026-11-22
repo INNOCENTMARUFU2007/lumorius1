@@ -5,6 +5,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
+  ArrowDown,
+  Maximize2,
+  Minus,
+  Plus,
+  ShieldAlert,
   FileCheck2,
   GitBranch,
   Network,
@@ -19,8 +24,10 @@ import {
   Info,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { repairDisplayText } from '@/lib/repair-text';
 import { KnowledgeConflictPanel } from './knowledge-conflict-panel';
 import { toast } from 'sonner';
+import { PageHeader } from '@/components/ui/primitives';
 
 type DataRecord = Record<string, unknown>;
 
@@ -161,18 +168,18 @@ function normalizeGraph(value: unknown): GraphData {
   const nodes: GraphNode[] = payload.nodes
     .filter(isRecord)
     .map((node, index) => {
-      const name = stringValue(
+      const name = repairDisplayText(stringValue(
         node.name,
         stringValue(node.label, `Node ${index + 1}`),
-      );
+      ));
 
       return {
         ...node,
         id: stringValue(node.id, `node-${index + 1}`),
         name,
-        label: stringValue(node.label, name),
-        type: stringValue(node.type, 'concept').toLowerCase(),
-        description: stringValue(node.description),
+        label: repairDisplayText(stringValue(node.label, name)),
+        type: repairDisplayText(stringValue(node.type, 'concept')).toLowerCase(),
+        description: repairDisplayText(stringValue(node.description)),
       };
     });
 
@@ -195,13 +202,13 @@ function normalizeGraph(value: unknown): GraphData {
         edge.to_node_id,
         stringValue(edge.target_id, stringValue(edge.toNodeId)),
       ),
-      relationship: stringValue(
+      relationship: repairDisplayText(stringValue(
         edge.relation_type,
         stringValue(
           edge.relationship,
           stringValue(edge.relationType, 'RELATED TO'),
         ),
-      ),
+      )),
       weight: Number(edge.strength ?? edge.weight ?? 1) || 1,
     }))
     .filter((edge) => edge.sourceId && edge.targetId);
@@ -398,6 +405,8 @@ function getErrorMessage(
 export default function KnowledgePage() {
   const queryClient = useQueryClient();
 
+  const [zoom, setZoom] = useState(1);
+  const [focus, setFocus] = useState(false);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [selectedNodeId, setSelectedNodeId] = useState<
@@ -542,22 +551,6 @@ export default function KnowledgePage() {
     [nodes],
   );
 
-  const graphLayout = useMemo(
-    () => calculateLayout(nodes, relations),
-    [nodes, relations],
-  );
-
-  const positionById = useMemo(
-    () =>
-      new Map(
-        graphLayout.map((position) => [
-          position.id,
-          position,
-        ]),
-      ),
-    [graphLayout],
-  );
-
   const degreeById = useMemo(() => {
     const degree = new Map<string, number>();
 
@@ -576,7 +569,7 @@ export default function KnowledgePage() {
     return degree;
   }, [relations]);
 
-  const searchTerm = search.trim().toLowerCase();
+  const searchTerm = repairDisplayText(search.trim()).toLowerCase();
   const hasSearch = searchTerm.length > 0;
 
   const matchingIds = useMemo(() => {
@@ -602,12 +595,21 @@ export default function KnowledgePage() {
     return ids;
   }, [nodes, searchTerm]);
 
+  const focusIds = useMemo(() => {
+    if (!focus || !selectedNodeId) return null;
+    const ids = new Set([selectedNodeId]);
+    for (const edge of relations) {
+      if (edge.sourceId === selectedNodeId) ids.add(edge.targetId);
+      if (edge.targetId === selectedNodeId) ids.add(edge.sourceId);
+    }
+    return ids;
+  }, [focus, selectedNodeId, relations]);
+
   const visibleNodes = useMemo(
-    () =>
-      typeFilter === 'all'
-        ? nodes
-        : nodes.filter((node) => node.type === typeFilter),
-    [nodes, typeFilter],
+    () => nodes.filter((node) => focusIds
+      ? focusIds.has(node.id)
+      : typeFilter === 'all' || node.type === typeFilter),
+    [nodes, typeFilter, focusIds],
   );
 
   const visibleNodeIds = useMemo(
@@ -624,6 +626,12 @@ export default function KnowledgePage() {
       ),
     [relations, visibleNodeIds],
   );
+
+  const positionById = useMemo(() => new Map(
+    calculateLayout(visibleNodes, visibleRelations).map((item) => [item.id, item]),
+  ), [visibleNodes, visibleRelations]);
+
+  const visibleMatchCount = visibleNodes.filter((node) => matchingIds.has(node.id)).length;
 
   const selectedNode = selectedNodeId
     ? nodeById.get(selectedNodeId)
@@ -669,9 +677,9 @@ export default function KnowledgePage() {
       const sources = Array.isArray(payload.sources)
         ? payload.sources.filter(isRecord).map((source) => ({
             documentId: stringValue(source.documentId),
-            documentName: stringValue(source.documentName, 'Untitled document'),
+            documentName: repairDisplayText(stringValue(source.documentName, 'Untitled document')),
             documentType: stringValue(source.documentType),
-            relationship: stringValue(source.relationship),
+            relationship: repairDisplayText(stringValue(source.relationship)),
             evidenceType: stringValue(source.evidenceType),
             chunkId: typeof source.chunkId === 'string' ? source.chunkId : null,
             chunkIndex:
@@ -679,7 +687,7 @@ export default function KnowledgePage() {
               typeof source.chunkIndex === 'string'
                 ? source.chunkIndex
                 : null,
-            excerpt: typeof source.excerpt === 'string' ? source.excerpt : null,
+            excerpt: typeof source.excerpt === 'string' ? repairDisplayText(source.excerpt) : null,
             confidence:
               typeof source.confidence === 'number'
                 ? source.confidence
@@ -722,363 +730,44 @@ export default function KnowledgePage() {
     return nodeById.get(relatedId)?.name ?? 'Unknown node';
   };
 
-  const connectedEntityCount = nodes.filter(
-    (node) => (degreeById.get(node.id) ?? 0) > 0,
-  ).length;
-
   return (
     <div className="mx-auto max-w-[1800px] space-y-6">
-      {/* Page heading */}
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-        <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-indigo-500/10 p-3">
-            <Network className="h-6 w-6 text-indigo-500" />
-          </div>
-
-          <div>
-            <h1 className="text-2xl font-bold">
-              Knowledge Graph
-            </h1>
-
-            <p className="mt-1 text-sm text-muted-foreground">
-              Explore relationships across your organisation.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm transition hover:bg-muted disabled:opacity-50"
-          >
-            <RefreshCw
-              className={`h-4 w-4 ${
-                isFetching ? 'animate-spin' : ''
-              }`}
-            />
-            Refresh
+      <PageHeader
+        hero
+        icon={Network}
+        title="Knowledge Graph"
+        description="Trace how people, projects, and company knowledge connect. Inspect the evidence behind each entity."
+        actions={<>
+          <a href="#entity-explorer" className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground shadow-glow-primary transition hover:bg-primary/90 disabled:opacity-60">Explore network <ArrowDown className="h-4 w-4" /></a>
+          <button type="button" onClick={() => void Promise.all([refetch(), analyticsQuery.refetch()])} disabled={isFetching || analyticsQuery.isFetching} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card/60 px-3.5 text-sm font-medium transition hover:bg-muted disabled:opacity-60">
+            <RefreshCw className={`h-4 w-4 ${isFetching || analyticsQuery.isFetching ? 'animate-spin' : ''}`} /> Refresh
           </button>
-
-          <button
-            type="button"
-            onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending}
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-600 disabled:opacity-50"
-          >
-            {syncMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Database className="h-4 w-4" />
-            )}
-            Sync from documents
+          <button type="button" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card/60 px-3.5 text-sm font-medium transition hover:bg-muted disabled:opacity-60">
+            {syncMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />} Sync documents
           </button>
-        </div>
-      </div>
+        </>}
+      />
 
-      {/* Overview cards */}
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">
-            Total nodes
-          </p>
-
-          <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? 'Ã¢â‚¬â€' : nodes.length}
-          </p>
-
-          <p className="text-xs text-muted-foreground">
-            Knowledge entities
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">
-            Relationships
-          </p>
-
-          <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? 'Ã¢â‚¬â€' : relations.length}
-          </p>
-
-          <p className="text-xs text-muted-foreground">
-            Recorded connections
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">
-            Entity types
-          </p>
-
-          <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? 'Ã¢â‚¬â€' : nodeTypes.length}
-          </p>
-
-          <p className="text-xs text-muted-foreground">
-            Categories in your graph
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">
-            Connected entities
-          </p>
-
-          <p className="mt-1 text-2xl font-bold tabular-nums">
-            {isLoading ? 'Ã¢â‚¬â€' : connectedEntityCount}
-          </p>
-
-          <p className="text-xs text-muted-foreground">
-            Nodes with relationships
-          </p>
-        </div>
-      </div>
-
-      {/* Knowledge intelligence analytics */}
-      <section className="space-y-4 rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
-        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-          <div className="flex items-center gap-3">
-            <span className="rounded-xl bg-brand-500/10 p-2.5 text-brand-500">
-              <Activity className="h-5 w-5" />
-            </span>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-brand-500">
-                Intelligence metrics
-              </p>
-              <h2 className="mt-0.5 text-lg font-semibold">
-                Knowledge health
-              </h2>
+      <section aria-label="Workspace graph totals" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {[
+          { label: 'Entities', value: analytics?.entities, icon: Network, color: 'bg-violet-500/10 text-violet-600 dark:text-violet-300', href: '#entity-explorer' },
+          { label: 'Relationships', value: analytics?.relationships, icon: GitBranch, color: 'bg-sky-500/10 text-sky-700 dark:text-sky-300', href: '#entity-explorer' },
+          { label: 'Evidence records', value: analytics?.evidenceRecords, icon: FileCheck2, color: 'bg-teal-500/10 text-teal-700 dark:text-teal-300', href: '#evidence-health' },
+          { label: 'Disputed evidence', value: analytics?.disputedEvidence, icon: ShieldAlert, color: 'bg-amber-500/10 text-amber-700 dark:text-amber-300', href: '#claim-review' },
+        ].map(({ label, value, icon: Icon, color, href }) => (
+          <a href={href} key={label} className="group rounded-2xl border border-border bg-card p-4 transition hover:border-brand-500/45">
+            <div className="flex items-center justify-between gap-2">
+              <span className={`rounded-lg p-2 ${color}`}><Icon className="h-4 w-4" /></span>
+              <ArrowUpRight className="h-4 w-4 text-muted-foreground group-hover:text-brand-500" />
             </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => void analyticsQuery.refetch()}
-            disabled={analyticsQuery.isFetching}
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium transition hover:bg-muted disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${analyticsQuery.isFetching ? 'animate-spin' : ''}`} />
-            Refresh analytics
-          </button>
-        </div>
-
-        {analyticsQuery.isLoading ? (
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-            {Array.from({ length: 5 }).map((_, index) => (
-              <div
-                key={index}
-                className="h-24 animate-pulse rounded-xl bg-muted/60"
-              />
-            ))}
-          </div>
-        ) : analyticsQuery.isError ? (
-          <div className="rounded-xl border border-rose-500/20 bg-rose-500/[0.04] p-4">
-            <p className="text-sm font-medium text-rose-600">
-              Knowledge analytics unavailable
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {analyticsQuery.error.message}
-            </p>
-            <button
-              type="button"
-              onClick={() => void analyticsQuery.refetch()}
-              className="mt-3 rounded-lg bg-brand-500 px-3 py-2 text-xs font-semibold text-white"
-            >
-              Retry
-            </button>
-          </div>
-        ) : analytics ? (
-          <>
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-              {[
-                {
-                  label: 'Indexed documents',
-                  value: analytics.indexedDocuments,
-                  detail: 'Accessible documents',
-                  icon: FileCheck2,
-                },
-                {
-                  label: 'Entities',
-                  value: analytics.entities,
-                  detail: 'Evidence-supported nodes',
-                  icon: Network,
-                },
-                {
-                  label: 'Relationships',
-                  value: analytics.relationships,
-                  detail: 'Supported connections',
-                  icon: GitBranch,
-                },
-                {
-                  label: 'Evidence records',
-                  value: analytics.evidenceRecords,
-                  detail: `${analytics.activeEvidence} active`,
-                  icon: Database,
-                },
-                {
-                  label: 'Extraction coverage',
-                  value: `${analytics.extractionCoveragePercent.toFixed(1)}%`,
-                  detail: `${analytics.completedExtractions} completed`,
-                  icon: Activity,
-                },
-              ].map((metric) => {
-                const MetricIcon = metric.icon;
-
-                return (
-                  <div
-                    key={metric.label}
-                    className="min-w-0 rounded-xl border border-border bg-background p-3 sm:p-4"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-medium text-muted-foreground">
-                        {metric.label}
-                      </span>
-                      <MetricIcon className="h-4 w-4 shrink-0 text-brand-500" />
-                    </div>
-                    <p className="mt-3 break-words text-2xl font-semibold tabular-nums">
-                      {metric.value}
-                    </p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">
-                      {metric.detail}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="rounded-xl border border-border bg-background p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">
-                    Entity distribution
-                  </h3>
-                  <span className="text-[10px] text-muted-foreground">
-                    {analytics.entityAliases} registered aliases
-                  </span>
-                </div>
-
-                {analytics.entityTypes.length === 0 ? (
-                  <p className="mt-4 text-xs text-muted-foreground">
-                    No evidence-supported entities are available yet.
-                  </p>
-                ) : (
-                  <div className="mt-4 space-y-3">
-                    {analytics.entityTypes.slice(0, 8).map((item) => {
-                      const maxCount = Math.max(
-                        1,
-                        ...analytics.entityTypes.map((entry) => entry.count),
-                      );
-
-                      const width = Math.max(
-                        2,
-                        (item.count / maxCount) * 100,
-                      );
-
-                      return (
-                        <div key={item.type}>
-                          <div className="mb-1 flex items-center justify-between gap-3">
-                            <span className="text-xs capitalize text-muted-foreground">
-                              {item.type}
-                            </span>
-                            <span className="text-xs font-semibold tabular-nums">
-                              {item.count}
-                            </span>
-                          </div>
-                          <div className="h-2 overflow-hidden rounded-full bg-muted">
-                            <div
-                              className="h-full rounded-full bg-brand-500 transition-all"
-                              style={{ width: `${width}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-xl border border-border bg-background p-4">
-                <h3 className="text-sm font-semibold">
-                  Extraction and evidence health
-                </h3>
-
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <div className="rounded-lg bg-muted/50 p-3">
-                    <p className="text-[10px] text-muted-foreground">
-                      Pending or processing
-                    </p>
-                    <p className="mt-1 text-xl font-semibold tabular-nums">
-                      {analytics.pendingExtractions}
-                    </p>
-                  </div>
-
-                  <div className="rounded-lg bg-muted/50 p-3">
-                    <p className="text-[10px] text-muted-foreground">
-                      Failed extractions
-                    </p>
-                    <p className="mt-1 text-xl font-semibold tabular-nums">
-                      {analytics.failedExtractions}
-                    </p>
-                  </div>
-
-                  <div className="rounded-lg bg-muted/50 p-3">
-                    <p className="text-[10px] text-muted-foreground">
-                      Disputed evidence
-                    </p>
-                    <p className="mt-1 text-xl font-semibold tabular-nums">
-                      {analytics.disputedEvidence}
-                    </p>
-                  </div>
-
-                  <div className="rounded-lg bg-muted/50 p-3">
-                    <p className="text-[10px] text-muted-foreground">
-                      Superseded evidence
-                    </p>
-                    <p className="mt-1 text-xl font-semibold tabular-nums">
-                      {analytics.supersededEvidence}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 border-t border-border pt-3">
-                  <p className="text-xs font-medium">
-                    Knowledge freshness
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-4">
-                    <div>
-                      <p className="text-lg font-semibold tabular-nums">
-                        {analytics.evidenceLast7Days}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">
-                        Observed in 7 days
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-lg font-semibold tabular-nums">
-                        {analytics.evidenceLast30Days}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">
-                        Observed in 30 days
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <p className="flex items-start gap-2 text-[10px] leading-5 text-muted-foreground">
-              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              Metrics reflect evidence and documents accessible to the current account. Extraction coverage measures completed extraction runs against accessible indexed documents; it does not measure factual correctness.
-            </p>
-          </>
-        ) : null}
+            <p className="mt-3 text-2xl font-semibold tabular-nums">{value?.toLocaleString() ?? '—'}</p>
+            <p className="mt-1 text-xs font-medium text-muted-foreground sm:text-sm">{label}</p>
+          </a>
+        ))}
       </section>
-      <KnowledgeConflictPanel />
 
-      {/* Search and filtering */}
-      <section className="space-y-4 rounded-xl border border-border bg-card p-4">
+      <section id="entity-explorer" className="scroll-mt-5 space-y-4 rounded-2xl border border-border bg-card p-4">
+        <h2 className="text-lg font-semibold">Entity explorer</h2>
         <div className="flex flex-col gap-3 sm:flex-row">
           <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -1086,7 +775,7 @@ export default function KnowledgePage() {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search people, projects, documents or goalsÃ¢â‚¬Â¦"
+              placeholder="Search people, projects, documents or goals…"
               aria-label="Search graph nodes"
               className="w-full rounded-lg border border-border bg-background py-2.5 pl-9 pr-10 text-sm outline-none focus:ring-2 focus:ring-brand-500"
             />
@@ -1112,6 +801,7 @@ export default function KnowledgePage() {
               onChange={(event) => {
                 setTypeFilter(event.target.value);
                 setSelectedNodeId(null);
+                setFocus(false);
               }}
               className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-brand-500 sm:w-56"
             >
@@ -1140,6 +830,7 @@ export default function KnowledgePage() {
                   typeFilter === type ? 'all' : type,
                 );
                 setSelectedNodeId(null);
+                setFocus(false);
               }}
               className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition ${
                 typeFilter === type
@@ -1165,7 +856,7 @@ export default function KnowledgePage() {
           <div className="text-center">
             <Loader2 className="mx-auto h-8 w-8 animate-spin text-brand-500" />
             <p className="mt-3 text-sm text-muted-foreground">
-              Loading your knowledge graphÃ¢â‚¬Â¦
+              Loading your knowledge graph…
             </p>
           </div>
         </div>
@@ -1202,8 +893,7 @@ export default function KnowledgePage() {
           </h2>
 
           <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
-            No graph nodes were returned for the current organisation.
-            Check the active account or sync your documents if appropriate.
+            Sync indexed documents to populate the graph with entities and relationships.
           </p>
         </div>
       ) : (
@@ -1217,27 +907,33 @@ export default function KnowledgePage() {
                 </h2>
 
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {visibleNodes.length} nodes Ã‚Â· {visibleRelations.length}{' '}
+                  {visibleNodes.length} nodes · {visibleRelations.length}{' '}
                   relationships
                 </p>
               </div>
 
-              <span className="text-xs text-muted-foreground">
-                Select a node to inspect its connections
-              </span>
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <button type="button" aria-pressed={focus} disabled={!selectedNodeId} onClick={() => { setFocus(!focus); setZoom(1); }} className="rounded-md border border-border px-2 py-1.5 hover:bg-muted disabled:opacity-45">
+                  {focus ? 'Show all connections' : 'Focus on connections'}
+                </button>
+                <button type="button" aria-label="Zoom out" disabled={zoom <= 1} onClick={() => setZoom(Math.max(1, zoom - 0.25))} className="rounded-md border border-border p-1.5 hover:bg-muted disabled:opacity-45"><Minus className="h-3.5 w-3.5" /></button>
+                <button type="button" aria-label="Reset zoom" onClick={() => setZoom(1)} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1.5 tabular-nums hover:bg-muted"><Maximize2 className="h-3.5 w-3.5" /> {Math.round(zoom * 100)}%</button>
+                <button type="button" aria-label="Zoom in" disabled={zoom >= 2} onClick={() => setZoom(Math.min(2, zoom + 0.25))} className="rounded-md border border-border p-1.5 hover:bg-muted disabled:opacity-45"><Plus className="h-3.5 w-3.5" /></button>
+              </div>
             </div>
 
             {visibleNodes.length === 0 ? (
               <div className="px-6 py-16 text-center text-sm text-muted-foreground">
-                No nodes match the selected entity type.
+                No nodes match these filters.
               </div>
             ) : (
-              <div className="overflow-auto">
+              <div className="max-h-[72vh] overflow-auto bg-[radial-gradient(circle,hsl(var(--muted-foreground)/.18)_1px,transparent_1px)] bg-[size:19px_19px]">
                 <svg
                   viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-                  role="img"
+                  role="group"
                   aria-label="Interactive network diagram of knowledge nodes and their relationships"
-                  className="block h-auto w-full min-w-[1260px]"
+                  className="block h-auto min-w-[720px]"
+                  style={{ width: zoom * 100 + '%', minWidth: 720 * zoom }}
                 >
                   <defs>
                     <marker
@@ -1323,7 +1019,7 @@ export default function KnowledgePage() {
                           <title>
                             {nodeById.get(edge.sourceId)?.name ??
                               edge.sourceId}{' '}
-                            Ã¢â‚¬â€ {edge.relationship} Ã¢â€ â€™{' '}
+                            — {edge.relationship} →{' '}
                             {nodeById.get(edge.targetId)?.name ??
                               edge.targetId}
                           </title>
@@ -1391,10 +1087,8 @@ export default function KnowledgePage() {
                               : 0.3
                             : 1;
 
-                      const label =
-                        node.name.length > 20
-                          ? `${node.name.slice(0, 18)}Ã¢â‚¬Â¦`
-                          : node.name;
+                      const labelChars = Array.from(node.name);
+                      const label = labelChars.length > 22 ? labelChars.slice(0, 21).join('') + '…' : node.name;
 
                       const labelOnRight =
                         position.x < WIDTH / 2;
@@ -1422,11 +1116,11 @@ export default function KnowledgePage() {
                               setSelectedNodeId(node.id);
                             }
                           }}
+                          className="focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-500"
                           style={{
                             cursor: 'pointer',
                             opacity,
                             transition: 'opacity 160ms ease',
-                            outline: 'none',
                           }}
                         >
                           {isSelected && (
@@ -1477,10 +1171,10 @@ export default function KnowledgePage() {
                           </text>
 
                           <title>
-                            {node.name} ({node.type}) Ã¢â‚¬â€ {degree}{' '}
+                            {node.name} ({node.type}) — {degree}{' '}
                             connections
                             {node.description
-                              ? ` Ã¢â‚¬â€ ${node.description}`
+                              ? ` — ${node.description}`
                               : ''}
                           </title>
                         </g>
@@ -1499,8 +1193,8 @@ export default function KnowledgePage() {
 
               {hasSearch && (
                 <p className="text-xs text-muted-foreground">
-                  {matchingIds.size} matching node
-                  {matchingIds.size === 1 ? '' : 's'} highlighted
+                  {visibleMatchCount} matching node
+                  {visibleMatchCount === 1 ? '' : 's'} highlighted
                 </p>
               )}
             </div>
@@ -1635,8 +1329,8 @@ export default function KnowledgePage() {
 
                                 <span className="mt-1 block text-xs capitalize text-muted-foreground">
                                   {isOutgoing
-                                    ? `Outgoing Ã‚Â· ${readableRelationship(edge.relationship)}`
-                                    : `Incoming Ã‚Â· ${readableRelationship(edge.relationship)}`}
+                                    ? `Outgoing · ${readableRelationship(edge.relationship)}`
+                                    : `Incoming · ${readableRelationship(edge.relationship)}`}
                                 </span>
                               </span>
 
@@ -1795,8 +1489,8 @@ export default function KnowledgePage() {
 
                           <dd className="break-words text-sm">
                             {typeof value === 'object'
-                              ? JSON.stringify(value)
-                              : String(value ?? 'Ã¢â‚¬â€')}
+                              ? repairDisplayText(JSON.stringify(value))
+                              : repairDisplayText(String(value ?? '—'))}
                           </dd>
                         </div>
                       ))}
@@ -1805,7 +1499,7 @@ export default function KnowledgePage() {
                 )}
 
                 <div>
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <h3 className="mb-2 text-xs font-semibold  text-muted-foreground">
                     Node ID
                   </h3>
 
@@ -1818,6 +1512,247 @@ export default function KnowledgePage() {
           </aside>
         </div>
       )}
+      {/* Knowledge intelligence analytics */}
+      <section id="evidence-health" className="scroll-mt-5 space-y-4 rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-3">
+            <span className="rounded-xl bg-brand-500/10 p-2.5 text-brand-500">
+              <Activity className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-xs font-semibold  text-brand-500">
+                Intelligence metrics
+              </p>
+              <h2 className="mt-0.5 text-lg font-semibold">
+                Knowledge health
+              </h2>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void analyticsQuery.refetch()}
+            disabled={analyticsQuery.isFetching}
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium transition hover:bg-muted disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${analyticsQuery.isFetching ? 'animate-spin' : ''}`} />
+            Refresh analytics
+          </button>
+        </div>
+
+        {analyticsQuery.isLoading ? (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div
+                key={index}
+                className="h-24 animate-pulse rounded-xl bg-muted/60"
+              />
+            ))}
+          </div>
+        ) : analyticsQuery.isError ? (
+          <div className="rounded-xl border border-rose-500/20 bg-rose-500/[0.04] p-4">
+            <p className="text-sm font-medium text-rose-600">
+              Knowledge analytics unavailable
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {analyticsQuery.error.message}
+            </p>
+            <button
+              type="button"
+              onClick={() => void analyticsQuery.refetch()}
+              className="mt-3 rounded-lg bg-brand-500 px-3 py-2 text-xs font-semibold text-white"
+            >
+              Retry
+            </button>
+          </div>
+        ) : analytics ? (
+          <>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+              {[
+                {
+                  label: 'Indexed documents',
+                  value: analytics.indexedDocuments,
+                  detail: 'Accessible documents',
+                  icon: FileCheck2,
+                },
+                {
+                  label: 'Entities',
+                  value: analytics.entities,
+                  detail: 'Evidence-supported nodes',
+                  icon: Network,
+                },
+                {
+                  label: 'Relationships',
+                  value: analytics.relationships,
+                  detail: 'Supported connections',
+                  icon: GitBranch,
+                },
+                {
+                  label: 'Evidence records',
+                  value: analytics.evidenceRecords,
+                  detail: `${analytics.activeEvidence} active`,
+                  icon: Database,
+                },
+                {
+                  label: 'Extraction coverage',
+                  value: `${analytics.extractionCoveragePercent.toFixed(1)}%`,
+                  detail: `${analytics.completedExtractions} completed`,
+                  icon: Activity,
+                },
+              ].map((metric) => {
+                const MetricIcon = metric.icon;
+
+                return (
+                  <div
+                    key={metric.label}
+                    className="min-w-0 rounded-xl border border-border bg-background p-3 sm:p-4"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        {metric.label}
+                      </span>
+                      <MetricIcon className="h-4 w-4 shrink-0 text-brand-500" />
+                    </div>
+                    <p className="mt-3 break-words text-2xl font-semibold tabular-nums">
+                      {metric.value}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {metric.detail}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-border bg-background p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">
+                    Entity distribution
+                  </h3>
+                  <span className="text-xs text-muted-foreground">
+                    {analytics.entityAliases} registered aliases
+                  </span>
+                </div>
+
+                {analytics.entityTypes.length === 0 ? (
+                  <p className="mt-4 text-xs text-muted-foreground">
+                    No evidence-supported entities are available yet.
+                  </p>
+                ) : (
+                  <div className="mt-4 space-y-3">
+                    {analytics.entityTypes.slice(0, 8).map((item) => {
+                      const maxCount = Math.max(
+                        1,
+                        ...analytics.entityTypes.map((entry) => entry.count),
+                      );
+
+                      const width = Math.max(
+                        2,
+                        (item.count / maxCount) * 100,
+                      );
+
+                      return (
+                        <div key={item.type}>
+                          <div className="mb-1 flex items-center justify-between gap-3">
+                            <span className="text-xs capitalize text-muted-foreground">
+                              {item.type}
+                            </span>
+                            <span className="text-xs font-semibold tabular-nums">
+                              {item.count}
+                            </span>
+                          </div>
+                          <div className="h-2 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-brand-500 transition-all"
+                              style={{ width: `${width}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-border bg-background p-4">
+                <h3 className="text-sm font-semibold">
+                  Extraction and evidence health
+                </h3>
+
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Pending or processing
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.pendingExtractions}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Failed extractions
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.failedExtractions}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Disputed evidence
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.disputedEvidence}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg bg-muted/50 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Superseded evidence
+                    </p>
+                    <p className="mt-1 text-xl font-semibold tabular-nums">
+                      {analytics.supersededEvidence}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="text-xs font-medium">
+                    Knowledge freshness
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-4">
+                    <div>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {analytics.evidenceLast7Days}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Observed in 7 days
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold tabular-nums">
+                        {analytics.evidenceLast30Days}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Observed in 30 days
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <p className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Metrics reflect evidence and documents accessible to the current account. Extraction coverage measures completed extraction runs against accessible indexed documents; it does not measure factual correctness.
+            </p>
+          </>
+        ) : null}
+      </section>
+      <div id="claim-review" className="scroll-mt-5"><KnowledgeConflictPanel /></div>
+
     </div>
   );
 }

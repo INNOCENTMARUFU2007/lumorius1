@@ -20,14 +20,15 @@ const mockOpenAI = {
 
 jest.mock('openai', () => ({
   __esModule: true,
-  default: jest.fn().mockImplementation(() => mockOpenAI),
+  default: Object.assign(jest.fn().mockImplementation(() => mockOpenAI), {
+    APIError: class extends Error { constructor(public status: number, message: string) { super(message); } },
+  }),
 }));
 
 const mockConfigService = {
   get: jest.fn((key: string) => {
     const config: Record<string, string | number> = {
-      'ai.openai.apiKey': 'sk-test-key',
-      'ai.openrouter.apiKey': 'sk-or-test-key',
+      'ai.openai.apiKey': 'sk-test-0123456789abcdefghijklmnop',
       'ai.openrouter.baseURL': 'https://openrouter.ai/api/v1',
       'ai.openrouter.model': 'openai/gpt-4o-mini',
       'ai.defaultProvider': 'openai',
@@ -92,7 +93,16 @@ describe('AiService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AiService,
-        { provide: DatabaseService,  useValue: db },
+        {
+          provide: DatabaseService,
+          useValue: {
+            ...db,
+            query: (sql: string, params: unknown[]) =>
+              sql.includes('reserve_lumorius_ai_tokens')
+                ? Promise.resolve({ rows: [{ budget: -1 }] })
+                : db.query(sql, params),
+          },
+        },
         { provide: ConfigService,    useValue: mockConfigService },
       ],
     }).compile();
@@ -113,7 +123,7 @@ describe('AiService', () => {
 
       expect(mockOpenAI.chat.completions.create).toHaveBeenCalledTimes(1);
       const call = mockOpenAI.chat.completions.create.mock.calls[0][0];
-      expect(call.model).toBe('gpt-4o');
+      expect(call.model).toBe('gpt-4.1'); // only the approved OpenAI model is used, even if another is requested
       expect(call.messages.some((m: any) => m.content.includes('What is Lumorius?'))).toBe(true);
       expect(result).toBeDefined();
     });
@@ -136,32 +146,20 @@ describe('AiService', () => {
       expect(contents).toContain('First answer');
     });
 
-    it('routes chat through OpenRouter when selected', async () => {
-      mockOpenAI.chat.completions.create.mockResolvedValue(mockChatResponse);
-
-      const result = await service.chat(
-        [{ role: 'user', content: 'OpenRouter test message' }],
-        {
-          provider: 'openrouter',
-          organizationId: 'org-1',
-          userId: 'user-1',
-        },
-      );
-
-      expect(OpenAI).toHaveBeenCalledWith(
-        expect.objectContaining({
-          apiKey: 'sk-or-test-key',
-          baseURL: 'https://openrouter.ai/api/v1',
-        }),
-      );
-
-      const call = mockOpenAI.chat.completions.create.mock.calls[0][0];
-      expect(call.model).toBe('openai/gpt-4o-mini');
-      expect(call.messages).toEqual([
-        { role: 'user', content: 'OpenRouter test message' },
-      ]);
-      expect(result).toBe(mockChatResponse.choices[0].message.content);
+    it('rejects providers other than OpenAI and Anthropic', async () => {
+      await expect(
+        service.chat([{ role: 'user', content: 'test' }], { provider: 'openrouter', organizationId: 'org-1', userId: 'user-1' }),
+      ).rejects.toThrow('AI provider must be');
+      expect(mockOpenAI.chat.completions.create).not.toHaveBeenCalled();
     });
+    it('explains an empty provider balance instead of a generic failure', async () => {
+      const { APIError } = (jest.requireMock('openai') as { default: { APIError: new (status: number, message: string) => Error } }).default;
+      mockOpenAI.chat.completions.create.mockRejectedValue(new APIError(429, 'You have no credits remaining. Add credits to continue.'));
+      await expect(
+        service.chat([{ role: 'user', content: 'test' }], { userId: 'u1', organizationId: 'o1' }),
+      ).rejects.toMatchObject({ response: { code: 'provider_no_credit' } });
+    });
+
     it('handles OpenAI API error gracefully', async () => {
       mockOpenAI.chat.completions.create.mockRejectedValue(
         new Error('OpenAI API rate limit exceeded'),
@@ -188,24 +186,19 @@ describe('AiService', () => {
       expect(result).toHaveLength(1536);
     });
 
-    it('uses the OpenRouter embedding model when configured', async () => {
+    it('always uses OpenAI embeddings, whatever the chat provider', async () => {
       mockOpenAI.embeddings.create.mockResolvedValue(mockEmbeddingResponse);
       const previousProvider = process.env.AI_EMBEDDING_PROVIDER;
-      process.env.AI_EMBEDDING_PROVIDER = 'openrouter';
-
+      process.env.AI_EMBEDDING_PROVIDER = 'anthropic';
       try {
-        await service.createEmbedding('OpenRouter embedding test');
-
+        await service.createEmbedding('embedding provider test');
         expect(mockOpenAI.embeddings.create).toHaveBeenCalledWith({
-          model: 'openai/text-embedding-3-small',
-          input: 'OpenRouter embedding test',
+          model: 'text-embedding-3-small',
+          input: 'embedding provider test',
         });
       } finally {
-        if (previousProvider === undefined) {
-          delete process.env.AI_EMBEDDING_PROVIDER;
-        } else {
-          process.env.AI_EMBEDDING_PROVIDER = previousProvider;
-        }
+        if (previousProvider === undefined) delete process.env.AI_EMBEDDING_PROVIDER;
+        else process.env.AI_EMBEDDING_PROVIDER = previousProvider;
       }
     });
     it('truncates very long text before embedding', async () => {

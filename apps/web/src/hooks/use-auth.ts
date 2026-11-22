@@ -19,8 +19,10 @@ export function useAuth() {
   const loginMutation = useMutation({
     mutationFn: ({ email, password, mfaCode }: { email: string; password: string; mfaCode?: string }) =>
       login(email, password, mfaCode),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       if (!data.mfaRequired) {
+        await queryClient.cancelQueries();
+        queryClient.clear();
         queryClient.setQueryData(['auth', 'me'], data.user);
         router.replace(getAuthDestination(data.user));
       }
@@ -29,7 +31,9 @@ export function useAuth() {
 
   const registerMutation = useMutation({
     mutationFn: register,
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
+      await queryClient.cancelQueries();
+      queryClient.clear();
       queryClient.setQueryData(['auth', 'me'], data.user);
       router.replace(getAuthDestination(data.user));
     },

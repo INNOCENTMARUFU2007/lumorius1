@@ -560,7 +560,7 @@ export default function TeamPage() {
                       {member.email}
                     </p>
                     <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                      <code className="min-w-0 break-all text-[10px] leading-4 text-muted-foreground">
+                      <code className="min-w-0 break-all text-xs leading-4 text-muted-foreground">
                         ID: {member.user_id}
                       </code>
                       <button

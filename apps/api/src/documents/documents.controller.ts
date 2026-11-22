@@ -1,4 +1,5 @@
-﻿
+﻿import { RequiresModule } from '../billing/entitlements';
+
 import {
   Controller,
   Get,
@@ -20,6 +21,8 @@ import {
   ApiConsumes,
 } from '@nestjs/swagger';
 import { DocumentsService } from './documents.service';
+
+type SourceFilters = { type?: string; tag?: string; createdAfter?: string; myHistory?: boolean };
 import {
   CurrentUser,
   JwtPayload,
@@ -28,6 +31,7 @@ import {
 @ApiTags('documents')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
+@RequiresModule('core')
 @Controller('documents')
 export class DocumentsController {
   constructor(
@@ -107,6 +111,7 @@ export class DocumentsController {
     });
   }
 
+  @Get(':id/download')
   getDownloadUrl(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.documentsService.getDownloadUrl(id, user.organizationId, {
       userId: user.sub,
@@ -114,6 +119,7 @@ export class DocumentsController {
     });
   }
 
+  @Delete(':id')
   delete(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.documentsService.delete(id, user.organizationId, {
       userId: user.sub,
@@ -124,12 +130,16 @@ export class DocumentsController {
   @Post('search')
   search(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { query: string; documentIds?: string[]; topK?: number; teamId?: string },
+    @Body() body: SourceFilters & { query: string; documentIds?: string[]; topK?: number; teamId?: string },
   ) {
     return this.documentsService.search(user.organizationId, body.query, {
       documentIds: body.documentIds,
       topK: body.topK,
       teamId: body.teamId,
+      type: body.type,
+      tag: body.tag,
+      createdAfter: body.createdAfter,
+      myHistory: body.myHistory,
       userId: user.sub,
       role: user.role,
     });
@@ -138,11 +148,23 @@ export class DocumentsController {
   @Post('ask')
   ask(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { question: string; documentIds?: string[]; teamId?: string },
+    @Body() body: SourceFilters & {
+      question: string;
+      documentIds?: string[];
+      teamId?: string;
+      allowGeneralAnswer?: boolean;
+      history?: Array<{ question?: unknown; answer?: unknown }>;
+    },
   ) {
     return this.documentsService.ask(user.organizationId, body.question, {
+      allowGeneralAnswer: body.allowGeneralAnswer === true,
       documentIds: body.documentIds,
       teamId: body.teamId,
+      type: body.type,
+      tag: body.tag,
+      createdAfter: body.createdAfter,
+      myHistory: body.myHistory,
+      history: Array.isArray(body.history) ? body.history : undefined,
       userId: user.sub,
       role: user.role,
     });

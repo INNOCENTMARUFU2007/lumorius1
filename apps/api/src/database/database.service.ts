@@ -1,5 +1,9 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { Pool, PoolClient, QueryConfig, QueryResult } from 'pg';
+import { Pool, PoolClient, QueryConfig, QueryResult, QueryResultRow } from 'pg';
+
+export interface SqlRunner {
+  query<T extends QueryResultRow = Record<string, unknown>>(statement: string, params?: unknown[]): Promise<QueryResult<T>>;
+}
 
 @Injectable()
 export class DatabaseService {

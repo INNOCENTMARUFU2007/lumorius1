@@ -837,6 +837,7 @@ export class KnowledgeService {
             documentId: String(doc.id),
             organizationId,
             documentName: String(doc.name ?? ''),
+            trigger: 'manual',
           });
           processed += 1;
         } catch {

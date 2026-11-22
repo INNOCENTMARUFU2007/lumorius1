@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import CashForecast from './cash-forecast';
+
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
   AlertTriangle,
-  BadgeCheck,
-  BarChart3,
+  ArrowDownRight,
+  ArrowUpRight,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -19,10 +21,10 @@ import {
   FileSpreadsheet,
   FileText,
   Filter,
-  Gauge,
   Layers3,
   Loader2,
   LockKeyhole,
+  Minus,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -32,17 +34,22 @@ import {
   Zap,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import { toast } from 'sonner';
+import dynamic from 'next/dynamic';
 import api from '@/lib/api';
+import Link from 'next/link';
+import { useAuth } from '@/hooks/use-auth';
+import { AreaSparkline } from '@/components/ui/area-sparkline';
+import type { SparkTone } from '@/components/ui/area-sparkline';
+import { ImportMapping, isMapped } from './import-mapping';
+import { KpiScorecard } from '@/components/kpi-scorecard';
+import type { MonthlySeries } from './revenue-analytics';
+
+// ECharts loads only when the Financials view renders.
+const RevenueAnalytics = dynamic(() => import('./revenue-analytics'), {
+  ssr: false,
+  loading: () => <div aria-hidden="true" className="lm-skeleton h-[480px] rounded-2xl" />,
+});
 
 type AnyRecord = Record<string, unknown>;
 
@@ -95,11 +102,13 @@ type ExecutiveDashboard = {
     periodEnd: string;
   }>;
   assumptions: string[];
+  trendWindow?: { start: string; end: string };
+  monthlySeries?: MonthlySeries[];
 };
 
 type ImportSummary = {
   id: string;
-  dataset_type: 'transactions' | 'contracts' | 'pipeline';
+  dataset_type: 'transactions' | 'contracts' | 'pipeline' | 'campaigns' | 'cash';
   status: string;
   file_name: string;
   row_count: number;
@@ -153,14 +162,14 @@ type TargetRecord = {
 
 type UploadResult = {
   id: string;
-  datasetType: 'transactions' | 'contracts' | 'pipeline';
+  datasetType: 'transactions' | 'contracts' | 'pipeline' | 'campaigns' | 'cash';
   status: string;
   fileName: string;
   headers: string[];
   rowCount: number;
 };
 
-type DatasetType = 'transactions' | 'contracts' | 'pipeline';
+type DatasetType = 'transactions' | 'contracts' | 'pipeline' | 'campaigns' | 'cash';
 
 type TargetForm = {
   metricKey: string;
@@ -175,6 +184,8 @@ type TargetForm = {
 };
 
 const DATASET_FIELDS: Record<DatasetType, { required: string[]; optional: string[] }> = {
+  cash: { required: ['report_month','currency','opening_balance','inflows','outflows','closing_balance'], optional: [] },
+  campaigns: { required: ['report_date','campaign','channel','currency','spend'], optional: ['segment','impressions','clicks','leads','customers','attributed_revenue','attribution_model','budget'] },
   transactions: {
     required: ['transaction_date', 'transaction_type', 'amount', 'currency'],
     optional: ['customer_key', 'external_reference', 'description'],
@@ -256,8 +267,8 @@ function formatMoney(value: number, currency: string): string {
 
 function formatMetricValue(metric: ExecutiveMetric): string {
   if (metric.status === 'unavailable' || metric.value === null || !Number.isFinite(metric.value)) return 'Unavailable';
-  if (metric.currency) return formatMoney(metric.value, metric.currency);
   if (metric.unit === '%') return `${formatNumber(metric.value)}%`;
+  if (metric.currency) return formatMoney(metric.value, metric.currency);
   if (metric.unit === 'seconds') return `${formatNumber(metric.value)} sec`;
   if (!metric.unit || metric.unit === 'currency') return formatNumber(metric.value);
   return `${formatNumber(metric.value)} ${metric.unit}`;
@@ -271,27 +282,27 @@ function formatCompactDate(value?: string | null): string {
 }
 
 function dateInputValue(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return date.toISOString().slice(0, 10);
 }
 
-function initialPeriod() {
+function initialPeriod(days = 30) {
   const end = new Date();
   const start = new Date(end);
-  start.setDate(start.getDate() - 29);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
   return { startDate: dateInputValue(start), endDate: dateInputValue(end) };
 }
 
 function statusClasses(status: string): string {
   if (status === 'actual' || status === 'committed' || status === 'on_track') {
-    return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300';
+    return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-700 dark:text-emerald-300';
   }
   if (status === 'estimated' || status === 'validated' || status === 'mapping_required') {
-    return 'border-amber-400/20 bg-amber-400/10 text-amber-300';
+    return 'border-amber-400/20 bg-amber-400/10 text-amber-700 dark:text-amber-300';
   }
   if (status === 'behind' || status === 'invalid' || status === 'failed') {
-    return 'border-rose-400/20 bg-rose-400/10 text-rose-300';
+    return 'border-rose-400/20 bg-rose-400/10 text-rose-700 dark:text-rose-300';
   }
-  return 'border-slate-500/20 bg-slate-500/10 text-slate-400';
+  return 'border-slate-500/20 bg-slate-500/10 text-muted-foreground';
 }
 
 function humanize(value: string): string {
@@ -332,18 +343,16 @@ function errorMessage(error: unknown, fallback: string): string {
 
 function Panel({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <section className={`rounded-2xl border border-white/[0.08] bg-[#0c1424]/90 shadow-[0_18px_55px_-35px_rgba(0,0,0,0.9)] backdrop-blur-xl ${className}`}>
+    <section className={`rounded-2xl border border-border bg-card ${className}`}>
       {children as unknown as React.ReactNode}
     </section>
   );
 }
 function SectionHeading({
-  eyebrow,
   title,
   description,
   action,
 }: {
-  eyebrow?: string;
   title: string;
   description?: string;
   action?: ReactNode;
@@ -351,9 +360,8 @@ function SectionHeading({
   return (
     <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div>
-        {eyebrow ? <p className="mb-1 text-[12px] font-semibold uppercase tracking-[0.22em] text-[#8291b5]">{eyebrow}</p> : null}
-        <h2 className="text-lg font-semibold tracking-tight text-white">{title}</h2>
-        {description ? <p className="mt-1 text-[13px] leading-5 text-slate-400">{description}</p> : null}
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
+        {description ? <p className="mt-1 text-sm leading-5 text-muted-foreground">{description}</p> : null}
       </div>
       {action as unknown as React.ReactNode}
     </div>
@@ -362,80 +370,119 @@ function SectionHeading({
 
 function StatusPill({ status }: { status: string }) {
   const label = status === 'on_track' ? 'On track' : status === 'behind' ? 'Behind' : status === 'insufficient_data' ? 'Insufficient data' : humanize(status);
-  return <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[12px] font-semibold capitalize tracking-wide ${statusClasses(status)}`}>{label}</span>;
+  return <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold capitalize tracking-wide ${statusClasses(status)}`}>{label}</span>;
 }
 
-function MetricCard({ metric, compact = false }: { metric: ExecutiveMetric; compact?: boolean }) {
+const HEADLINE_ORDER = ['revenue', 'gross_profit', 'mrr', 'arr', 'net_revenue', 'operating_result', 'cost_of_goods_sold', 'operating_expense'];
+
+/** Four headline KPIs for a currency: available ones first, in a fixed order. */
+function pickHeadline(metrics: ExecutiveMetric[]): ExecutiveMetric[] {
+  const ordered = HEADLINE_ORDER
+    .map((key) => metrics.find((metric) => metric.metricKey === key))
+    .filter((metric): metric is ExecutiveMetric => Boolean(metric));
+  const isAvailable = (metric: ExecutiveMetric) => metric.status !== 'unavailable' && metric.value !== null;
+  return [...ordered.filter(isAvailable), ...ordered.filter((metric) => !isAvailable(metric))].slice(0, 4);
+}
+
+/** Metrics where a rise is bad news (costs and losses). */
+const LOWER_IS_BETTER = new Set(['refund', 'cost_of_goods_sold', 'operating_expense', 'acquisition_cost', 'tax', 'capital_expenditure', 'closed_lost']);
+
+function sparkTone(metricKey: string): SparkTone {
+  if (metricKey === 'mrr' || metricKey === 'arr') return 'chart-2';
+  if (metricKey === 'gross_profit' || metricKey === 'operating_result' || metricKey === 'net_revenue') return 'chart-4';
+  if (LOWER_IS_BETTER.has(metricKey)) return 'chart-5';
+  return 'chart-1';
+}
+
+function formatMonthLabel(value: string): string {
+  if (!/^\d{4}-\d{2}$/.test(value)) return value;
+  return new Intl.DateTimeFormat('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' }).format(new Date(`${value}-01T00:00:00Z`));
+}
+
+function formatCompactMoney(value: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  } catch {
+    return `${currency} ${new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)}`;
+  }
+}
+
+/** Latest month against the month before it. */
+function monthOverMonth(points: Array<{ label: string; value: number }>) {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1];
+  const previous = points[points.length - 2];
+  if (last.value === 0 && previous.value === 0) return null;
+  const pct = previous.value === 0 ? null : ((last.value - previous.value) / Math.abs(previous.value)) * 100;
+  const direction: 'up' | 'down' | 'flat' = last.value > previous.value ? 'up' : last.value < previous.value ? 'down' : 'flat';
+  return { pct, direction, previousLabel: formatMonthLabel(previous.label).split(' ')[0] };
+}
+
+function MetricCard({ metric, compact = false, featured = false }: { metric: ExecutiveMetric; compact?: boolean; featured?: boolean }) {
   const Icon = metricIcon(metric.metricKey);
   const available = metric.status !== 'unavailable' && metric.value !== null;
+  const edge = !available ? 'hsl(var(--muted-foreground) / 0.4)' : metric.status === 'estimated' ? 'hsl(var(--chart-5))' : `hsl(var(--${sparkTone(metric.metricKey)}))`;
+  const trend = (metric.trend ?? []).filter((point) => Number.isFinite(point.value));
+  const change = monthOverMonth(trend);
+  const lowerIsBetter = LOWER_IS_BETTER.has(metric.metricKey);
+  const good = change && change.direction !== 'flat' && (change.direction === 'up') !== lowerIsBetter;
+  const bad = change && change.direction !== 'flat' && !good;
+  const ChangeIcon = !change || change.direction === 'flat' ? Minus : change.direction === 'up' ? ArrowUpRight : ArrowDownRight;
+  const formatTrendValue = (value: number) => (metric.currency ? formatMoney(value, metric.currency) : formatNumber(value));
+  const target = metric.targetProgressPct;
   return (
-    <div className={`group relative overflow-hidden rounded-xl border border-white/[0.07] bg-[#101b2f]/75 ${compact ? 'p-3.5' : 'p-4'}`}>
-      <div className="pointer-events-none absolute -right-8 -top-10 h-24 w-24 rounded-full bg-[#4254f5]/[0.09] blur-2xl transition-opacity group-hover:opacity-100" />
+    <div className={`lm-panel lm-panel-interactive group relative ${compact ? 'p-3.5' : 'p-4'}`}>
+      <span aria-hidden="true" className="absolute inset-y-3 left-0 w-[3px] rounded-r-full" style={{ background: edge }} />
       <div className="relative flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-[12px] font-medium text-slate-400">{metric.label}</p>
-          <p className={`mt-2 truncate font-semibold tracking-tight text-white ${compact ? 'text-xl' : 'text-2xl'}`}>
+          <p className="truncate text-xs font-medium text-muted-foreground">{metric.label}</p>
+          <p className={`mt-2 truncate font-mono font-medium tabular-nums tracking-tight ${available ? 'text-foreground' : 'text-muted-foreground'} ${featured ? 'text-[1.75rem] leading-9' : compact ? 'text-xl' : 'text-2xl'}`}>
             {formatMetricValue(metric)}
           </p>
         </div>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#6174ff]/20 bg-[#4254f5]/10 text-[#8e9bff]">
-          <Icon size={17} />
-        </span>
+        <Icon size={15} className="mt-0.5 shrink-0 text-muted-foreground/70" aria-hidden="true" />
       </div>
-      <div className="relative mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-3">
-        <StatusPill status={metric.status} />
-        <span className="text-[12px] text-slate-400">{formatNumber(metric.sampleSize ?? 0, 0)} records</span>
-      </div>
-      {metric.targetStatus ? (
-        <div className="relative mt-2 flex items-center justify-between text-[12px] text-slate-400">
-          <span>Target progress</span>
-          <span className="font-semibold text-slate-300">{metric.targetProgressPct === null || metric.targetProgressPct === undefined ? '—' : `${formatNumber(metric.targetProgressPct)}%`}</span>
-        </div>
-      ) : null}
-      {metric.note ? <p className="relative mt-2 text-[12px] leading-4 text-slate-400">{metric.note}</p> : null}
-      {!available ? <div className="pointer-events-none absolute inset-0 bg-[#080d18]/10" /> : null}
-    </div>
-  );
-}
-
-function RevenueTrend({ metric }: { metric: ExecutiveMetric }) {
-  const points = Array.isArray(metric.trend) ? metric.trend : [];
-  return (
-    <Panel className="p-4">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[13px] font-semibold text-white">Revenue trend</p>
-          <p className="mt-1 text-[12px] text-slate-400">Monthly imported revenue · {metric.currency ?? 'Currency unavailable'}</p>
-        </div>
-        <span className="rounded-lg border border-[#6174ff]/20 bg-[#4254f5]/10 p-2 text-[#9ba6ff]"><BarChart3 size={15} /></span>
-      </div>
-      {points.length ? (
-        <div className="h-48 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={points} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-              <defs>
-                <linearGradient id={`revenue-fill-${metric.currency ?? 'none'}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#6577ff" stopOpacity={0.34} />
-                  <stop offset="95%" stopColor="#6577ff" stopOpacity={0.01} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#26334a" strokeDasharray="3 5" vertical={false} />
-              <XAxis dataKey="label" tick={{ fill: '#71809c', fontSize: 10 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#71809c', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(value: number) => formatNumber(value, 0)} />
-              <Tooltip
-                contentStyle={{ background: '#0b1220', border: '1px solid rgba(148,163,184,.18)', borderRadius: 12, color: '#e2e8f0', fontSize: 11 }}
-                formatter={(value) => [formatMoney(Number(value ?? 0), metric.currency ?? 'USD'), 'Revenue']}
-              />
-              <Area type="monotone" dataKey="value" stroke="#7888ff" strokeWidth={2.5} fill={`url(#revenue-fill-${metric.currency ?? 'none'})`} activeDot={{ r: 4, fill: '#a5b4fc', stroke: '#18223b', strokeWidth: 2 }} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-white/[0.08] text-center">
-          <div><BarChart3 className="mx-auto mb-2 text-slate-400" size={22} /><p className="text-[13px] text-slate-400">No monthly revenue trend available</p><p className="mt-1 text-[12px] text-slate-400">Commit transaction imports to populate this chart.</p></div>
+      {trend.length > 1 && (
+        <div className="relative mt-3">
+          <AreaSparkline
+            points={trend}
+            tone={available ? sparkTone(metric.metricKey) : 'muted-foreground'}
+            height={featured ? 56 : 42}
+            label={`${metric.label}, monthly`}
+            formatValue={formatTrendValue}
+            formatLabel={formatMonthLabel}
+          />
+          <div className="mt-1.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span className="truncate">{formatMonthLabel(trend[0].label)} – {formatMonthLabel(trend[trend.length - 1].label)}</span>
+            {change && (
+              <span className="inline-flex shrink-0 items-center gap-1">
+                <span className={`inline-flex items-center gap-0.5 font-medium tabular-nums ${good ? 'text-emerald-700 dark:text-emerald-300' : bad ? 'text-rose-700 dark:text-rose-300' : 'text-muted-foreground'}`}>
+                  <ChangeIcon size={13} aria-hidden="true" />
+                  {change.pct === null ? 'New' : `${change.pct > 0 ? '+' : ''}${formatNumber(change.pct, 1)}%`}
+                </span>
+                <span>vs {change.previousLabel}</span>
+              </span>
+            )}
+          </div>
         </div>
       )}
-    </Panel>
+      {metric.targetStatus ? (
+        <div className="relative mt-3">
+          <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+            <span>Target progress</span>
+            <span className="font-mono text-foreground/80">{target === null || target === undefined ? '—' : `${formatNumber(target)}%`}</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+            <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, Number(target ?? 0)))}%` }} />
+          </div>
+        </div>
+      ) : null}
+      <div className="relative mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        <StatusPill status={metric.status} />
+        <span className="text-xs text-muted-foreground">{formatNumber(metric.sampleSize ?? 0, 0)} records</span>
+      </div>
+      {metric.note ? <p className="relative mt-2 text-xs leading-4 text-muted-foreground">{metric.note}</p> : null}
+    </div>
   );
 }
 
@@ -478,37 +525,36 @@ function FinancialCandidateReview() {
   return (
     <section>
       <SectionHeading
-        eyebrow="Evidence review"
         title="Financial candidates"
         description="Document-derived transaction suggestions remain non-authoritative until an owner/admin reviews the cited passage."
       />
       <Panel className="p-4 sm:p-5">
         {candidatesQuery.isLoading ? (
-          <div className="flex items-center gap-2 py-4 text-[13px] text-slate-400">
+          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
             <Loader2 className="animate-spin" size={15} /> Loading evidence-backed candidates…
           </div>
         ) : candidatesQuery.isError ? (
           <div className="flex items-center justify-between gap-3 py-2">
-            <p role="alert" className="text-[13px] text-rose-300">
+            <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
               {errorMessage(candidatesQuery.error, 'Financial candidates could not be loaded.')}
             </p>
-            <button type="button" onClick={() => void candidatesQuery.refetch()} className="text-[12px] font-semibold text-[#aab4ff]">
+            <button type="button" onClick={() => void candidatesQuery.refetch()} className="text-xs font-semibold text-primary">
               Retry
             </button>
           </div>
         ) : candidatesQuery.data?.length ? (
           <div className="space-y-3">
             {candidatesQuery.data.map((candidate) => (
-              <article key={candidate.id} className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
+              <article key={candidate.id} id={'financial-' + candidate.id} className="scroll-mt-6 rounded-xl border border-border bg-muted/50 p-4">
                 <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                   <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-white">
+                    <p className="text-sm font-semibold text-foreground">
                       {humanize(candidate.transaction_type)} · {candidate.currency} {formatNumber(Number(candidate.amount))}
                     </p>
-                    <p className="mt-1 text-[12px] text-slate-400">
+                    <p className="mt-1 text-xs text-muted-foreground">
                       {candidate.transaction_date} · {candidate.document_name} · confidence {formatNumber(Number(candidate.confidence) * 100, 0)}%
                     </p>
-                    <blockquote className="mt-3 border-l-2 border-[#6577ff]/50 pl-3 text-[12px] leading-5 text-slate-300">
+                    <blockquote className="mt-3 border-l-2 border-primary/50 pl-3 text-xs leading-5 text-foreground/80">
                       {candidate.evidence_excerpt}
                     </blockquote>
                   </div>
@@ -517,7 +563,7 @@ function FinancialCandidateReview() {
                       type="button"
                       disabled={reviewMutation.isPending}
                       onClick={() => reviewMutation.mutate({ candidateId: candidate.id, action: 'approve' })}
-                      className="rounded-lg bg-emerald-500/15 px-3 py-2 text-[12px] font-semibold text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50"
+                      className="rounded-lg bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50"
                     >
                       Approve & commit
                     </button>
@@ -528,7 +574,7 @@ function FinancialCandidateReview() {
                         const reason = window.prompt('Why is this financial candidate being rejected?');
                         if (reason?.trim()) reviewMutation.mutate({ candidateId: candidate.id, action: 'reject', reason });
                       }}
-                      className="rounded-lg border border-rose-400/20 px-3 py-2 text-[12px] font-semibold text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+                      className="rounded-lg border border-rose-400/20 px-3 py-2 text-xs font-semibold text-rose-700 dark:text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
                     >
                       Reject
                     </button>
@@ -538,7 +584,7 @@ function FinancialCandidateReview() {
             ))}
           </div>
         ) : (
-          <p className="py-3 text-[13px] text-slate-400">
+          <p className="py-3 text-sm text-muted-foreground">
             No pending candidates. New suggestions appear only when a source passage contains an explicit date, currency amount and transaction type.
           </p>
         )}
@@ -548,9 +594,34 @@ function FinancialCandidateReview() {
 }
 
 export default function ExecutiveIntelligencePage() {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <div role="status" className="mx-auto max-w-5xl p-6 text-sm text-muted-foreground">Loading workspace access…</div>;
+  if (!user) return <div className="mx-auto max-w-4xl p-6 text-sm">Workspace access could not be confirmed. <Link href="/login" className="underline">Sign in</Link></div>;
+  if (!['owner', 'admin'].includes(user.role.toLowerCase())) {
+    return <section className="mx-auto max-w-4xl rounded-2xl border border-border bg-card p-6 sm:p-8">
+      <LockKeyhole className="mb-4 h-6 w-6 text-muted-foreground" />
+      <h1 className="text-2xl font-semibold">Executive Intelligence</h1>
+      <p className="mt-2 text-sm text-muted-foreground">Financial reporting is available to organisation owners and administrators.</p>
+      <Link href="/analytics" className="mt-5 inline-block rounded-lg bg-brand-500 px-3 py-2 text-sm font-semibold text-white">Open workspace analytics</Link>
+    </section>;
+  }
+  const account = user.organizationId + '/' + user.id;
+  return <ExecutiveWorkspace key={account} account={account} />;
+}
+
+function ExecutiveWorkspace({ account }: { account: string }) {
   const queryClient = useQueryClient();
   const [period, setPeriod] = useState(initialPeriod);
-  const [currencyFilter, setCurrencyFilter] = useState('ALL');
+  const [draftPeriod, setDraftPeriod] = useState(initialPeriod);
+  const [view, setView] = useState<'overview' | 'financials' | 'targets' | 'sources'>('overview');
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get('view');
+    if (tab === 'sources' || tab === 'financials') setView(tab);
+  }, []);
+  const todayUtc = dateInputValue(new Date());
+  const rangeLength = Date.parse(draftPeriod.endDate) - Date.parse(draftPeriod.startDate);
+  const validPeriod = rangeLength >= 0 && rangeLength <= 3660 * 86_400_000 && draftPeriod.endDate <= todayUtc;
+  const [currencyFilter, setCurrencyFilter] = useState('');
   const [exporting, setExporting] = useState<string | null>(null);
   const [datasetType, setDatasetType] = useState<DatasetType>('transactions');
   const [selectedImportId, setSelectedImportId] = useState<string | null>(null);
@@ -569,16 +640,23 @@ export default function ExecutiveIntelligencePage() {
   });
 
   const dashboardQuery = useQuery<ExecutiveDashboard>({
-    queryKey: ['executive-intelligence', 'dashboard', period.startDate, period.endDate],
-    queryFn: async () => unwrapRecord((await api.get('/executive-intelligence/dashboard', {
-      params: { startDate: period.startDate, endDate: period.endDate },
-    })).data) as unknown as ExecutiveDashboard,
-    enabled: Boolean(period.startDate && period.endDate && period.endDate >= period.startDate),
+    queryKey: ['executive-intelligence', 'dashboard', account, period.startDate, period.endDate],
+    queryFn: async ({ signal }) => {
+      const payload = unwrapRecord((await api.get('/executive-intelligence/dashboard', {
+        signal, params: { startDate: period.startDate, endDate: period.endDate },
+      })).data);
+      if (!Array.isArray(payload.metrics) || !Array.isArray(payload.alerts)) {
+        throw new Error('The reporting service returned an incomplete dashboard response.');
+      }
+      return payload as unknown as ExecutiveDashboard;
+    },
+    retry: 1,
     staleTime: 30_000,
   });
 
   const importsQuery = useQuery<ImportSummary[]>({
-    queryKey: ['executive-intelligence', 'imports'],
+    queryKey: ['executive-intelligence', 'imports', account],
+    enabled: view === 'sources',
     queryFn: async () => {
       const payload = unwrapRecord((await api.get('/executive-intelligence/imports', { params: { page: 1, pageSize: 12 } })).data);
       const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.items) ? payload.items : [];
@@ -588,15 +666,15 @@ export default function ExecutiveIntelligencePage() {
   });
 
   const targetsQuery = useQuery<TargetRecord[]>({
-    queryKey: ['executive-intelligence', 'targets'],
+    queryKey: ['executive-intelligence', 'targets', account],
     queryFn: async () => unwrapArray((await api.get('/executive-intelligence/targets')).data) as unknown as TargetRecord[],
     staleTime: 30_000,
   });
 
   const importDetailQuery = useQuery<ImportDetail>({
-    queryKey: ['executive-intelligence', 'import', selectedImportId],
+    queryKey: ['executive-intelligence', 'import', account, selectedImportId],
     queryFn: async () => unwrapRecord((await api.get(`/executive-intelligence/imports/${selectedImportId}`)).data) as unknown as ImportDetail,
-    enabled: Boolean(selectedImportId),
+    enabled: view === 'sources' && Boolean(selectedImportId),
   });
 
   const uploadMutation = useMutation({
@@ -647,6 +725,8 @@ export default function ExecutiveIntelligencePage() {
         queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'imports'] }),
         queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'dashboard'] }),
         queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'targets'] }),
+        queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'scorecard'] }),
+        queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'cash-forecasts'] }),
       ]);
       toast.success('Import committed. Executive metrics are refreshing.');
     },
@@ -679,6 +759,8 @@ export default function ExecutiveIntelligencePage() {
       setTargetModalOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'targets'] }),
+        queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'scorecard'] }),
+        queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'cash-forecasts'] }),
         queryClient.invalidateQueries({ queryKey: ['executive-intelligence', 'dashboard'] }),
       ]);
       toast.success('KPI target created.');
@@ -699,20 +781,18 @@ export default function ExecutiveIntelligencePage() {
 
   const dashboard = dashboardQuery.data;
   const metrics = Array.isArray(dashboard?.metrics) ? dashboard.metrics : [];
-  const currencies = useMemo(() => Array.from(new Set(metrics.map((metric) => metric.currency).filter((value): value is string => Boolean(value)))).sort(), [metrics]);
-  const visibleMetrics = useMemo(() => metrics.filter((metric) => !metric.currency || currencyFilter === 'ALL' || metric.currency === currencyFilter), [metrics, currencyFilter]);
-  const financialCategories = new Set(['Financial performance', 'Recurring revenue', 'Sales pipeline']);
-  const financialMetrics = visibleMetrics.filter((metric) => financialCategories.has(metric.category));
-  const operationalMetrics = visibleMetrics.filter((metric) => metric.category === 'Operations');
-  const aiMetrics = visibleMetrics.filter((metric) => metric.category === 'AI economics');
-  const financialGroups = useMemo(() => {
-    const groups: Record<string, ExecutiveMetric[]> = {};
-    for (const metric of financialMetrics) {
-      const key = metric.currency ?? 'Currency not specified';
-      (groups[key] ??= []).push(metric);
-    }
-    return groups;
-  }, [financialMetrics]);
+  const financialCategories = ['Financial performance', 'Recurring revenue', 'Sales pipeline'];
+  const financialMetrics = metrics.filter((metric) => financialCategories.includes(metric.category));
+  const currencies = Array.from(new Set(financialMetrics.flatMap((metric) => metric.currency ? [metric.currency] : []))).sort();
+  const activeCurrency = currencies.includes(currencyFilter) ? currencyFilter : currencies[0];
+  const financialGroups = financialMetrics.filter((metric) => (metric.currency ?? undefined) === activeCurrency).reduce<Record<string, ExecutiveMetric[]>>((groups, metric) => {
+      (groups[metric.currency ?? 'Currency not specified'] ??= []).push(metric);
+      return groups;
+    }, {});
+  const operationalMetrics = metrics.filter((metric) => metric.category === 'Operations' && !['tasks_completed', 'meetings_completed', 'documents_indexed'].includes(metric.metricKey));
+  const aiMetrics = metrics.filter((metric) => metric.category === 'AI economics' && metric.metricKey !== 'ai_operations');
+  const pulseMetrics = pickHeadline(financialMetrics.filter((metric) => metric.currency === activeCurrency))
+    .filter((metric) => metric.status !== 'unavailable' && metric.value !== null);
   const signalMetrics = ['tasks_completed', 'meetings_completed', 'documents_indexed', 'ai_operations']
     .map((key) => metrics.find((metric) => metric.metricKey === key))
     .filter((metric): metric is ExecutiveMetric => Boolean(metric));
@@ -721,7 +801,7 @@ export default function ExecutiveIntelligencePage() {
   const targets = targetsQuery.data ?? [];
   const importDetail = importDetailQuery.data;
   const mappingFields = importDetail ? DATASET_FIELDS[importDetail.dataset_type] : DATASET_FIELDS[datasetType];
-  const mappedRequiredCount = mappingFields.required.filter((field) => Boolean(mapping[field])).length;
+  const mappedRequiredCount = mappingFields.required.filter((field) => isMapped(mapping[field])).length;
   const validRows = importDetail?.valid_row_count ?? 0;
   const skippedRows = (importDetail?.invalid_row_count ?? 0) + (importDetail?.duplicate_row_count ?? 0);
   const canCommit = importDetail?.status === 'validated' && validRows > 0 && (skippedRows === 0 || confirmPartial);
@@ -729,7 +809,6 @@ export default function ExecutiveIntelligencePage() {
   const refreshAll = async () => {
     await Promise.all([
       dashboardQuery.refetch(),
-      importsQuery.refetch(),
       targetsQuery.refetch(),
     ]);
   };
@@ -782,301 +861,316 @@ export default function ExecutiveIntelligencePage() {
       : (METRIC_UNITS[targetForm.metricKey] ?? 'value');
 
   return (
-    <div className="relative min-h-full overflow-hidden bg-[#070b14] text-slate-100">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_15%_0%,rgba(66,84,245,0.16),transparent_36%),radial-gradient(ellipse_at_92%_24%,rgba(14,165,233,0.07),transparent_28%)]" />
-      <main className="relative mx-auto w-full max-w-[1680px] space-y-7 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        <header className="flex flex-col justify-between gap-5 xl:flex-row xl:items-end">
-          <div className="max-w-3xl">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-2 rounded-full border border-[#6577ff]/25 bg-[#4254f5]/10 px-3 py-1.5 text-[12px] font-bold uppercase tracking-[0.2em] text-[#aab4ff]">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#7c8cff] shadow-[0_0_10px_rgba(124,140,255,0.9)]" /> Lumorius intelligence suite
-              </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[12px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                <LockKeyhole size={11} /> Owner / admin workspace
-              </span>
-            </div>
-            <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">Executive Intelligence<span className="text-[#7788ff]">.</span></h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-              A governed command view of financial performance, recurring revenue, operational execution and enterprise AI economics.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="grid grid-cols-2 gap-2">
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.17em] text-slate-400">From</span>
-                <input type="date" value={period.startDate} max={period.endDate} onChange={(event) => setPeriod((current) => ({ ...current, startDate: event.target.value }))} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none transition focus:border-[#6577ff]/60" />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.17em] text-slate-400">To</span>
-                <input type="date" value={period.endDate} min={period.startDate} max={dateInputValue(new Date())} onChange={(event) => setPeriod((current) => ({ ...current, endDate: event.target.value }))} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none transition focus:border-[#6577ff]/60" />
-              </label>
-            </div>
-            <button type="button" onClick={() => void refreshAll()} disabled={dashboardQuery.isFetching || importsQuery.isFetching || targetsQuery.isFetching} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/[0.1] bg-white/[0.04] px-3.5 text-[13px] font-semibold text-slate-300 transition hover:border-[#6577ff]/40 hover:bg-[#4254f5]/10 disabled:cursor-not-allowed disabled:opacity-50">
-              <RefreshCw size={14} className={dashboardQuery.isFetching ? 'animate-spin' : ''} /> Refresh
-            </button>
-          </div>
-        </header>
-
-        <div className="flex flex-col justify-between gap-3 rounded-2xl border border-[#6476ff]/20 bg-gradient-to-r from-[#172247]/90 via-[#101a31]/90 to-[#0d1829]/90 p-4 sm:flex-row sm:items-center sm:px-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#8190ff]/25 bg-[#4254f5]/15 text-[#aeb8ff]"><Gauge size={19} /></div>
-            <div>
-              <p className="text-[13px] font-semibold text-white">{dashboard?.organizationName ?? 'Executive command centre'}</p>
-              <p className="mt-0.5 text-[12px] text-slate-400">Reporting window · {formatCompactDate(period.startDate)} — {formatCompactDate(period.endDate)}</p>
-            </div>
+    <div className="relative min-h-full text-foreground">
+      <main className="relative mx-auto w-full max-w-[1680px] space-y-7">
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-6">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Executive Intelligence</h1>
+            <p className="mt-1.5 text-sm text-muted-foreground">{dashboard?.organizationName ?? 'Workspace reporting'} <span aria-hidden="true">·</span> {formatCompactDate(period.startDate)} – {formatCompactDate(period.endDate)} UTC</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-white/[0.08] bg-black/20 px-3 py-1.5 text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-400">Actual / estimated / unavailable</span>
-            <span className="rounded-full border border-[#6577ff]/20 bg-[#4254f5]/10 px-3 py-1.5 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#aeb8ff]">No FX aggregation</span>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex items-center gap-2 text-[12px] text-slate-400"><ShieldCheck size={13} className="text-emerald-400" /> Organisation-scoped reporting · source provenance retained · audited import commits</div>
-          <div className="flex flex-wrap gap-2">
             {(['pdf', 'xlsx', 'csv'] as const).map((format) => (
-              <button key={format} type="button" onClick={() => void exportReport(format)} disabled={Boolean(exporting) || dashboardQuery.isLoading || !dashboard} className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/[0.09] bg-white/[0.035] px-3 text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-300 transition hover:border-[#6577ff]/40 hover:bg-[#4254f5]/10 disabled:cursor-not-allowed disabled:opacity-40">
-                {exporting === format ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-                {format}
+              <button key={format} type="button" onClick={() => void exportReport(format)}
+                disabled={Boolean(exporting) || (format === 'pdf' && metrics.length > 150) || !dashboard}
+                title={format === 'pdf' && metrics.length > 150 ? 'Shorten the reporting period or export as CSV or XLSX' : undefined}
+                className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold  text-foreground/90 hover:bg-muted disabled:opacity-40">
+                {exporting === format ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} {format}
               </button>
             ))}
           </div>
-        </div>
+        </header>
 
-        {dashboardQuery.isLoading ? (
-          <Panel className="flex min-h-72 items-center justify-center p-8"><div className="text-center"><Loader2 className="mx-auto mb-3 animate-spin text-[#8795ff]" size={26} /><p className="text-sm font-medium text-slate-300">Synchronising executive data</p><p className="mt-1 text-[13px] text-slate-400">Loading governed KPIs, targets and source records.</p></div></Panel>
+        <nav aria-label="Executive Intelligence views" className="flex flex-wrap gap-1 border-b border-border">
+          {([['overview', 'Overview'], ['financials', 'Financials'], ['targets', 'KPI targets'], ['sources', 'Data sources']] as const).map(([id, label]) => (
+            <button key={id} type="button" aria-pressed={view === id} onClick={() => setView(id)}
+              className={`border-b-2 px-3 py-2.5 text-sm font-medium ${id === view ? 'border-indigo-400 text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>{label}</button>
+          ))}
+        </nav>
+
+        {(view === 'overview' || view === 'financials') && (
+          <form className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-3" onSubmit={(event) => {
+            event.preventDefault();
+            if (validPeriod) setPeriod(draftPeriod);
+          }}>
+            <div className="flex flex-wrap gap-1.5 self-center" aria-label="Reporting period presets">
+              {[30, 90, 365].map((days) => <button key={days} type="button" onClick={() => {
+                const range = initialPeriod(days);
+                setDraftPeriod(range);
+                setPeriod(range);
+              }} className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground/90 hover:bg-muted">{days} days</button>)}
+            </div>
+            <label className="block flex-1 text-xs font-medium text-muted-foreground sm:flex-none">From
+              <input type="date" required value={draftPeriod.startDate} max={draftPeriod.endDate || todayUtc}
+                onChange={(e) => setDraftPeriod((current) => ({ ...current, startDate: e.target.value }))}
+                className="mt-1 block w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm text-foreground/90" />
+            </label>
+            <label className="block flex-1 text-xs font-medium text-muted-foreground sm:flex-none">To
+              <input type="date" required value={draftPeriod.endDate} min={draftPeriod.startDate || undefined} max={todayUtc}
+                onChange={(e) => setDraftPeriod((current) => ({ ...current, endDate: e.target.value }))}
+                className="mt-1 block w-full rounded-lg border border-border bg-background px-2.5 py-2 text-sm text-foreground/90" />
+            </label>
+            <button type="submit" disabled={!validPeriod} className="rounded-lg bg-indigo-500 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-40">Apply range</button>
+            <button type="button" disabled={dashboardQuery.isFetching} onClick={() => void refreshAll()} aria-label="Refresh reporting data" className="rounded-lg border border-border p-2.5 text-foreground/80 hover:bg-muted disabled:opacity-50"><RefreshCw size={15} className={dashboardQuery.isFetching ? 'animate-spin' : ''} /></button>
+            {!validPeriod && <p className="w-full text-xs text-amber-700 dark:text-amber-300">Choose a valid UTC date range of up to 10 years, ending today or earlier.</p>}
+          </form>
+        )}
+
+        {(view === 'overview' || view === 'financials') && (dashboardQuery.isLoading ? (
+          <Panel className="flex min-h-72 items-center justify-center p-8"><div className="text-center"><Loader2 className="mx-auto mb-3 animate-spin text-primary" size={26} /><p className="text-sm font-medium text-foreground/80">Synchronising executive data</p><p className="mt-1 text-sm text-muted-foreground">Loading governed KPIs, targets and source records.</p></div></Panel>
         ) : dashboardQuery.isError ? (
           <Panel className="p-6 sm:p-8">
             <div className="mx-auto max-w-xl text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-400/20 bg-rose-400/10 text-rose-300"><LockKeyhole size={21} /></div>
-              <h2 className="text-lg font-semibold text-white">Executive data unavailable</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-400">{errorMessage(dashboardQuery.error, 'The API did not return Executive Intelligence data.')}</p>
-              <p className="mt-2 text-[12px] text-slate-400">This workspace is restricted to organisation owners and administrators. Confirm the signed-in account role and API connectivity.</p>
-              <button type="button" onClick={() => void dashboardQuery.refetch()} className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-[#4254f5] px-4 text-[13px] font-semibold text-white transition hover:bg-[#5265ff]"><RefreshCw size={13} /> Retry connection</button>
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-400/20 bg-rose-400/10 text-rose-700 dark:text-rose-300"><LockKeyhole size={21} /></div>
+              <h2 className="text-lg font-semibold text-foreground">Executive data unavailable</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{errorMessage(dashboardQuery.error, 'The API did not return Executive Intelligence data.')}</p>
+              <button type="button" onClick={() => void dashboardQuery.refetch()} className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-indigo-500 px-4 text-sm font-semibold text-white transition hover:bg-primary/90"><RefreshCw size={13} /> Retry connection</button>
             </div>
           </Panel>
         ) : dashboard ? (
           <>
-            <section>
-              <SectionHeading eyebrow="Executive pulse" title="Operational command signals" description="Activity indicators for the selected reporting period. Currency-based measures remain in their own reporting lanes." />
+            {view === 'overview' && <section>
+              <SectionHeading title="Activity in this period" />
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {signalMetrics.length ? signalMetrics.map((metric) => <MetricCard key={metric.key} metric={metric} />) : (
-                  <Panel className="col-span-full p-5"><p className="text-[13px] text-slate-400">Operational indicators will appear when source activity is available.</p></Panel>
+                  <Panel className="col-span-full p-5"><p className="text-sm text-muted-foreground">Operational indicators will appear when source activity is available.</p></Panel>
                 )}
               </div>
-            </section>
+            </section>}
 
-            <section>
+            {view === 'overview' && pulseMetrics.length > 0 && <section>
               <SectionHeading
-                eyebrow="Financial intelligence"
+                title={`Financial pulse · ${activeCurrency}`}
+                description={dashboard.trendWindow
+                  ? `Values cover the selected period. Lines show each month from ${formatMonthLabel(dashboard.trendWindow.start.slice(0, 7))} to ${formatMonthLabel(dashboard.trendWindow.end.slice(0, 7))}.`
+                  : 'Values cover the selected period.'}
+                action={<button type="button" onClick={() => setView('financials')} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground/90 hover:bg-muted">Monthly analytics <ChevronRight size={13} /></button>}
+              />
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {pulseMetrics.map((metric) => <MetricCard key={metric.key} metric={metric} featured />)}
+              </div>
+            </section>}
+
+            {view === 'financials' && <section>
+              <CashForecast />
+              <SectionHeading
                 title="Performance by currency"
                 description="Imported transactions, customer contracts and sales opportunities. Amounts are never combined across currencies."
                 action={(
-                  <label className="flex h-9 items-center gap-2 rounded-xl border border-white/[0.09] bg-[#111a2b] px-3">
-                    <Filter size={12} className="text-slate-400" />
-                    <select value={currencyFilter} onChange={(event) => setCurrencyFilter(event.target.value)} className="max-w-[170px] bg-transparent text-[12px] font-semibold text-slate-200 outline-none">
-                      <option value="ALL" className="bg-[#111a2b]">All currencies</option>
-                      {currencies.map((currency) => <option key={currency} value={currency} className="bg-[#111a2b]">{currency}</option>)}
+                  <label className="flex h-9 items-center gap-2 rounded-xl border border-border bg-card px-3">
+                    <Filter size={12} className="text-muted-foreground" />
+                    <select aria-label="Financial reporting currency" value={activeCurrency ?? ''} onChange={(event) => setCurrencyFilter(event.target.value)} className="max-w-[170px] bg-transparent text-xs font-semibold text-foreground/90 outline-none">
+                      {!activeCurrency && <option value="">No currency recorded</option>}
+                      {currencies.map((currency) => <option key={currency} value={currency} className="bg-card">{currency}</option>)}
                     </select>
-                    <ChevronDown size={12} className="text-slate-400" />
+                    <ChevronDown size={12} className="text-muted-foreground" />
                   </label>
                 )}
               />
               {Object.keys(financialGroups).length ? (
                 <div className="space-y-4">
                   {Object.entries(financialGroups).map(([currency, currencyMetrics]) => {
-                    const revenueMetric = currencyMetrics.find((metric) => metric.metricKey === 'revenue');
+                    const headline = pickHeadline(currencyMetrics);
+                    const others = currencyMetrics.filter((metric) => !headline.includes(metric));
+                    const series = dashboard.monthlySeries?.find((item) => item.currency === currency);
                     return (
-                      <div key={currency} className="rounded-2xl border border-white/[0.07] bg-[#0b1220]/80 p-4 sm:p-5">
-                        <div className="mb-4 flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#6476ff]/20 bg-[#4254f5]/10 text-[#9ba7ff]"><CircleDollarSign size={15} /></span><div><p className="text-[13px] font-semibold text-white">{currency}</p><p className="text-[12px] text-slate-400">Independent currency ledger</p></div></div>
-                          <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-slate-400">{currencyMetrics.length} indicators</span>
+                      <div key={currency} className="space-y-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary"><CircleDollarSign size={15} /></span><div><p className="text-sm font-semibold text-foreground">{currency}</p><p className="text-xs text-muted-foreground">Reporting currency</p></div></div>
+                          <span className="text-xs font-medium text-muted-foreground">{currencyMetrics.length} indicators</span>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                          {currencyMetrics.map((metric) => <MetricCard key={metric.key} metric={metric} compact />)}
+                          {headline.map((metric) => <MetricCard key={metric.key} metric={metric} featured />)}
                         </div>
-                        {revenueMetric ? <div className="mt-4"><RevenueTrend metric={revenueMetric} /></div> : null}
+                        {series ? <RevenueAnalytics series={series} /> : null}
+                        {others.length > 0 && (
+                          <div>
+                            <h3 className="mb-3 text-sm font-semibold text-foreground">All indicators</h3>
+                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                              {others.map((metric) => <MetricCard key={metric.key} metric={metric} compact />)}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
               ) : (
-                <Panel className="p-6"><div className="flex flex-col items-center text-center"><div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-400"><Database size={19} /></div><p className="text-sm font-medium text-white">No committed financial records</p><p className="mt-1 max-w-lg text-[13px] leading-5 text-slate-400">Upload a transaction, contract or pipeline dataset below. Financial KPIs populate only after validation and an explicit commit.</p></div></Panel>
+                <Panel className="p-6"><div className="flex flex-col items-center text-center"><div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-muted/50 text-muted-foreground"><Database size={19} /></div><p className="text-sm font-medium text-foreground">No committed financial records</p><p className="mt-1 max-w-lg text-sm leading-5 text-muted-foreground">Upload a transaction, contract or pipeline dataset below. Financial KPIs populate only after validation and an explicit commit.</p></div></Panel>
               )}
-            </section>
+            </section>}
 
-            <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
+            {view === 'overview' && <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
               <section>
-                <SectionHeading eyebrow="Execution" title="Operational performance" description="Task throughput, knowledge ingestion, meetings and project activity." />
+                <SectionHeading title="Operational performance" description="Task throughput, knowledge ingestion, meetings and project activity." />
                 {operationalMetrics.length ? (
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {operationalMetrics.map((metric) => <MetricCard key={metric.key} metric={metric} compact />)}
                   </div>
-                ) : <Panel className="p-5"><p className="text-[13px] text-slate-400">No operational metrics were returned for this period.</p></Panel>}
+                ) : <Panel className="p-5"><p className="text-sm text-muted-foreground">No operational metrics were returned for this period.</p></Panel>}
                 {aiMetrics.length ? (
                   <div className="mt-5">
-                    <SectionHeading eyebrow="AI economics" title="Usage and cost governance" description="Only usage with an effective pricing record contributes to priced AI expenditure." />
+                    <SectionHeading title="Usage and cost governance" description="Only usage with an effective pricing record contributes to priced AI expenditure." />
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{aiMetrics.map((metric) => <MetricCard key={metric.key} metric={metric} compact />)}</div>
                   </div>
                 ) : null}
               </section>
 
               <section>
-                <SectionHeading eyebrow="Risk signals" title="Target alerts" description="Threshold breaches are surfaced only when the configured sample size is met." />
+                <SectionHeading title="Target alerts" description="Threshold breaches are surfaced only when the configured sample size is met." />
                 <Panel className="p-4">
-                  <div className="mb-3 flex items-center justify-between"><span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-slate-400">Current period</span><span className={`rounded-full px-2.5 py-1 text-[12px] font-bold ${alerts.length ? 'bg-amber-400/10 text-amber-300' : 'bg-emerald-400/10 text-emerald-300'}`}>{alerts.length} active</span></div>
+                  <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold  text-muted-foreground">Current period</span><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${alerts.length ? 'bg-amber-400/10 text-amber-700 dark:text-amber-300' : 'bg-emerald-400/10 text-emerald-700 dark:text-emerald-300'}`}>{alerts.length} active</span></div>
                   {alerts.length ? (
                     <div className="space-y-2.5">{alerts.map((alert, index) => (
                       <div key={`${alert.metricKey}-${alert.currency ?? 'none'}-${index}`} className="rounded-xl border border-amber-300/15 bg-amber-300/[0.045] p-3.5">
-                        <div className="flex items-start gap-2.5"><span className="mt-0.5 text-amber-300"><AlertTriangle size={15} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[13px] font-semibold text-slate-100">{alert.label}{alert.currency ? ` · ${alert.currency}` : ''}</p><span className="text-[12px] font-bold text-amber-300">{formatNumber(alert.gapPct)}% gap</span></div><p className="mt-1.5 text-[12px] leading-5 text-slate-400">{alert.message}</p></div></div>
+                        <div className="flex items-start gap-2.5"><span className="mt-0.5 text-amber-700 dark:text-amber-300"><AlertTriangle size={15} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-semibold text-foreground">{alert.label}{alert.currency ? ` · ${alert.currency}` : ''}</p><span className="text-xs font-bold text-amber-700 dark:text-amber-300">{formatNumber(alert.gapPct)}% gap</span></div><p className="mt-1.5 text-xs leading-5 text-muted-foreground">{alert.message}</p></div></div>
                       </div>
                     ))}</div>
                   ) : (
-                    <div className="flex min-h-40 flex-col items-center justify-center text-center"><div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-emerald-400/15 bg-emerald-400/[0.07] text-emerald-300"><Check size={17} /></div><p className="text-[13px] font-semibold text-slate-200">No threshold breaches</p><p className="mt-1 max-w-[230px] text-[12px] leading-4 text-slate-400">No configured alert crossed its threshold with sufficient sample data.</p></div>
+                    <div className="flex min-h-40 flex-col items-center justify-center text-center"><div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-emerald-400/15 bg-emerald-400/[0.07] text-emerald-700 dark:text-emerald-300"><Check size={17} /></div><p className="text-sm font-semibold text-foreground/90">No threshold breaches</p><p className="mt-1 max-w-[230px] text-xs leading-4 text-muted-foreground">No configured alert crossed its threshold with sufficient sample data.</p></div>
                   )}
                 </Panel>
                 <div className="mt-3 grid grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-white/[0.07] bg-[#0c1424]/80 p-3.5"><p className="text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Configured targets</p><p className="mt-1.5 text-2xl font-semibold text-white">{targets.length}</p><p className="mt-1 text-[12px] text-slate-400">Organisation-wide</p></div>
-                  <div className="rounded-xl border border-white/[0.07] bg-[#0c1424]/80 p-3.5"><p className="text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Data sources</p><p className="mt-1.5 text-2xl font-semibold text-white">{dashboard.sources?.length ?? 0}</p><p className="mt-1 text-[12px] text-slate-400">With source records</p></div>
+                  <div className="rounded-xl border border-border bg-card p-3.5"><p className="text-xs font-semibold  text-muted-foreground">Configured targets</p><p className="mt-1.5 text-2xl font-semibold text-foreground">{(targetsQuery.data ? targets.length : '—')}</p><p className="mt-1 text-xs text-muted-foreground">Organisation-wide</p></div>
+                  <div className="rounded-xl border border-border bg-card p-3.5"><p className="text-xs font-semibold  text-muted-foreground">Data sources</p><p className="mt-1.5 text-2xl font-semibold text-foreground">{dashboard.sources?.length ?? 0}</p><p className="mt-1 text-xs text-muted-foreground">With source records</p></div>
                 </div>
               </section>
-            </div>
+            </div>}
+          </>
+        ) : null)}
 
+        {view === 'targets' && (
             <section>
+              <div className="mb-8"><KpiScorecard title="Target progress" showManageLink={false} description="Live actuals for every target over its own period, from committed records. The Analytics page shows the same results." /></div>
               <SectionHeading
-                eyebrow="Performance governance"
                 title="KPI target register"
                 description="Targets are scoped to a metric, period and currency where applicable. Owner and alert thresholds are retained in the audit trail."
-                action={<button type="button" onClick={() => setTargetModalOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-xl bg-[#4254f5] px-3.5 text-[12px] font-semibold text-white shadow-[0_8px_25px_-12px_rgba(66,84,245,0.9)] transition hover:bg-[#5265ff]"><Plus size={13} /> Create target</button>}
+                action={<button type="button" onClick={() => setTargetModalOpen(true)} className="inline-flex h-9 items-center gap-2 rounded-xl bg-indigo-500 px-3.5 text-xs font-semibold text-white shadow-[0_8px_25px_-12px_rgba(66,84,245,0.9)] transition hover:bg-primary/90"><Plus size={13} /> Create target</button>}
               />
               <Panel className="overflow-hidden">
-                {targetsQuery.isLoading ? <div className="p-5 text-[13px] text-slate-400">Loading target register…</div> : targets.length ? (
+                {targetsQuery.isLoading ? <div className="p-5 text-sm text-muted-foreground">Loading target register…</div> : targetsQuery.isError ? (
+                  <div className="p-5 text-sm text-foreground/80">KPI targets could not be loaded. <button type="button" onClick={() => void targetsQuery.refetch()} className="underline">Retry</button></div>
+                ) : targets.length ? (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[780px] text-left">
-                      <thead className="border-b border-white/[0.07] bg-white/[0.025]"><tr>{['Metric', 'Target', 'Reporting period', 'Direction', 'Alert threshold', 'Owner'].map((heading) => <th key={heading} className="px-4 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-slate-400">{heading}</th>)}</tr></thead>
+                      <thead className="border-b border-border bg-muted/50"><tr>{['Metric', 'Target', 'Reporting period', 'Direction', 'Alert threshold', 'Owner'].map((heading) => <th key={heading} className="px-4 py-3 text-xs font-semibold  text-muted-foreground">{heading}</th>)}</tr></thead>
                       <tbody className="divide-y divide-white/[0.05]">{targets.map((target) => (
-                        <tr key={target.id} className="transition hover:bg-white/[0.02]">
-                          <td className="px-4 py-3"><p className="text-[13px] font-semibold text-slate-200">{humanize(target.metric_key)}{target.currency ? <span className="ml-1.5 text-[12px] text-[#93a0ff]">{target.currency}</span> : null}</p><p className="mt-0.5 text-[12px] text-slate-400">{target.target_period}</p></td>
-                          <td className="px-4 py-3 text-[13px] font-semibold text-white">{formatNumber(Number(target.target_value))} <span className="text-[12px] font-normal text-slate-400">{target.unit}</span></td>
-                          <td className="px-4 py-3 text-[12px] text-slate-400">{formatCompactDate(target.period_start)} — {formatCompactDate(target.period_end)}</td>
-                          <td className="px-4 py-3 text-[12px] text-slate-400">{target.direction === 'higher_is_better' ? 'Higher is better' : 'Lower is better'}</td>
-                          <td className="px-4 py-3 text-[13px] text-slate-300">{target.alert_threshold_pct === null || target.alert_threshold_pct === undefined ? 'Not set' : `${formatNumber(Number(target.alert_threshold_pct))}%`}</td>
-                          <td className="px-4 py-3 text-[13px] text-slate-400">{target.owner_name || 'Unassigned'}</td>
+                        <tr key={target.id} className="transition hover:bg-muted">
+                          <td className="px-4 py-3"><p className="text-sm font-semibold text-foreground/90">{humanize(target.metric_key)}{target.currency ? <span className="ml-1.5 text-xs text-primary">{target.currency}</span> : null}</p><p className="mt-0.5 text-xs text-muted-foreground">{target.target_period}</p></td>
+                          <td className="px-4 py-3 text-sm font-semibold text-foreground">{formatNumber(Number(target.target_value))} <span className="text-xs font-normal text-muted-foreground">{target.unit}</span></td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">{formatCompactDate(target.period_start)} — {formatCompactDate(target.period_end)}</td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">{target.direction === 'higher_is_better' ? 'Higher is better' : 'Lower is better'}</td>
+                          <td className="px-4 py-3 text-sm text-foreground/80">{target.alert_threshold_pct === null || target.alert_threshold_pct === undefined ? 'Not set' : `${formatNumber(Number(target.alert_threshold_pct))}%`}</td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">{target.owner_name || 'Unassigned'}</td>
                         </tr>
                       ))}</tbody>
                     </table>
                   </div>
                 ) : (
-                  <div className="flex min-h-44 flex-col items-center justify-center p-6 text-center"><Target className="mb-2 text-slate-400" size={22} /><p className="text-[13px] font-semibold text-slate-200">No KPI targets configured</p><p className="mt-1 text-[12px] text-slate-400">Create a target to enable progress tracking and threshold alerts.</p></div>
+                  <div className="flex min-h-44 flex-col items-center justify-center p-6 text-center"><Target className="mb-2 text-muted-foreground" size={22} /><p className="text-sm font-semibold text-foreground/90">No KPI targets configured</p><p className="mt-1 text-xs text-muted-foreground">Create a target to enable progress tracking and threshold alerts.</p></div>
                 )}
               </Panel>
             </section>
+        )}
 
+        {view === 'sources' && <>
             <FinancialCandidateReview />
 
             <section>
-              <SectionHeading eyebrow="Data operations" title="Import centre" description="Stage a CSV or XLSX source, map columns, validate every row and explicitly commit approved records." />
+              <SectionHeading title="Import centre" description="Stage a CSV or XLSX source, map columns, validate every row and explicitly commit approved records." />
               <div className="grid gap-4 2xl:grid-cols-[minmax(300px,0.72fr)_minmax(0,1.28fr)]">
                 <Panel className="p-4 sm:p-5">
-                  <div className="mb-4 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#6577ff]/20 bg-[#4254f5]/10 text-[#9ba7ff]"><Upload size={17} /></div><div><p className="text-sm font-semibold text-white">Stage a new import</p><p className="text-[12px] text-slate-400">CSV / XLSX · 10 MB maximum</p></div></div>
-                  <label className="mb-2 block text-[12px] font-semibold uppercase tracking-[0.14em] text-slate-400">Dataset type</label>
-                  <select value={datasetType} onChange={(event) => setDatasetType(event.target.value as DatasetType)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none focus:border-[#6577ff]/60">
-                    <option value="transactions" className="bg-[#111a2b]">Financial transactions</option>
-                    <option value="contracts" className="bg-[#111a2b]">Customer contracts / recurring revenue</option>
-                    <option value="pipeline" className="bg-[#111a2b]">Sales pipeline opportunities</option>
+                  <div className="mb-4 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl border border-primary/20 bg-indigo-500/10 text-primary"><Upload size={17} /></div><div><p className="text-sm font-semibold text-white">Stage a new import</p><p className="text-xs text-muted-foreground">CSV / XLSX · 10 MB maximum</p></div></div>
+                  <label className="mb-2 block text-xs font-semibold  text-muted-foreground">Dataset type</label>
+                  <select value={datasetType} onChange={(event) => setDatasetType(event.target.value as DatasetType)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none focus:border-primary/60">
+                    <option value="transactions" className="bg-card">Financial transactions</option>
+                    <option value="contracts" className="bg-card">Customer contracts / recurring revenue</option>
+                    <option value="pipeline" className="bg-card">Sales pipeline opportunities</option>
+                    <option value="campaigns" className="bg-card">Marketing campaign performance</option>
+                    <option value="cash" className="bg-card">Monthly cash balances and movements</option>
                   </select>
                   <input ref={fileInputRef} type="file" accept=".csv,.xlsx" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadMutation.mutate({ file, type: datasetType }); event.currentTarget.value = ''; }} />
-                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending} className="mt-3 flex min-h-36 w-full flex-col items-center justify-center rounded-xl border border-dashed border-[#6577ff]/30 bg-[#4254f5]/[0.045] px-4 text-center transition hover:border-[#8795ff]/60 hover:bg-[#4254f5]/[0.08] disabled:opacity-50">
-                    {uploadMutation.isPending ? <Loader2 className="mb-2 animate-spin text-[#aab4ff]" size={22} /> : <Upload className="mb-2 text-[#9ba7ff]" size={22} />}
-                    <span className="text-[13px] font-semibold text-slate-200">{uploadMutation.isPending ? 'Staging source file…' : 'Select source file'}</span>
-                    <span className="mt-1 text-[12px] text-slate-400">Choose a CSV or XLSX file from your device</span>
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploadMutation.isPending} className="mt-3 flex min-h-36 w-full flex-col items-center justify-center rounded-xl border border-dashed border-primary/30 bg-indigo-500/[0.045] px-4 text-center transition hover:border-primary/60 hover:bg-indigo-500/[0.08] disabled:opacity-50">
+                    {uploadMutation.isPending ? <Loader2 className="mb-2 animate-spin text-primary" size={22} /> : <Upload className="mb-2 text-primary" size={22} />}
+                    <span className="text-sm font-semibold text-foreground/90">{uploadMutation.isPending ? 'Staging source file…' : 'Select source file'}</span>
+                    <span className="mt-1 text-xs text-muted-foreground">Choose a CSV or XLSX file from your device</span>
                   </button>
-                  <div className="mt-4 space-y-2 rounded-xl border border-white/[0.06] bg-black/10 p-3">
-                    <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-slate-400">Import controls</p>
-                    <div className="flex items-start gap-2 text-[12px] leading-4 text-slate-400"><ShieldCheck size={12} className="mt-0.5 shrink-0 text-emerald-400" /> No records are committed during upload or mapping.</div>
-                    <div className="flex items-start gap-2 text-[12px] leading-4 text-slate-400"><BadgeCheck size={12} className="mt-0.5 shrink-0 text-[#9ba7ff]" /> Duplicate detection and row-level validation run before commit.</div>
-                    <div className="flex items-start gap-2 text-[12px] leading-4 text-slate-400"><LockKeyhole size={12} className="mt-0.5 shrink-0 text-slate-400" /> Imports are organisation-scoped and audited.</div>
-                  </div>
                   <div className="mt-5">
-                    <div className="mb-2 flex items-center justify-between"><p className="text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Recent imports</p><span className="text-[12px] text-slate-400">{imports.length} shown</span></div>
-                    {importsQuery.isLoading ? <p className="py-3 text-[12px] text-slate-400">Loading import history…</p> : imports.length ? (
+                    <div className="mb-2 flex items-center justify-between"><p className="text-xs font-semibold  text-muted-foreground">Recent imports</p><span className="text-xs text-muted-foreground">{imports.length} shown</span></div>
+                    {importsQuery.isLoading ? <p className="py-3 text-xs text-muted-foreground">Loading import history…</p> : importsQuery.isError ? <p className="py-3 text-xs text-foreground/80">Import history could not be loaded. <button type="button" onClick={() => void importsQuery.refetch()} className="underline">Retry</button></p> : imports.length ? (
                       <div className="space-y-1.5">{imports.slice(0, 8).map((item) => (
-                        <button type="button" key={item.id} onClick={() => openImport(item.id)} className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition ${selectedImportId === item.id ? 'border-[#6577ff]/35 bg-[#4254f5]/[0.09]' : 'border-white/[0.055] bg-white/[0.015] hover:border-white/[0.12] hover:bg-white/[0.035]'}`}>
-                          <FileSpreadsheet size={15} className="shrink-0 text-slate-400" /><span className="min-w-0 flex-1"><span className="block truncate text-[12px] font-medium text-slate-300">{item.file_name}</span><span className="mt-0.5 block text-[12px] text-slate-400">{humanize(item.dataset_type)} · {item.row_count} rows</span></span><StatusPill status={item.status} /><ChevronRight size={12} className="shrink-0 text-slate-400" />
+                        <button type="button" key={item.id} onClick={() => openImport(item.id)} className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition ${selectedImportId === item.id ? 'border-primary/35 bg-indigo-500/[0.09]' : 'border-white/[0.055] bg-muted/50 hover:border-white/[0.12] hover:bg-muted/50'}`}>
+                          <FileSpreadsheet size={15} className="shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-foreground/80">{item.file_name}</span><span className="mt-0.5 block text-xs text-muted-foreground">{humanize(item.dataset_type)} · {item.row_count} rows</span></span><StatusPill status={item.status} /><ChevronRight size={12} className="shrink-0 text-muted-foreground" />
                         </button>
                       ))}</div>
-                    ) : <p className="py-3 text-[12px] text-slate-400">No imports have been staged.</p>}
+                    ) : <p className="py-3 text-xs text-muted-foreground">No imports have been staged.</p>}
                   </div>
                 </Panel>
 
                 <Panel className="min-w-0 overflow-hidden">
-                  <div className="flex flex-col justify-between gap-2 border-b border-white/[0.07] p-4 sm:flex-row sm:items-center sm:px-5">
-                    <div><p className="text-sm font-semibold text-white">Import review workspace</p><p className="mt-1 text-[12px] text-slate-400">Column mapping · validation results · explicit commit</p></div>
+                  <div className="flex flex-col justify-between gap-2 border-b border-border p-4 sm:flex-row sm:items-center sm:px-5">
+                    <div><p className="text-sm font-semibold text-foreground">Import review workspace</p><p className="mt-1 text-xs text-muted-foreground">Column mapping · validation results · explicit commit</p></div>
                     {importDetail ? <StatusPill status={importDetail.status} /> : null}
                   </div>
                   {!selectedImportId ? (
-                    <div className="flex min-h-80 flex-col items-center justify-center p-8 text-center"><Layers3 className="mb-3 text-slate-400" size={25} /><p className="text-[13px] font-semibold text-slate-300">No import selected</p><p className="mt-1 max-w-sm text-[12px] leading-5 text-slate-400">Stage a new source file or select an import from the history to inspect its mapping and validation state.</p></div>
+                    <div className="flex min-h-80 flex-col items-center justify-center p-8 text-center"><Layers3 className="mb-3 text-muted-foreground" size={25} /><p className="text-sm font-semibold text-foreground/80">No import selected</p><p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">Stage a new source file or select an import from the history to inspect its mapping and validation state.</p></div>
                   ) : importDetailQuery.isLoading ? (
-                    <div className="flex min-h-80 items-center justify-center"><Loader2 className="animate-spin text-[#8795ff]" size={22} /></div>
+                    <div className="flex min-h-80 items-center justify-center"><Loader2 className="animate-spin text-primary" size={22} /></div>
                   ) : importDetailQuery.isError || !importDetail ? (
-                    <div className="p-6"><p className="text-[13px] text-rose-300">{errorMessage(importDetailQuery.error, 'Import details could not be loaded.')}</p><button type="button" onClick={() => void importDetailQuery.refetch()} className="mt-3 text-[12px] font-semibold text-[#aab4ff]">Retry import details</button></div>
+                    <div className="p-6"><p className="text-sm text-rose-700 dark:text-rose-300">{errorMessage(importDetailQuery.error, 'Import details could not be loaded.')}</p><button type="button" onClick={() => void importDetailQuery.refetch()} className="mt-3 text-xs font-semibold text-primary">Retry import details</button></div>
                   ) : (
                     <div className="space-y-5 p-4 sm:p-5">
                       <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0"><p className="truncate text-[13px] font-semibold text-white">{importDetail.file_name}</p><p className="mt-1 text-[12px] text-slate-400">{humanize(importDetail.dataset_type)} · {importDetail.row_count} source rows · preview limit {importDetail.previewLimit}</p></div>
-                        <button type="button" onClick={() => void importDetailQuery.refetch()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 text-[12px] font-semibold text-slate-400 hover:bg-white/[0.04]"><RefreshCw size={11} /> Reload</button>
+                        <div className="min-w-0"><p className="truncate text-sm font-semibold text-foreground">{importDetail.file_name}</p><p className="mt-1 text-xs text-muted-foreground">{humanize(importDetail.dataset_type)} · {importDetail.row_count} source rows · preview limit {importDetail.previewLimit}</p></div>
+                        <button type="button" onClick={() => void importDetailQuery.refetch()} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"><RefreshCw size={11} /> Reload</button>
                       </div>
 
                       {importDetail.status !== 'committed' ? (
                         <div>
-                          <div className="mb-3 flex items-center justify-between"><div><p className="text-[13px] font-semibold text-white">1. Map source columns</p><p className="mt-1 text-[12px] text-slate-400">Required fields must be mapped to distinct source headers.</p></div><span className="text-[12px] font-semibold text-slate-400">{mappedRequiredCount}/{mappingFields.required.length} required</span></div>
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            {[...mappingFields.required, ...mappingFields.optional].map((field) => (
-                              <label key={field} className="rounded-xl border border-white/[0.06] bg-white/[0.015] p-3">
-                                <span className="mb-1.5 flex items-center justify-between gap-2 text-[12px] font-medium text-slate-300"><span>{humanize(field)}</span><span className={mappingFields.required.includes(field) ? 'text-rose-300' : 'text-slate-400'}>{mappingFields.required.includes(field) ? 'Required' : 'Optional'}</span></span>
-                                <select value={mapping[field] ?? ''} onChange={(event) => setMapping((current) => ({ ...current, [field]: event.target.value }))} className="h-9 w-full rounded-lg border border-white/[0.08] bg-[#111a2b] px-2.5 text-[12px] text-slate-200 outline-none focus:border-[#6577ff]/50"><option value="" className="bg-[#111a2b]">Not mapped</option>{(importDetail.source_headers ?? []).map((header) => <option key={header} value={header} className="bg-[#111a2b]">{header}</option>)}</select>
-                              </label>
-                            ))}
-                          </div>
-                          <button type="button" onClick={() => validateMutation.mutate(importDetail.id)} disabled={validateMutation.isPending || mappedRequiredCount !== mappingFields.required.length} className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-[#4254f5] px-4 text-[12px] font-semibold text-white transition hover:bg-[#5265ff] disabled:cursor-not-allowed disabled:opacity-40">{validateMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Validate all rows</button>
+                          <div className="mb-3 flex items-center justify-between"><div><p className="text-sm font-semibold text-foreground">1. Map source columns</p><p className="mt-1 text-xs text-muted-foreground">Pick the column for each field. If your file has no column for a field (for example Currency), choose “Same value for every row”.</p></div><span className="text-xs font-semibold text-muted-foreground">{mappedRequiredCount}/{mappingFields.required.length} required</span></div>
+                          <ImportMapping
+                            fields={mappingFields}
+                            headers={importDetail.source_headers ?? []}
+                            mapping={mapping}
+                            onChange={setMapping}
+                          />
+                          <button type="button" onClick={() => validateMutation.mutate(importDetail.id)} disabled={validateMutation.isPending || mappedRequiredCount !== mappingFields.required.length} className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-indigo-500 px-4 text-xs font-semibold text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40">{validateMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Validate all rows</button>
                         </div>
                       ) : (
-                        <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/[0.04] p-3.5"><div className="flex items-center gap-2 text-emerald-300"><CheckCircle2 size={15} /><p className="text-[13px] font-semibold">Import committed</p></div><p className="mt-1 text-[12px] text-slate-400">Committed at {importDetail.committed_at ? new Date(importDetail.committed_at).toLocaleString('en-GB') : 'timestamp not available'}. The committed dataset is now available to reporting.</p></div>
+                        <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/[0.04] p-3.5"><div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300"><CheckCircle2 size={15} /><p className="text-sm font-semibold">Import committed</p></div><p className="mt-1 text-xs text-muted-foreground">Committed at {importDetail.committed_at ? new Date(importDetail.committed_at).toLocaleString('en-GB') : 'timestamp not available'}. The committed dataset is now available to reporting.</p></div>
                       )}
 
                       {(importDetail.status === 'validated' || importDetail.status === 'committed') ? (
                         <div>
-                          <p className="mb-3 text-[13px] font-semibold text-white">2. Validation summary</p>
+                          <p className="mb-3 text-sm font-semibold text-foreground">2. Validation summary</p>
                           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                             {[
-                              ['Total rows', importDetail.row_count, 'text-white'],
-                              ['Valid', importDetail.valid_row_count, 'text-emerald-300'],
-                              ['Invalid', importDetail.invalid_row_count, 'text-rose-300'],
-                              ['Duplicates', importDetail.duplicate_row_count, 'text-amber-300'],
-                            ].map(([label, value, color]) => <div key={String(label)} className="rounded-xl border border-white/[0.06] bg-[#101b2f]/70 p-3"><p className="text-[12px] text-slate-400">{label}</p><p className={`mt-1 text-xl font-semibold ${color}`}>{formatNumber(Number(value), 0)}</p></div>)}
+                              ['Total rows', importDetail.row_count, 'text-foreground'],
+                              ['Valid', importDetail.valid_row_count, 'text-emerald-700 dark:text-emerald-300'],
+                              ['Invalid', importDetail.invalid_row_count, 'text-rose-700 dark:text-rose-300'],
+                              ['Duplicates', importDetail.duplicate_row_count, 'text-amber-700 dark:text-amber-300'],
+                            ].map(([label, value, color]) => <div key={String(label)} className="rounded-xl border border-border bg-card/70 p-3"><p className="text-xs text-muted-foreground">{label}</p><p className={`mt-1 text-xl font-semibold ${color}`}>{formatNumber(Number(value), 0)}</p></div>)}
                           </div>
                           {skippedRows > 0 && importDetail.status !== 'committed' ? (
-                            <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl border border-amber-400/15 bg-amber-400/[0.04] p-3"><input type="checkbox" checked={confirmPartial} onChange={(event) => setConfirmPartial(event.target.checked)} className="mt-0.5 h-3.5 w-3.5 accent-[#6577ff]" /><span><span className="block text-[12px] font-semibold text-amber-200">Confirm partial import</span><span className="mt-0.5 block text-[12px] leading-4 text-slate-400">{skippedRows} invalid or duplicate rows will be excluded. Only the {validRows} valid rows will be committed.</span></span></label>
+                            <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl border border-amber-400/15 bg-amber-400/[0.04] p-3"><input type="checkbox" checked={confirmPartial} onChange={(event) => setConfirmPartial(event.target.checked)} className="mt-0.5 h-3.5 w-3.5 accent-primary" /><span><span className="block text-xs font-semibold text-amber-700 dark:text-amber-200">Confirm partial import</span><span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{skippedRows} invalid or duplicate rows will be excluded. Only the {validRows} valid rows will be committed.</span></span></label>
                           ) : null}
-                          {importDetail.status === 'validated' ? <button type="button" onClick={() => commitMutation.mutate({ id: importDetail.id, partial: confirmPartial })} disabled={!canCommit || commitMutation.isPending} className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 text-[12px] font-semibold text-emerald-200 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-40">{commitMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Database size={13} />} Commit {validRows} valid rows</button> : null}
+                          {importDetail.status === 'validated' ? <button type="button" onClick={() => commitMutation.mutate({ id: importDetail.id, partial: confirmPartial })} disabled={!canCommit || commitMutation.isPending} className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-40">{commitMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Database size={13} />} Commit {validRows} valid rows</button> : null}
                         </div>
                       ) : null}
 
                       {Array.isArray(importDetail.rows) && importDetail.rows.length ? (
                         <div>
-                          <div className="mb-2 flex items-center justify-between"><p className="text-[13px] font-semibold text-white">3. Row preview</p><span className="text-[12px] text-slate-400">First {importDetail.rows.length} rows</span></div>
-                          <div className="max-h-72 overflow-auto rounded-xl border border-white/[0.07]">
+                          <div className="mb-2 flex items-center justify-between"><p className="text-sm font-semibold text-foreground">3. Row preview</p><span className="text-xs text-muted-foreground">First {importDetail.rows.length} rows</span></div>
+                          <div className="max-h-72 overflow-auto rounded-xl border border-border">
                             <table className="w-full min-w-[540px] text-left">
-                              <thead className="sticky top-0 bg-[#111a2b]"><tr><th className="px-3 py-2 text-[12px] uppercase tracking-wider text-slate-400">Row</th><th className="px-3 py-2 text-[12px] uppercase tracking-wider text-slate-400">Status</th><th className="px-3 py-2 text-[12px] uppercase tracking-wider text-slate-400">Source values / validation</th></tr></thead>
+                              <thead className="sticky top-0 bg-card"><tr><th className="px-3 py-2 text-xs  text-muted-foreground">Row</th><th className="px-3 py-2 text-xs  text-muted-foreground">Status</th><th className="px-3 py-2 text-xs  text-muted-foreground">Source values / validation</th></tr></thead>
                               <tbody className="divide-y divide-white/[0.05]">{importDetail.rows.map((row) => {
                                 const values = isRecord(row.raw_data) ? Object.entries(row.raw_data).slice(0, 5).map(([key, value]) => `${key}: ${String(value ?? '')}`) : [];
                                 const errors = Array.isArray(row.validation_errors) ? row.validation_errors.map((value) => String(value)) : [];
-                                return <tr key={row.id} className="align-top"><td className="px-3 py-2 text-[12px] text-slate-400">{row.row_number}</td><td className="px-3 py-2"><StatusPill status={row.validation_status} /></td><td className="max-w-[420px] px-3 py-2"><p className="break-words text-[12px] leading-4 text-slate-400">{values.join(' · ') || '—'}</p>{errors.length ? <p className="mt-1 break-words text-[12px] leading-4 text-rose-300">{errors.join(' · ')}</p> : null}</td></tr>;
+                                return <tr key={row.id} className="align-top"><td className="px-3 py-2 text-xs text-muted-foreground">{row.row_number}</td><td className="px-3 py-2"><StatusPill status={row.validation_status} /></td><td className="max-w-[420px] px-3 py-2"><p className="break-words text-xs leading-4 text-muted-foreground">{values.join(' · ') || '—'}</p>{errors.length ? <p className="mt-1 break-words text-xs leading-4 text-rose-700 dark:text-rose-300">{errors.join(' · ')}</p> : null}</td></tr>;
                               })}</tbody>
                             </table>
                           </div>
-                          <p className="mt-2 text-[12px] leading-4 text-slate-400">Validation preview is capped at {importDetail.previewLimit} rows. All source rows are validated server-side.</p>
+                          <p className="mt-2 text-xs leading-4 text-muted-foreground">Validation preview is capped at {importDetail.previewLimit} rows. All source rows are validated server-side.</p>
                         </div>
                       ) : null}
                     </div>
@@ -1085,41 +1179,35 @@ export default function ExecutiveIntelligencePage() {
               </div>
             </section>
 
-            <section>
-              <SectionHeading eyebrow="Audit and provenance" title="Report methodology and source freshness" description="Definitions and assumptions travel with the downloadable report so figures remain explainable." />
+            {dashboard && <section>
+              <SectionHeading title="Report methodology and source freshness" description="Definitions and assumptions travel with the downloadable report so figures remain explainable." />
               <div className="grid gap-4 xl:grid-cols-2">
                 <Panel className="p-4 sm:p-5">
-                  <div className="mb-3 flex items-center gap-2"><Database size={15} className="text-[#9ba7ff]" /><p className="text-[13px] font-semibold text-white">Source register</p></div>
-                  {dashboard.sources?.length ? <div className="space-y-2">{dashboard.sources.map((source, index) => <div key={`${source.sourceType}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.05] bg-white/[0.015] px-3 py-2.5"><div className="min-w-0"><p className="truncate text-[12px] font-medium text-slate-300">{source.sourceName}</p><p className="mt-0.5 text-[12px] text-slate-400">{humanize(source.sourceType)} · {formatNumber(source.recordCount, 0)} records</p></div><span className="shrink-0 text-[12px] text-slate-400">{formatCompactDate(source.periodEnd)}</span></div>)}</div> : <p className="text-[12px] text-slate-400">Source freshness details will appear when data sources contain records.</p>}
+                  <div className="mb-3 flex items-center gap-2"><Database size={15} className="text-primary" /><p className="text-sm font-semibold text-foreground">Source register</p></div>
+                  {dashboard.sources?.length ? <div className="space-y-2">{dashboard.sources.map((source, index) => <div key={`${source.sourceType}-${index}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/50 px-3 py-2.5"><div className="min-w-0"><p className="truncate text-xs font-medium text-foreground/80">{source.sourceName}</p><p className="mt-0.5 text-xs text-muted-foreground">{humanize(source.sourceType)} · {formatNumber(source.recordCount, 0)} records</p></div><span className="shrink-0 text-xs text-muted-foreground">{formatCompactDate(source.periodEnd)}</span></div>)}</div> : <p className="text-xs text-muted-foreground">Source freshness details will appear when data sources contain records.</p>}
                 </Panel>
                 <Panel className="p-4 sm:p-5">
-                  <div className="mb-3 flex items-center gap-2"><ShieldCheck size={15} className="text-[#9ba7ff]" /><p className="text-[13px] font-semibold text-white">Calculation assumptions</p></div>
-                  {dashboard.assumptions?.length ? <ul className="space-y-2">{dashboard.assumptions.map((assumption, index) => <li key={index} className="flex items-start gap-2 text-[12px] leading-5 text-slate-400"><span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[#8190ff]" />{assumption}</li>)}</ul> : <p className="text-[12px] text-slate-400">No methodology notes were returned.</p>}
+                  <div className="mb-3 flex items-center gap-2"><ShieldCheck size={15} className="text-primary" /><p className="text-sm font-semibold text-foreground">Calculation assumptions</p></div>
+                  {dashboard.assumptions?.length ? <ul className="space-y-2">{dashboard.assumptions.map((assumption, index) => <li key={index} className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"><span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-primary" />{assumption}</li>)}</ul> : <p className="text-xs text-muted-foreground">No methodology notes were returned.</p>}
                 </Panel>
               </div>
-              {dashboard.sections?.length ? <details className="group rounded-2xl border border-white/[0.07] bg-[#0c1424]/80 p-4"><summary className="flex cursor-pointer list-none items-center justify-between text-[13px] font-semibold text-slate-300"><span className="flex items-center gap-2"><FileText size={14} className="text-[#9ba7ff]" /> Executive report sections</span><ChevronDown size={14} className="transition group-open:rotate-180" /></summary><div className="mt-4 grid gap-3 md:grid-cols-2">{dashboard.sections.map((section, index) => <div key={`${section.title}-${index}`} className="rounded-xl border border-white/[0.05] bg-white/[0.015] p-3"><p className="text-[12px] font-semibold text-slate-200">{section.title}</p>{section.body ? <p className="mt-1 text-[12px] leading-5 text-slate-400">{section.body}</p> : null}{section.items?.length ? <ul className="mt-2 space-y-1">{section.items.map((item, itemIndex) => <li key={itemIndex} className="text-[12px] leading-4 text-slate-400">• {item}</li>)}</ul> : null}</div>)}</div></details> : null}
-            </section>
-
-            <footer className="flex flex-col justify-between gap-2 border-t border-white/[0.07] pt-4 text-[12px] text-slate-400 sm:flex-row sm:items-center">
-              <span> LUMORIUS · EXECUTIVE INTELLIGENCE · REPORTING ENGINE V1.1b</span>
-              <span>Generated {dashboard.generatedAt ? new Date(dashboard.generatedAt).toLocaleString('en-GB') : '—'} · Financial values remain currency-separated</span>
-            </footer>
-          </>
-        ) : null}
+              {dashboard.sections?.length ? <details className="group rounded-2xl border border-border bg-card p-4"><summary className="flex cursor-pointer list-none items-center justify-between text-sm font-semibold text-foreground/80"><span className="flex items-center gap-2"><FileText size={14} className="text-primary" /> Executive report sections</span><ChevronDown size={14} className="transition group-open:rotate-180" /></summary><div className="mt-4 grid gap-3 md:grid-cols-2">{dashboard.sections.map((section, index) => <div key={`${section.title}-${index}`} className="rounded-xl border border-border bg-muted/50 p-3"><p className="text-xs font-semibold text-foreground/90">{section.title}</p>{section.body ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{section.body}</p> : null}{section.items?.length ? <ul className="mt-2 space-y-1">{section.items.map((item, itemIndex) => <li key={itemIndex} className="text-xs leading-4 text-muted-foreground">• {item}</li>)}</ul> : null}</div>)}</div></details> : null}
+            </section>}
+        </>}
       </main>
 
       {targetModalOpen ? (
         <div className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-black/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="target-modal-title">
-          <div className="my-auto w-full max-w-xl rounded-2xl border border-white/[0.1] bg-[#0c1424] p-5 shadow-2xl sm:p-6">
-            <div className="mb-5 flex items-start justify-between gap-3"><div><p className="text-[12px] font-bold uppercase tracking-[0.2em] text-[#9ba7ff]">Performance governance</p><h2 id="target-modal-title" className="mt-1 text-lg font-semibold text-white">Create KPI target</h2><p className="mt-1 text-[12px] text-slate-400">Configure the measurement, period and alert policy.</p></div><button type="button" onClick={() => setTargetModalOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.05] hover:text-white" aria-label="Close target form"><X size={17} /></button></div>
+          <div className="my-auto w-full max-w-xl rounded-2xl border border-white/[0.1] bg-background-deep p-5 shadow-2xl sm:p-6">
+            <div className="mb-5 flex items-start justify-between gap-3"><div><p className="text-xs font-bold  text-primary">Performance governance</p><h2 id="target-modal-title" className="mt-1 text-lg font-semibold text-foreground">Create KPI target</h2><p className="mt-1 text-xs text-muted-foreground">Configure the measurement, period and alert policy.</p></div><button type="button" onClick={() => setTargetModalOpen(false)} className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Close target form"><X size={17} /></button></div>
             <form onSubmit={(event) => { event.preventDefault(); targetMutation.mutate(); }} className="space-y-3">
-              <label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">KPI metric</span><select required value={targetForm.metricKey} onChange={(event) => updateTargetField('metricKey', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none focus:border-[#6577ff]/60">{TARGET_METRICS.map((metric) => <option key={metric} value={metric} className="bg-[#111a2b]">{humanize(metric)}</option>)}</select></label>
-              {currencyScopedTarget ? <label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Currency · ISO 4217</span><input required maxLength={3} value={targetForm.currency} onChange={(event) => updateTargetField('currency', event.target.value.toUpperCase())} placeholder="USD" className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] uppercase text-slate-200 outline-none focus:border-[#6577ff]/60" /></label> : null}
-              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Target value</span><input type="number" step="any" required value={targetForm.targetValue} onChange={(event) => updateTargetField('targetValue', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none focus:border-[#6577ff]/60" /></label><div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3"><p className="text-[12px] uppercase tracking-[0.13em] text-slate-400">Validated unit</p><p className="mt-2 text-sm font-semibold text-[#aeb8ff]">{targetUnit}</p><p className="mt-1 text-[12px] text-slate-400">Set automatically from the metric.</p></div></div>
-              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Target period</span><select value={targetForm.targetPeriod} onChange={(event) => updateTargetField('targetPeriod', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none"><option value="monthly" className="bg-[#111a2b]">Monthly</option><option value="quarterly" className="bg-[#111a2b]">Quarterly</option><option value="annual" className="bg-[#111a2b]">Annual</option><option value="custom" className="bg-[#111a2b]">Custom</option></select></label><label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Direction</span><select value={targetForm.direction} onChange={(event) => updateTargetField('direction', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none"><option value="higher_is_better" className="bg-[#111a2b]">Higher is better</option><option value="lower_is_better" className="bg-[#111a2b]">Lower is better</option></select></label></div>
-              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Period start</span><input type="date" required value={targetForm.periodStart} onChange={(event) => updateTargetField('periodStart', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none" /></label><label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Period end</span><input type="date" required min={targetForm.periodStart} value={targetForm.periodEnd} onChange={(event) => updateTargetField('periodEnd', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none" /></label></div>
-              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Alert threshold (%)</span><input type="number" min="0" max="1000" step="any" value={targetForm.alertThresholdPct} onChange={(event) => updateTargetField('alertThresholdPct', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none" /></label><label className="block"><span className="mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.13em] text-slate-400">Minimum sample size</span><input type="number" min="1" step="1" required value={targetForm.minimumSampleSize} onChange={(event) => updateTargetField('minimumSampleSize', event.target.value)} className="h-10 w-full rounded-xl border border-white/[0.09] bg-[#111a2b] px-3 text-[13px] text-slate-200 outline-none" /></label></div>
-              <div className="mt-5 flex flex-col-reverse gap-2 border-t border-white/[0.07] pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => setTargetModalOpen(false)} className="h-10 rounded-xl border border-white/[0.09] px-4 text-[13px] font-semibold text-slate-400 hover:bg-white/[0.04]">Cancel</button><button type="submit" disabled={targetMutation.isPending || !targetForm.targetValue || !targetForm.periodStart || !targetForm.periodEnd || (currencyScopedTarget && !/^[A-Z]{3}$/.test(targetForm.currency.trim().toUpperCase()))} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[#4254f5] px-4 text-[13px] font-semibold text-white hover:bg-[#5265ff] disabled:cursor-not-allowed disabled:opacity-40">{targetMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Save target</button></div>
+              <label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">KPI metric</span><select required value={targetForm.metricKey} onChange={(event) => updateTargetField('metricKey', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none focus:border-primary/60">{TARGET_METRICS.map((metric) => <option key={metric} value={metric} className="bg-card">{humanize(metric)}</option>)}</select></label>
+              {currencyScopedTarget ? <label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Currency · ISO 4217</span><input required maxLength={3} value={targetForm.currency} onChange={(event) => updateTargetField('currency', event.target.value.toUpperCase())} placeholder="USD" className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm  text-foreground/90 outline-none focus:border-primary/60" /></label> : null}
+              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Target value</span><input type="number" step="any" required value={targetForm.targetValue} onChange={(event) => updateTargetField('targetValue', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none focus:border-primary/60" /></label><div className="rounded-xl border border-border bg-muted/50 p-3"><p className="text-xs  text-muted-foreground">Validated unit</p><p className="mt-2 text-sm font-semibold text-primary">{targetUnit}</p><p className="mt-1 text-xs text-muted-foreground">Set automatically from the metric.</p></div></div>
+              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Target period</span><select value={targetForm.targetPeriod} onChange={(event) => updateTargetField('targetPeriod', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none"><option value="monthly" className="bg-card">Monthly</option><option value="quarterly" className="bg-card">Quarterly</option><option value="annual" className="bg-card">Annual</option><option value="custom" className="bg-card">Custom</option></select></label><label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Direction</span><select value={targetForm.direction} onChange={(event) => updateTargetField('direction', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none"><option value="higher_is_better" className="bg-card">Higher is better</option><option value="lower_is_better" className="bg-card">Lower is better</option></select></label></div>
+              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Period start</span><input type="date" required value={targetForm.periodStart} onChange={(event) => updateTargetField('periodStart', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none" /></label><label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Period end</span><input type="date" required min={targetForm.periodStart} value={targetForm.periodEnd} onChange={(event) => updateTargetField('periodEnd', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none" /></label></div>
+              <div className="grid gap-3 sm:grid-cols-2"><label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Alert threshold (%)</span><input type="number" min="0" max="1000" step="any" value={targetForm.alertThresholdPct} onChange={(event) => updateTargetField('alertThresholdPct', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none" /></label><label className="block"><span className="mb-1.5 block text-xs font-semibold  text-muted-foreground">Minimum sample size</span><input type="number" min="1" step="1" required value={targetForm.minimumSampleSize} onChange={(event) => updateTargetField('minimumSampleSize', event.target.value)} className="h-10 w-full rounded-xl border border-border bg-card px-3 text-sm text-foreground/90 outline-none" /></label></div>
+              <div className="mt-5 flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => setTargetModalOpen(false)} className="h-10 rounded-xl border border-border px-4 text-sm font-semibold text-muted-foreground hover:bg-muted">Cancel</button><button type="submit" disabled={targetMutation.isPending || !targetForm.targetValue || !targetForm.periodStart || !targetForm.periodEnd || (currencyScopedTarget && !/^[A-Z]{3}$/.test(targetForm.currency.trim().toUpperCase()))} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-indigo-500 px-4 text-sm font-semibold text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40">{targetMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Save target</button></div>
             </form>
           </div>
         </div>

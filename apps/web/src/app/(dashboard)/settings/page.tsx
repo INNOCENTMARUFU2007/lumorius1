@@ -1,6 +1,8 @@
 
 'use client';
 
+import Link from 'next/link';
+
 import { useState } from 'react';
 import {
   useQuery,
@@ -19,6 +21,7 @@ import {
 import api from '@/lib/api';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
+import { AiModelPicker } from '@/components/ai-model-picker';
 
 type UsageItem = {
   label: string;
@@ -315,6 +318,7 @@ export default function SettingsPage() {
 
         <div>
           <h1 className="text-2xl font-bold">Settings</h1>
+          <Link href="/security/governance" className="mt-2 inline-block text-sm text-sky-600 hover:underline dark:text-sky-300">Privacy and data controls</Link>
           <p className="text-sm text-muted-foreground">
             Manage your organisation, usage, and profile.
           </p>
@@ -379,6 +383,15 @@ export default function SettingsPage() {
             Organisation information is unavailable.
           </p>
         )}
+      </section>
+
+      {/* AI engine */}
+      <section aria-labelledby="ai-settings-title" className="space-y-4 rounded-xl border border-border bg-card p-5">
+        <div>
+          <h2 id="ai-settings-title" className="font-semibold">AI</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">Choose which AI runs your workspace: OpenAI or Anthropic Claude.</p>
+        </div>
+        <AiModelPicker showAutomation />
       </section>
 
       {/* Usage */}

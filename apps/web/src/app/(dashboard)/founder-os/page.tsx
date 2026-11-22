@@ -1,7 +1,9 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/hooks/use-auth';
 import {
   useQuery,
   useMutation,
@@ -26,8 +28,10 @@ import {
   Area,
   RadarChart,
   Radar,
+  Dot,
   PolarGrid,
   PolarAngleAxis,
+  PolarRadiusAxis,
   CartesianGrid,
   XAxis,
   YAxis,
@@ -36,6 +40,7 @@ import {
 } from 'recharts';
 import api from '@/lib/api';
 import { toast } from 'sonner';
+import { HealthRadarChart } from './health-radar-chart';
 
 type DataRecord = Record<string, unknown>;
 type NullableScore = number | null;
@@ -57,13 +62,11 @@ interface FounderDashboard {
   kpis?: unknown;
   teamVelocity?: unknown;
   taskBreakdown?: unknown;
-  aiInsights?: unknown;
 }
 
 interface VelocityPoint {
   week: string;
   completed: number;
-  total?: number;
 }
 
 const SCORE_COLOR = (score: number) =>
@@ -188,134 +191,18 @@ function getProgress(
   );
 }
 
-/**
- * Normalizes API data into 12 consecutive Monday-start weeks.
- *
- * Missing weeks inside a returned time series are filled with zero,
- * rather than being omitted and causing the chart to collapse to
- * a single point. It does not manufacture positive activity.
- */
-function buildVelocitySeries(
-  rows: DataRecord[],
-): VelocityPoint[] {
-  if (rows.length === 0) {
-    return [];
-  }
-
-  const now = new Date();
-
-  const currentWeekStart = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-    ),
-  );
-
-  const daysSinceMonday =
-    (currentWeekStart.getUTCDay() + 6) % 7;
-
-  currentWeekStart.setUTCDate(
-    currentWeekStart.getUTCDate() - daysSinceMonday,
-  );
-
-  currentWeekStart.setUTCHours(0, 0, 0, 0);
-
-  const firstWeekStart = new Date(currentWeekStart);
-
-  firstWeekStart.setUTCDate(
-    firstWeekStart.getUTCDate() - 11 * 7,
-  );
-
-  const firstWeekKey = firstWeekStart
-    .toISOString()
-    .slice(0, 10);
-
-  const currentWeekKey = currentWeekStart
-    .toISOString()
-    .slice(0, 10);
-
-  const completedByWeek = new Map<string, number>();
-  const totalByWeek = new Map<string, number>();
-
-  for (const row of rows) {
-    if (row.week == null) {
-      continue;
+function buildVelocitySeries(rows: DataRecord[]): VelocityPoint[] {
+  // The API supplies the calendar weeks, including verified zero counts.
+  return rows.flatMap((row) => {
+    const week = typeof row.week === 'string' ? row.week : '';
+    const completed = toFiniteNumber(row.completed);
+    if (!week || !Number.isFinite(Date.parse(week)) || completed === null || completed < 0) {
+      return [];
     }
-
-    const parsedDate = new Date(String(row.week));
-
-    if (!Number.isFinite(parsedDate.getTime())) {
-      continue;
-    }
-
-    const weekStart = new Date(
-      Date.UTC(
-        parsedDate.getUTCFullYear(),
-        parsedDate.getUTCMonth(),
-        parsedDate.getUTCDate(),
-      ),
-    );
-
-    const daysFromMonday =
-      (weekStart.getUTCDay() + 6) % 7;
-
-    weekStart.setUTCDate(
-      weekStart.getUTCDate() - daysFromMonday,
-    );
-
-    weekStart.setUTCHours(0, 0, 0, 0);
-
-    const weekKey = weekStart.toISOString().slice(0, 10);
-
-    if (
-      weekKey < firstWeekKey ||
-      weekKey > currentWeekKey
-    ) {
-      continue;
-    }
-
-    const completed =
-      toFiniteNumber(row.completed) ?? 0;
-
-    const total = toFiniteNumber(row.total);
-
-    completedByWeek.set(
-      weekKey,
-      (completedByWeek.get(weekKey) ?? 0) + completed,
-    );
-
-    if (total !== null) {
-      totalByWeek.set(
-        weekKey,
-        (totalByWeek.get(weekKey) ?? 0) + total,
-      );
-    }
-  }
-
-  // No usable dates means there is no trustworthy series to display.
-  if (completedByWeek.size === 0) {
-    return [];
-  }
-
-  return Array.from({ length: 12 }, (_, index) => {
-    const weekStart = new Date(currentWeekStart);
-
-    weekStart.setUTCDate(
-      weekStart.getUTCDate() - (11 - index) * 7,
-    );
-
-    const weekKey = weekStart.toISOString().slice(0, 10);
-
-    return {
-      week: `${weekKey}T00:00:00.000Z`,
-      completed: completedByWeek.get(weekKey) ?? 0,
-      ...(totalByWeek.has(weekKey)
-        ? { total: totalByWeek.get(weekKey) }
-        : {}),
-    };
+    return [{ week, completed }];
   });
 }
+
 
 function formatWeekLabel(value: unknown): string {
   const date = new Date(String(value));
@@ -331,87 +218,123 @@ function formatWeekLabel(value: unknown): string {
   });
 }
 
-// ── Health Score Ring ────────────────────────────────────────
+type HealthDimension = Exclude<keyof HealthScore, 'overall'>;
 
-function ScoreRing({
-  score,
-  label,
-}: {
-  score: NullableScore;
-  label: string;
-}) {
-  const radius = 36;
-  const circumference = 2 * Math.PI * radius;
+const HEALTH_DIMENSIONS = [
+  { key: 'financial', label: 'Financial', color: '#f8bc7a', source: 'Financial health needs a verified benchmark.' },
+  { key: 'growth', label: 'Growth', color: '#58ddcf', source: 'Current quarter objective progress and document indexing.' },
+  { key: 'team', label: 'Team', color: '#ba9bff', source: 'Members active this week (40%), open tasks with an owner (30%) and open tasks on time (30%).' },
+  { key: 'product', label: 'Product', color: '#78baff', source: 'Task completion and the share of tasks that are overdue.' },
+] as const;
 
-  const hasScore =
-    typeof score === 'number' &&
-    Number.isFinite(score);
+type RadarPoint = { x: number; y: number; value?: number | null };
 
-  const value = hasScore
-    ? Math.min(100, Math.max(0, score))
-    : 0;
+function PartialRadar({ points }: { points?: RadarPoint[] }) {
+  return (
+    <g>
+      {(points ?? []).map((start, index, items) => {
+        const end = items[(index + 1) % items.length];
+        if (start.value == null || end.value == null) return null;
+        return (
+          <line
+            key={index}
+            x1={start.x} y1={start.y} x2={end.x} y2={end.y}
+            stroke="#a78bfa" strokeWidth={2} strokeDasharray="5 5" strokeLinecap="round"
+          />
+        );
+      })}
+    </g>
+  );
+}
 
-  const dash = (value / 100) * circumference;
-
-  const color = hasScore
-    ? SCORE_COLOR(value)
-    : '#6b7280';
+function HealthRadar({ health }: { health: HealthScore }) {
+  const gradientId = `founder-health-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const [selected, setSelected] = useState<HealthDimension | null>(null);
+  const dimensions = HEALTH_DIMENSIONS.map((item) => ({ ...item, score: health[item.key] }));
+  const measuredCount = dimensions.filter(({ score }) => score !== null).length;
+  const current = dimensions.find(({ key }) => key === selected)
+    ?? dimensions.find(({ score }) => score !== null)
+    ?? dimensions[0];
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div
-        className="relative h-24 w-24"
-        aria-label={
-          hasScore
-            ? `${label} score: ${Math.round(value)} out of 100`
-            : `${label} score unavailable`
-        }
-      >
-        <svg
-          className="h-24 w-24 -rotate-90"
-          viewBox="0 0 96 96"
-          aria-hidden="true"
-        >
-          <circle
-            cx="48"
-            cy="48"
-            r={radius}
-            fill="none"
-            stroke="#1f2937"
-            strokeWidth="8"
-          />
-
-          {hasScore && (
-            <circle
-              cx="48"
-              cy="48"
-              r={radius}
-              fill="none"
-              stroke={color}
-              strokeWidth="8"
-              strokeDasharray={`${dash} ${circumference - dash}`}
-              strokeLinecap="round"
-              style={{
-                transition:
-                  'stroke-dasharray 0.6s ease',
-              }}
-            />
-          )}
-        </svg>
-
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-xl font-bold text-white">
-            {hasScore ? Math.round(value) : 'N/A'}
+    <section className="overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-panel sm:p-6">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl border border-violet-400/20 bg-violet-500/10 p-2.5">
+            <Activity className="h-5 w-5 text-violet-700 dark:text-violet-300" aria-hidden="true" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-foreground">Business Health Score</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {measuredCount} of {dimensions.length} dimensions measured
+            </p>
+          </div>
+        </div>
+        <div className="flex items-baseline gap-2 rounded-xl border border-border bg-muted px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">Overall</span>
+          <span className="text-2xl font-semibold leading-none tabular-nums" style={{
+            color: health.overall === null ? '#94a3b8' : SCORE_COLOR(health.overall),
+          }}>
+            {health.overall ?? 'N/A'}
           </span>
+          {health.overall !== null && <span className="text-xs text-muted-foreground">/ 100</span>}
         </div>
       </div>
 
-      <span className="text-center text-xs text-gray-400">
-        {label}
-      </span>
-    </div>
+      <div className="grid gap-4 min-[920px]:grid-cols-[minmax(0,1.5fr)_minmax(200px,1fr)]">
+        <figure
+          aria-label="Business health radar"
+          className="flex min-w-0 flex-col justify-center rounded-xl border border-border bg-background/40"
+          
+        >
+          <div className="mx-auto h-[300px] w-full max-w-[400px] min-w-0 sm:h-[340px]">
+            <HealthRadarChart dimensions={dimensions} selected={current.key} onSelect={(key) => setSelected(key as HealthDimension)} />
+          </div>
+          <figcaption className="border-t border-border px-3 py-3 text-center text-xs text-muted-foreground">
+            {measuredCount === 0
+              ? 'Scores will appear as workspace data becomes available.'
+              : 'Overall uses measured dimensions.'}
+            {measuredCount > 0 && measuredCount < dimensions.length && ' Missing scores are unplotted.'}
+          </figcaption>
+        </figure>
+
+        <div className="min-w-0 space-y-2" role="group" aria-label="Inspect a health dimension">
+          {dimensions.map(({ key, label, color, score }) => (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={key === current.key}
+              aria-label={score === null ? `${label}, no score` : `${label}, ${score} out of 100`}
+              onClick={() => setSelected(key)}
+              className={`block w-full rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 ${key === current.key
+                ? 'border-violet-400/50 bg-violet-400/10'
+                : 'border-border bg-muted/70 hover:border-border-strong hover:bg-muted'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: score === null ? '#64748b' : color }} />
+                <span className="truncate text-sm font-medium text-foreground">{label}</span>
+                <span className="ml-auto whitespace-nowrap text-xs font-medium tabular-nums text-foreground/80">
+                  {score === null ? 'No score' : `${score} / 100`}
+                </span>
+              </span>
+              <span className="mt-2 block h-1 rounded-full bg-muted">
+                {score !== null && (
+                  <span className="block h-full rounded-full" style={{ width: `${score}%`, backgroundColor: color }} />
+                )}
+              </span>
+            </button>
+          ))}
+          <p aria-live="polite" className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
+            <span className="font-medium text-foreground/80">{current.label}</span>
+            {' · '}{current.source}
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
+
 
 // ── OKRs ─────────────────────────────────────────────────────
 
@@ -421,19 +344,19 @@ const STATUS_MAP: Record<
 > = {
   on_track: {
     label: 'On Track',
-    color: 'bg-emerald-500/20 text-emerald-400',
+    color: 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',
   },
   at_risk: {
     label: 'At Risk',
-    color: 'bg-amber-500/20 text-amber-400',
+    color: 'bg-amber-500/20 text-amber-600 dark:text-amber-400',
   },
   behind: {
     label: 'Behind',
-    color: 'bg-red-500/20 text-red-400',
+    color: 'bg-red-500/20 text-red-600 dark:text-red-400',
   },
   completed: {
     label: 'Completed',
-    color: 'bg-blue-500/20 text-blue-400',
+    color: 'bg-blue-500/20 text-blue-600 dark:text-blue-400',
   },
 };
 
@@ -455,7 +378,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
   const statusKey = String(obj.status ?? '');
   const status = STATUS_MAP[statusKey] ?? {
     label: 'Unknown status',
-    color: 'bg-gray-700 text-gray-300',
+    color: 'bg-muted text-foreground/80',
   };
 
   const keyResults = asArray(obj.key_results);
@@ -551,23 +474,23 @@ function OkrCard({ obj }: { obj: DataRecord }) {
   });
 
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900">
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
       {/* Objective header */}
       <button
         type="button"
-        className="flex w-full items-center justify-between gap-3 p-4 text-left transition hover:bg-gray-800/50"
+        className="flex w-full items-center justify-between gap-3 p-4 text-left transition hover:bg-muted/50"
         onClick={() => setExpanded((previous) => !previous)}
         aria-expanded={expanded}
       >
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <Target className="h-5 w-5 shrink-0 text-violet-400" />
+          <Target className="h-5 w-5 shrink-0 text-violet-600 dark:text-violet-400" />
 
           <div className="min-w-0">
-            <p className="truncate font-semibold text-white">
+            <p className="truncate font-semibold text-foreground">
               {String(obj.title ?? 'Untitled objective')}
             </p>
 
-            <p className="mt-0.5 text-xs text-gray-400">
+            <p className="mt-0.5 text-xs text-muted-foreground">
               {String(obj.quarter ?? '—')}{' '}
               {String(obj.year ?? '')}
             </p>
@@ -581,21 +504,21 @@ function OkrCard({ obj }: { obj: DataRecord }) {
             {status.label}
           </span>
 
-          <div className="hidden h-1.5 w-16 rounded-full bg-gray-800 sm:block">
+          <div className="hidden h-1.5 w-16 rounded-full bg-muted sm:block">
             <div
               className="h-1.5 rounded-full bg-violet-500 transition-all"
               style={{ width: `${progress ?? 0}%` }}
             />
           </div>
 
-          <span className="w-10 text-right text-xs text-gray-400">
+          <span className="w-10 text-right text-xs text-muted-foreground">
             {progress === null
               ? 'N/A'
               : `${Math.round(progress)}%`}
           </span>
 
           <ChevronRight
-            className={`h-4 w-4 text-gray-500 transition-transform ${
+            className={`h-4 w-4 text-muted-foreground transition-transform ${
               expanded ? 'rotate-90' : ''
             }`}
           />
@@ -604,14 +527,14 @@ function OkrCard({ obj }: { obj: DataRecord }) {
 
       {/* Expanded objective: Key Results */}
       {expanded && (
-        <div className="space-y-4 border-t border-gray-800 p-4">
+        <div className="space-y-4 border-t border-border p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="font-medium text-white">
+              <h3 className="font-medium text-foreground">
                 Key Results
               </h3>
 
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-muted-foreground">
                 {keyResults.length} key result
                 {keyResults.length === 1 ? '' : 's'} attached
               </p>
@@ -621,7 +544,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
               type="button"
               onClick={() => setShowAddForm((previous) => !previous)}
               disabled={!objectiveId}
-              className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm font-medium text-violet-300 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm font-medium text-violet-700 dark:text-violet-300 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="h-4 w-4" />
               {showAddForm ? 'Cancel' : 'Add Key Result'}
@@ -631,7 +554,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
           {/* Add Key Result form */}
           {showAddForm && (
             <form
-              className="space-y-4 rounded-xl border border-violet-500/20 bg-gray-950/60 p-4"
+              className="space-y-4 rounded-xl border border-violet-500/20 bg-background/60 p-4"
               onSubmit={(event) => {
                 event.preventDefault();
 
@@ -643,7 +566,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
               <div>
                 <label
                   htmlFor={`kr-title-${objectiveId}`}
-                  className="mb-1.5 block text-sm font-medium text-gray-300"
+                  className="mb-1.5 block text-sm font-medium text-foreground/80"
                 >
                   Key Result title
                 </label>
@@ -656,7 +579,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                   placeholder="e.g. Acquire 100 paying customers"
                   value={title}
                   onChange={(event) => setTitle(event.target.value)}
-                  className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-violet-500"
+                  className="w-full rounded-lg border border-border-strong bg-card px-3 py-2.5 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/70 focus:border-violet-500"
                   disabled={addKeyResult.isPending}
                 />
               </div>
@@ -665,7 +588,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                 <div>
                   <label
                     htmlFor={`kr-type-${objectiveId}`}
-                    className="mb-1.5 block text-sm font-medium text-gray-300"
+                    className="mb-1.5 block text-sm font-medium text-foreground/80"
                   >
                     Measurement type
                   </label>
@@ -676,7 +599,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                     onChange={(event) =>
                       setMetricType(event.target.value)
                     }
-                    className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500"
+                    className="w-full rounded-lg border border-border-strong bg-card px-3 py-2.5 text-sm text-foreground outline-none focus:border-violet-500"
                     disabled={addKeyResult.isPending}
                   >
                     <option value="number">Number</option>
@@ -689,7 +612,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                 <div>
                   <label
                     htmlFor={`kr-unit-${objectiveId}`}
-                    className="mb-1.5 block text-sm font-medium text-gray-300"
+                    className="mb-1.5 block text-sm font-medium text-foreground/80"
                   >
                     Unit (optional)
                   </label>
@@ -701,7 +624,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                     placeholder="e.g. customers, USD"
                     value={unit}
                     onChange={(event) => setUnit(event.target.value)}
-                    className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500"
+                    className="w-full rounded-lg border border-border-strong bg-card px-3 py-2.5 text-sm text-foreground outline-none focus:border-violet-500"
                     disabled={addKeyResult.isPending}
                   />
                 </div>
@@ -709,7 +632,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                 <div>
                   <label
                     htmlFor={`kr-start-${objectiveId}`}
-                    className="mb-1.5 block text-sm font-medium text-gray-300"
+                    className="mb-1.5 block text-sm font-medium text-foreground/80"
                   >
                     Starting value
                   </label>
@@ -723,7 +646,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                     onChange={(event) =>
                       setStartValue(event.target.value)
                     }
-                    className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500"
+                    className="w-full rounded-lg border border-border-strong bg-card px-3 py-2.5 text-sm text-foreground outline-none focus:border-violet-500"
                     disabled={addKeyResult.isPending}
                   />
                 </div>
@@ -731,7 +654,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                 <div>
                   <label
                     htmlFor={`kr-target-${objectiveId}`}
-                    className="mb-1.5 block text-sm font-medium text-gray-300"
+                    className="mb-1.5 block text-sm font-medium text-foreground/80"
                   >
                     Target value
                   </label>
@@ -747,13 +670,13 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                       setTargetValue(event.target.value)
                     }
                     placeholder="e.g. 100"
-                    className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2.5 text-sm text-white outline-none focus:border-violet-500"
+                    className="w-full rounded-lg border border-border-strong bg-card px-3 py-2.5 text-sm text-foreground outline-none focus:border-violet-500"
                     disabled={addKeyResult.isPending}
                   />
                 </div>
               </div>
 
-              <p className="text-xs leading-relaxed text-gray-500">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 Progress starts from your starting value and is
                 measured against the target. You can update the
                 current value later.
@@ -763,7 +686,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                 <button
                   type="button"
                   onClick={() => setShowAddForm(false)}
-                  className="rounded-lg px-4 py-2 text-sm text-gray-300 transition hover:bg-gray-800"
+                  className="rounded-lg px-4 py-2 text-sm text-foreground/80 transition hover:bg-muted"
                   disabled={addKeyResult.isPending}
                 >
                   Cancel
@@ -793,14 +716,14 @@ function OkrCard({ obj }: { obj: DataRecord }) {
 
           {/* Existing Key Results */}
           {keyResults.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-gray-700 px-4 py-6 text-center">
-              <Target className="mx-auto mb-2 h-7 w-7 text-gray-600" />
+            <div className="rounded-lg border border-dashed border-border-strong px-4 py-6 text-center">
+              <Target className="mx-auto mb-2 h-7 w-7 text-muted-foreground/80" />
 
-              <p className="text-sm font-medium text-gray-300">
+              <p className="text-sm font-medium text-foreground/80">
                 No Key Results yet
               </p>
 
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-muted-foreground">
                 This Objective is valid without Key Results.
                 Add measurable outcomes whenever you are ready.
               </p>
@@ -808,7 +731,8 @@ function OkrCard({ obj }: { obj: DataRecord }) {
           ) : (
             <div className="space-y-3">
               {keyResults.map((keyResult, index) => {
-                const krProgress = getProgress(keyResult);
+                const needsBaseline = keyResult.start_value === null;
+                const krProgress = needsBaseline ? null : getProgress(keyResult);
                 const current = keyResult.current_value;
                 const target = keyResult.target_value;
                 const unit = String(keyResult.unit ?? '');
@@ -816,13 +740,13 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                 return (
                   <div
                     key={String(keyResult.id ?? index)}
-                    className="rounded-lg border border-gray-800 bg-gray-900/70 p-3"
+                    className="rounded-lg border border-border bg-card/70 p-3"
                   >
                     <div className="flex items-start gap-3">
                       <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-violet-400" />
 
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-gray-200">
+                        <p className="text-sm font-medium text-foreground/90">
                           {String(
                             keyResult.title ??
                               'Untitled Key Result',
@@ -830,7 +754,7 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                         </p>
 
                         <div className="mt-2 flex items-center gap-3">
-                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-800">
+                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
                             <div
                               className="h-full rounded-full bg-violet-500 transition-all"
                               style={{
@@ -839,15 +763,15 @@ function OkrCard({ obj }: { obj: DataRecord }) {
                             />
                           </div>
 
-                          <span className="w-12 text-right text-xs font-medium text-gray-400">
+                          <span className="w-12 text-right text-xs font-medium text-muted-foreground">
                             {krProgress === null
                               ? 'N/A'
                               : `${Math.round(krProgress)}%`}
                           </span>
                         </div>
 
-                        <p className="mt-2 text-xs text-gray-500">
-                          {formatMetricValue(current)} /{' '}
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {needsBaseline ? 'Baseline unverified · target ' : formatMetricValue(current) + ' / '}
                           {formatMetricValue(target)}
                           {unit ? ` ${unit}` : ''}
                         </p>
@@ -866,11 +790,25 @@ function OkrCard({ obj }: { obj: DataRecord }) {
 
 // ── Founder OS Page ──────────────────────────────────────────
 
+function goalError(error: unknown) {
+  const message = (error as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
+  return Array.isArray(message) ? message.join(' ') : message || 'Could not create the goal. Try again.';
+}
+
 export default function FounderOsPage() {
   const queryClient = useQueryClient();
 
-  const [showNewOkr, setShowNewOkr] = useState(false);
+  const { user } = useAuth();
+  const canCreateGoal = Boolean(user?.organizationId) && ['owner','admin','manager','member'].includes(user?.role ?? '');
+  const goalDialog = useRef<HTMLDialogElement>(null);
   const [newOkrTitle, setNewOkrTitle] = useState('');
+  const [goalDescription, setGoalDescription] = useState('');
+  const [goalDeadline, setGoalDeadline] = useState('');
+  useEffect(() => {
+    if (canCreateGoal && new URLSearchParams(window.location.search).get('createGoal') === '1' && !goalDialog.current?.open) {
+      goalDialog.current?.showModal();
+    }
+  }, [canCreateGoal]);
 
   const {
     data: dashboard,
@@ -885,6 +823,7 @@ export default function FounderOsPage() {
     queryFn: async () => {
       const response = await api.get<unknown>(
         '/founder-os/dashboard',
+        { params: { includeInsights: false } },
       );
 
       const payload = unwrapApiData(response.data);
@@ -904,6 +843,19 @@ export default function FounderOsPage() {
     retry: 1,
   });
 
+  const insightsQuery = useQuery({
+    queryKey: ['founder-os', 'insights'],
+    // AI commentary costs tokens, so it is generated only when someone asks for it.
+    enabled: false,
+    queryFn: async () => {
+      const response = await api.get<unknown>('/founder-os/insights');
+      return asRecord(unwrapApiData(response.data));
+    },
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
   const createOkr = useMutation({
     mutationFn: async (title: string) => {
       const cleanedTitle = title.trim();
@@ -921,8 +873,10 @@ export default function FounderOsPage() {
         '/founder-os/okrs',
         {
           title: cleanedTitle,
-          quarter,
-          year: new Date().getFullYear(),
+          quarter: dashboard?.quarter ?? quarter,
+          year: dashboard?.year ?? new Date().getFullYear(),
+          ...(goalDescription.trim() ? { description: goalDescription.trim() } : {}),
+          ...(goalDeadline ? { dueDate: goalDeadline } : {}),
         },
       );
 
@@ -934,8 +888,11 @@ export default function FounderOsPage() {
         'Objective created successfully.',
       );
 
-      setShowNewOkr(false);
+      goalDialog.current?.close();
       setNewOkrTitle('');
+      setGoalDescription('');
+      setGoalDeadline('');
+      void queryClient.invalidateQueries({ queryKey: ['chief-of-staff'] });
 
       await queryClient.invalidateQueries({
         queryKey: ['founder-os'],
@@ -944,9 +901,7 @@ export default function FounderOsPage() {
 
     onError: (mutationError: unknown) => {
       toast.error(
-        mutationError instanceof Error
-          ? mutationError.message
-          : 'Failed to create the objective.',
+        goalError(mutationError),
       );
     },
   });
@@ -981,54 +936,32 @@ export default function FounderOsPage() {
     dashboard?.taskBreakdown,
   );
 
-  const insightRecord = asRecord(
-    dashboard?.aiInsights,
-  );
-
+  const breakdown = asRecord(healthRecord?.breakdown);
+  const liveMetrics = [
+    { key: 'taskCompletionRate', label: 'Tasks completed', unit: '%' },
+    { key: 'overdueTaskRate', label: 'Tasks overdue', unit: '%' },
+    { key: 'documentIndexRate', label: 'Documents indexed', unit: '%' },
+    { key: 'weeklyActiveUsers', label: 'Members signed in over 7 days', unit: '%' },
+    { key: 'meetings30d', label: 'Meetings added over 30 days', unit: '' },
+    { key: 'okrProgress', label: 'Current quarter objective progress', unit: '%' },
+  ];
   const insights = asArray(
-    insightRecord?.insights,
+    insightsQuery.data?.insights,
   ).filter(
     (insight) =>
       typeof insight.title === 'string' &&
       typeof insight.description === 'string',
   );
 
-  // Keep the complete radar polygon whenever all four scores exist.
-  const allRadarCategories: Array<{
-    subject: string;
-    A: NullableScore;
-  }> = [
-    { subject: 'Financial', A: health.financial },
-    { subject: 'Growth', A: health.growth },
-    { subject: 'Team', A: health.team },
-    { subject: 'Product', A: health.product },
-  ];
-
-  const radarData = allRadarCategories.filter(
-    (
-      item,
-    ): item is {
-      subject: string;
-      A: number;
-    } =>
-      item.A !== null &&
-      Number.isFinite(item.A),
-  );
-
-  const hasCompleteRadarData =
-    radarData.length === allRadarCategories.length;
 
   const taskStatusCounts = taskBreakdown.reduce(
     (
       accumulator: Record<string, number>,
       row,
     ) => {
-      const status = String(
-        row.status ?? 'unknown',
-      );
-
-      const count =
-        toFiniteNumber(row.count) ?? 0;
+      const status = row.status;
+      const count = toFiniteNumber(row.count);
+      if (typeof status !== 'string' || count === null || count < 0) return accumulator;
 
       accumulator[status] =
         (accumulator[status] ?? 0) + count;
@@ -1058,25 +991,41 @@ export default function FounderOsPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 pb-8">
+      {canCreateGoal && <dialog ref={goalDialog} id="create-goal-dialog" aria-labelledby="create-goal-title"
+        className="m-auto w-[min(92vw,32rem)] rounded-2xl border border-violet-500/40 bg-card p-6 text-foreground shadow-2xl backdrop:bg-slate-950/80"
+        onCancel={(event) => { if (createOkr.isPending) event.preventDefault(); }}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); submitObjective(); }}>
+          <div><h2 id="create-goal-title" className="text-xl font-semibold">Create a goal</h2>
+            <p className="mt-1 text-sm text-foreground/80">Add an objective for {dashboard?.quarter ?? 'the current quarter'} {dashboard?.year ?? ''}. You can add measurable key results after saving.</p></div>
+          <label className="block text-sm font-medium">Goal title<input required maxLength={120} autoFocus value={newOkrTitle} onChange={event=>setNewOkrTitle(event.target.value)} placeholder="Improve customer retention" className="mt-1 block w-full rounded-lg border border-border bg-muted p-2.5" /></label>
+          <label className="block text-sm font-medium">Description <span className="text-muted-foreground">(optional)</span><textarea rows={3} maxLength={2000} value={goalDescription} onChange={event=>setGoalDescription(event.target.value)} placeholder="What should change and why?" className="mt-1 block w-full rounded-lg border border-border bg-muted p-2.5" /></label>
+          <label className="block text-sm font-medium">Target date <span className="text-muted-foreground">(optional)</span><input type="date" value={goalDeadline} onChange={event=>setGoalDeadline(event.target.value)} className="mt-1 block w-full rounded-lg border border-border bg-muted p-2.5 [color-scheme:dark]" /></label>
+          {createOkr.isError && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{goalError(createOkr.error)}</p>}
+          <div className="flex justify-end gap-2"><button type="button" disabled={createOkr.isPending} onClick={()=>{createOkr.reset();goalDialog.current?.close();}} className="rounded-lg border border-border px-3 py-2 text-sm">Cancel</button>
+            <button type="submit" disabled={!newOkrTitle.trim() || createOkr.isPending} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold hover:bg-violet-500 disabled:opacity-50">{createOkr.isPending ? 'Creating…' : 'Create goal'}</button></div>
+        </form>
+      </dialog>}
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="rounded-xl bg-violet-500/10 p-2">
-            <TrendingUp className="h-6 w-6 text-violet-400" />
+            <TrendingUp className="h-6 w-6 text-violet-600 dark:text-violet-400" />
           </div>
 
           <div>
-            <h1 className="text-2xl font-bold text-white">
+            <h1 className="text-2xl font-bold text-foreground">
               Founder OS
             </h1>
 
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-muted-foreground">
               Business intelligence &amp; OKR command centre
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-gray-500">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          {canCreateGoal && <button id="create-goal" type="button" onClick={()=>goalDialog.current?.showModal()} className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-500"><Plus className="h-4 w-4" /> Create goal</button>}
+          {canCreateGoal && <Link href="/agent-command?intent=goals" className="rounded-lg border border-border px-3 py-2 text-sm text-foreground/80 hover:border-violet-400">Draft with AI</Link>}
           <span>
             {dashboard?.quarter ?? '—'}{' '}
             {dashboard?.year ?? ''}
@@ -1090,7 +1039,7 @@ export default function FounderOsPage() {
             disabled={isFetching}
             title="Refresh dashboard"
             aria-label="Refresh dashboard"
-            className="rounded-lg p-2 transition hover:bg-gray-800 disabled:opacity-50"
+            className="rounded-lg p-2 transition hover:bg-muted disabled:opacity-50"
           >
             <RefreshCw
               className={`h-4 w-4 ${
@@ -1115,16 +1064,16 @@ export default function FounderOsPage() {
       {/* API error */}
       {!isLoading && isError && (
         <section
-          className="rounded-2xl border border-red-500/20 bg-gray-900 p-8 text-center"
+          className="rounded-2xl border border-red-500/20 bg-card p-8 text-center"
           role="alert"
         >
-          <AlertTriangle className="mx-auto mb-3 h-10 w-10 text-red-400" />
+          <AlertTriangle className="mx-auto mb-3 h-10 w-10 text-red-600 dark:text-red-400" />
 
-          <h2 className="font-semibold text-white">
-            Dashboard could not be loaded
+          <h2 className="font-semibold text-foreground">
+            {dashboard ? 'Dashboard could not be refreshed' : 'Dashboard could not be loaded'}
           </h2>
 
-          <p className="mt-2 text-sm text-gray-400">
+          <p className="mt-2 text-sm text-muted-foreground">
             {error?.message ??
               'Check that the API is running and your session is valid.'}
           </p>
@@ -1140,147 +1089,25 @@ export default function FounderOsPage() {
         </section>
       )}
 
-      {/* Dashboard */}
-      {!isLoading && !isError && dashboard && (
+      {!isLoading && <HealthRadar health={health} />}
+      {dashboard && (
         <>
-          {/* Business Health Score */}
-          <section className="rounded-2xl border border-gray-800 bg-gray-900 p-6">
-            <div className="mb-6 flex items-center gap-2">
-              <Activity className="h-5 w-5 text-violet-400" />
-
-              <h2 className="font-semibold text-white">
-                Business Health Score
-              </h2>
-
-              <span
-                className="ml-auto text-2xl font-black"
-                style={{
-                  color:
-                    health.overall !== null
-                      ? SCORE_COLOR(health.overall)
-                      : '#6b7280',
-                }}
-              >
-                {health.overall !== null
-                  ? `${health.overall}/100`
-                  : 'N/A'}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
-              {/* Four-category radar */}
-              <div className="lg:col-span-2">
-                {hasCompleteRadarData ? (
-                  <ResponsiveContainer
-                    width="100%"
-                    height={240}
-                  >
-                    <RadarChart
-                      data={radarData}
-                      outerRadius="72%"
-                    >
-                      <PolarGrid
-                        gridType="polygon"
-                        stroke="#374151"
-                      />
-
-                      <PolarAngleAxis
-                        dataKey="subject"
-                        tick={{
-                          fill: '#9ca3af',
-                          fontSize: 12,
-                        }}
-                      />
-
-                      <Radar
-                        name="Health Score"
-                        dataKey="A"
-                        fill="#7c3aed"
-                        fillOpacity={0.3}
-                        stroke="#8b5cf6"
-                        strokeWidth={2.5}
-                        dot={{
-                          r: 4,
-                          fill: '#a78bfa',
-                          stroke: '#7c3aed',
-                          strokeWidth: 1,
-                        }}
-                        isAnimationActive
-                      />
-
-                      <Tooltip
-                        formatter={(value) => [
-                          `${value}/100`,
-                          'Health Score',
-                        ]}
-                        contentStyle={{
-                          background: '#111827',
-                          border: '1px solid #374151',
-                          borderRadius: 8,
-                        }}
-                        labelStyle={{
-                          color: '#d1d5db',
-                        }}
-                      />
-                    </RadarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-[240px] flex-col items-center justify-center rounded-xl border border-dashed border-gray-700 px-4 text-center">
-                    <Activity className="mb-3 h-8 w-8 text-violet-400" />
-
-                    <p className="font-medium text-gray-300">
-                      Health radar is incomplete
-                    </p>
-
-                    <p className="mt-2 text-sm text-gray-500">
-                      {radarData.length} of{' '}
-                      {allRadarCategories.length}{' '}
-                      health categories have measured scores.
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-600">
-                      The complete polygon will appear when
-                      all four categories have available data.
-                    </p>
-                  </div>
-                )}
+          {/* AI commentary: on request only */}
+          {insights.length === 0 && toFiniteNumber(asRecord(dashboard?.healthScore)?.overall) !== null && (
+            <section aria-label="AI commentary" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border-strong p-4">
+              <div>
+                <h2 className="text-sm font-medium">AI commentary</h2>
+                <p className="mt-0.5 text-sm text-muted-foreground">Get AI suggestions based on your health score. Uses AI tokens, so it only runs when you ask.</p>
+                {insightsQuery.isError && <p role="alert" className="mt-1 text-sm text-destructive">Could not generate commentary. Check the AI provider in Settings.</p>}
               </div>
-
-              {/* Individual scores */}
-              <div className="grid grid-cols-2 items-center gap-4 sm:grid-cols-4 lg:col-span-3 lg:grid-cols-2 xl:grid-cols-4">
-                <ScoreRing
-                  score={health.financial}
-                  label="Financial"
-                />
-
-                <ScoreRing
-                  score={health.growth}
-                  label="Growth"
-                />
-
-                <ScoreRing
-                  score={health.team}
-                  label="Team"
-                />
-
-                <ScoreRing
-                  score={health.product}
-                  label="Product"
-                />
-              </div>
-            </div>
-
-            {health.financial === null && (
-              <p className="mt-4 border-t border-gray-800 pt-4 text-xs text-gray-500">
-                Financial health is unavailable because revenue
-                data has not been integrated.
-              </p>
-            )}
-          </section>
-
-          {/* AI Insights */}
+              <button type="button" onClick={() => void insightsQuery.refetch()} disabled={insightsQuery.isFetching} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-strong px-3.5 text-sm font-medium hover:bg-muted disabled:opacity-60">
+                {insightsQuery.isFetching ? 'Generating…' : 'Generate commentary'}
+              </button>
+            </section>
+          )}
           {insights.length > 0 && (
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <section aria-label="AI commentary" className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <h2 className="text-sm font-medium text-muted-foreground md:col-span-3">AI commentary</h2>
               {insights.map((insight, index) => {
                 const type = String(
                   insight.type ?? 'opportunity',
@@ -1310,19 +1137,19 @@ export default function FounderOsPage() {
                   >
                     <div className="mb-2 flex items-center gap-2">
                       {type === 'strength' ? (
-                        <CheckCircle className="h-4 w-4 text-emerald-400" />
+                        <CheckCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                       ) : type === 'warning' ? (
-                        <AlertTriangle className="h-4 w-4 text-amber-400" />
+                        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                       ) : (
-                        <Zap className="h-4 w-4 text-violet-400" />
+                        <Zap className="h-4 w-4 text-violet-600 dark:text-violet-400" />
                       )}
 
-                      <span className="text-sm font-semibold text-white">
+                      <span className="text-sm font-semibold text-foreground">
                         {String(insight.title)}
                       </span>
                     </div>
 
-                    <p className="text-xs leading-relaxed text-gray-400">
+                    <p className="text-xs leading-relaxed text-muted-foreground">
                       {String(insight.description)}
                     </p>
                   </motion.div>
@@ -1335,90 +1162,54 @@ export default function FounderOsPage() {
           <section>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <Target className="h-5 w-5 text-violet-400" />
+                <Target className="h-5 w-5 text-violet-600 dark:text-violet-400" />
 
-                <h2 className="font-semibold text-white">
+                <h2 className="font-semibold text-foreground">
                   OKRs — {dashboard.quarter ?? '—'}{' '}
                   {dashboard.year ?? ''}
                 </h2>
 
-                <span className="rounded-full bg-gray-800 px-2 py-0.5 text-xs text-gray-400">
-                  {okrs.length} objectives
+                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                  {dashboard.okrs === null ? 'Unavailable' : `${okrs.length} objectives`}
                 </span>
               </div>
 
-              <button
+              {canCreateGoal && <button
                 type="button"
-                onClick={() =>
-                  setShowNewOkr((previous) => !previous)
-                }
+                onClick={() => goalDialog.current?.showModal()}
                 className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-sm text-white transition hover:bg-violet-700"
               >
                 <Plus className="h-4 w-4" />
-                New Objective
-              </button>
+                Create goal
+              </button>}
             </div>
 
-            {showNewOkr && (
-              <div className="mb-4 flex flex-col gap-2 sm:flex-row">
-                <input
-                  className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-sm text-white focus:border-violet-500 focus:outline-none"
-                  placeholder="Objective title..."
-                  value={newOkrTitle}
-                  onChange={(event) =>
-                    setNewOkrTitle(event.target.value)
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      submitObjective();
-                    }
-                  }}
-                  disabled={createOkr.isPending}
-                  autoFocus
-                />
-
-                <button
-                  type="button"
-                  onClick={submitObjective}
-                  disabled={
-                    !newOkrTitle.trim() ||
-                    createOkr.isPending
-                  }
-                  className="rounded-lg bg-violet-600 px-4 py-2 text-sm text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-gray-700"
-                >
-                  {createOkr.isPending
-                    ? 'Creating…'
-                    : 'Create'}
-                </button>
-              </div>
-            )}
-
             <div className="space-y-3">
-              {okrs.length === 0 ? (
-                <div className="py-12 text-center text-gray-500">
+              {dashboard.okrs === null ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  Objectives could not be loaded.
+                </p>
+              ) : okrs.length === 0 ? (
+                <div className="py-12 text-center text-muted-foreground">
                   <Target className="mx-auto mb-3 h-10 w-10 opacity-30" />
 
                   <p>
                     No objectives for this quarter yet.
                   </p>
 
-                  <button
+                  {canCreateGoal && <button
                     type="button"
-                    onClick={() => setShowNewOkr(true)}
-                    className="mt-3 text-sm text-violet-400 hover:text-violet-300"
+                    onClick={() => goalDialog.current?.showModal()}
+                    className="mt-3 text-sm text-violet-600 dark:text-violet-400 hover:text-violet-300"
                   >
-                    Create your first objective →
-                  </button>
+                    Create your first goal →
+                  </button>}
                 </div>
               ) : (
                 okrs.map((objective, index) => (
-                  <OkrCard
-                    key={String(
-                      objective.id ?? index,
-                    )}
-                    obj={objective}
-                  />
+                  <div key={String(objective.id ?? index)} id={'objective-' + objective.id} className="scroll-mt-6">
+                    <OkrCard obj={objective} />
+                  </div>
                 ))
               )}
             </div>
@@ -1427,18 +1218,32 @@ export default function FounderOsPage() {
           {/* KPI Snapshot and Team Velocity */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* KPI Snapshot */}
-            <section className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+            <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4 flex items-center gap-2">
-                <BarChart2 className="h-5 w-5 text-violet-400" />
+                <BarChart2 className="h-5 w-5 text-violet-600 dark:text-violet-400" />
 
-                <h2 className="font-semibold text-white">
-                  KPI Snapshot
+                <h2 className="font-semibold text-foreground">
+                  Workspace KPIs
                 </h2>
               </div>
 
+              <dl className="grid grid-cols-2 gap-3">
+                {liveMetrics.map(({ key, label, unit }) => {
+                  const value = toFiniteNumber(breakdown?.[key]);
+                  return (
+                    <div key={key} className="rounded-lg border border-border p-3">
+                      <dt className="text-xs text-muted-foreground">{label}</dt>
+                      <dd className="mt-1 text-sm font-semibold text-foreground">
+                        {value === null ? 'N/A' : `${formatMetricValue(value)}${unit}`}
+                      </dd>
+                    </div>
+                  );
+                })}
+              </dl>
+              <h3 id="recorded-kpis" className="mb-2 mt-5 scroll-mt-6 text-sm font-medium text-foreground/80">Recorded KPI snapshots</h3>
               {kpis.length === 0 ? (
-                <p className="py-8 text-center text-sm text-gray-500">
-                  No KPI data recorded yet.
+                <p className="text-sm text-muted-foreground">
+                  {dashboard.kpis === null ? 'KPI snapshots could not be loaded.' : 'No KPI snapshots recorded in the last 30 days.'}
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -1473,17 +1278,17 @@ export default function FounderOsPage() {
                         className="flex items-center gap-3"
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium capitalize text-white">
+                          <p className="truncate text-sm font-medium capitalize text-foreground">
                             {metricKey.replace(/_/g, ' ')}
                           </p>
 
-                          <p className="text-xs text-gray-500">
+                          <p className="text-xs text-muted-foreground">
                             Today:{' '}
                             {formatMetricValue(kpi.today)}
                           </p>
 
                           {kpi.today == null && (
-                            <p className="text-xs text-gray-600">
+                            <p className="text-xs text-muted-foreground/80">
                               No snapshot recorded today
                             </p>
                           )}
@@ -1493,8 +1298,8 @@ export default function FounderOsPage() {
                           <span
                             className={`text-xs font-medium ${
                               change >= 0
-                                ? 'text-emerald-400'
-                                : 'text-red-400'
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-red-600 dark:text-red-400'
                             }`}
                           >
                             {change >= 0 ? '↑' : '↓'}{' '}
@@ -1509,32 +1314,32 @@ export default function FounderOsPage() {
             </section>
 
             {/* Team Velocity */}
-            <section className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+            <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-2 flex items-center gap-2">
-                <Users className="h-5 w-5 text-violet-400" />
+                <Users className="h-5 w-5 text-violet-600 dark:text-violet-400" />
 
-                <h2 className="font-semibold text-white">
+                <h2 className="font-semibold text-foreground">
                   Team Velocity
                 </h2>
 
-                <span className="ml-auto text-xs text-gray-500">
+                <span className="ml-auto text-xs text-muted-foreground">
                   Completed tasks / week
                 </span>
               </div>
 
-              <p className="mb-4 text-xs text-gray-500">
+              <p className="mb-4 text-xs text-muted-foreground">
                 Weekly task-completion trend over the last 12 weeks.
               </p>
 
               {velocitySeries.length === 0 ? (
                 <div className="flex h-[220px] flex-col items-center justify-center text-center">
-                  <BarChart2 className="mb-3 h-8 w-8 text-gray-600" />
+                  <BarChart2 className="mb-3 h-8 w-8 text-muted-foreground/80" />
 
-                  <p className="text-sm text-gray-400">
-                    No recent velocity data available.
+                  <p className="text-sm text-muted-foreground">
+                    {dashboard.teamVelocity === null ? 'Team velocity could not be loaded.' : 'No recent velocity data available.'}
                   </p>
 
-                  <p className="mt-1 text-xs text-gray-600">
+                  <p className="mt-1 text-xs text-muted-foreground/80">
                     Complete and update tasks to build your trend.
                   </p>
                 </div>
@@ -1676,9 +1481,12 @@ export default function FounderOsPage() {
           </div>
 
           {/* Task Breakdown */}
+          {dashboard.taskBreakdown === null && (
+            <p className="text-sm text-muted-foreground">Task status breakdown could not be loaded.</p>
+          )}
           {Object.keys(taskStatusCounts).length > 0 && (
-            <section className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
-              <h2 className="mb-4 font-semibold text-white">
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <h2 className="mb-4 font-semibold text-foreground">
                 Task Status Breakdown
               </h2>
 
@@ -1689,11 +1497,11 @@ export default function FounderOsPage() {
                       key={status}
                       className="text-center"
                     >
-                      <p className="text-3xl font-bold text-white">
+                      <p className="text-3xl font-bold text-foreground">
                         {count}
                       </p>
 
-                      <p className="mt-1 text-xs capitalize text-gray-400">
+                      <p className="mt-1 text-xs capitalize text-muted-foreground">
                         {status.replace(/_/g, ' ')}
                       </p>
                     </div>

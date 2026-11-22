@@ -13,6 +13,7 @@ import { DocumentsService } from '../documents/documents.service';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { LuieEventPublisher } from '../luie/luie-event.publisher';
 import { v4 as uuidv4 } from 'uuid';
+import { PAID_PLANS, resolvePlan, WorkspacePlanRow } from '../billing/plan-policy';
 
 type OAuthVendor =
   | 'google' | 'microsoft' | 'slack' | 'notion' | 'github' | 'jira'
@@ -31,6 +32,8 @@ interface ConnectorDefinition {
   scopes?: string[];
   syncSupported: boolean;
   platformOnly?: boolean;
+  /** Uses a Google restricted scope (annual CASA assessment): paid plans only, never during the trial. */
+  paidOnly?: boolean;
 }
 
 export interface IntegrationListItem {
@@ -48,8 +51,13 @@ export interface IntegrationListItem {
   canConfigure: boolean;
   canDisconnect: boolean;
   canSync: boolean;
+  canTest?: boolean;
+  callbackUrl?: string;
+  requestedScopes?: string[];
+  grantedScopes?: string[];
   authMode: AuthMode;
   platformOnly?: boolean;
+  requiresPaidPlan?: boolean;
 }
 
 interface StoredConnection {
@@ -60,6 +68,8 @@ interface StoredConnection {
   connected_by_user_id: string | null;
   last_synced_at: Date | string | null;
   last_error?: string | null;
+  authorization_revision?: string;
+  scopes?: string[];
 }
 interface OAuthStateRow { organization_id: string; user_id: string; }
 interface OAuthClient { clientId: string; clientSecret: string; }
@@ -80,11 +90,12 @@ interface RemoteItem {
   mimeType?: string;
   url?: string;
   updatedAt?: string | null;
+  crm?: { kind:'deal'|'contact'; name:string; stage:string|null; lastActivity:string|null; closeDate:string|null; closed:boolean|null };
 }
 
 const CONNECTORS: ConnectorDefinition[] = [
-  { id: 'google-drive', name: 'Google Drive', category: 'Storage', emoji: '📁', vendor: 'google', authMode: 'oauth', scopes: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.readonly'], syncSupported: true, description: 'Import supported files and Google Docs into Company Brain.' },
-  { id: 'gmail', name: 'Gmail', category: 'Email', emoji: '✉️', vendor: 'google', authMode: 'oauth', scopes: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/gmail.readonly'], syncSupported: true, description: 'Import recent email messages as searchable Company Brain documents.' },
+  { id: 'google-drive', name: 'Google Drive', category: 'Storage', emoji: '📁', vendor: 'google', authMode: 'oauth', scopes: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.readonly'], syncSupported: true, description: 'Import supported files and Google Docs into Company Brain.', paidOnly: true },
+  { id: 'gmail', name: 'Gmail', category: 'Email', emoji: '✉️', vendor: 'google', authMode: 'oauth', scopes: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/gmail.readonly'], syncSupported: true, description: 'Import recent email messages as searchable Company Brain documents.', paidOnly: true },
   { id: 'google-meet', name: 'Google Meet / Calendar', category: 'Meetings', emoji: '📹', vendor: 'google', authMode: 'oauth', scopes: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/calendar.readonly'], syncSupported: true, description: 'Import recent calendar meeting details and Meet links.' },
   { id: 'onedrive', name: 'Microsoft OneDrive', category: 'Storage', emoji: '☁️', vendor: 'microsoft', authMode: 'oauth', scopes: ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Files.Read.All'], syncSupported: true, description: 'Import supported files from OneDrive into Company Brain.' },
   { id: 'outlook-mail', name: 'Outlook / Microsoft 365 Email', category: 'Email', emoji: '📨', vendor: 'microsoft', authMode: 'oauth', scopes: ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Mail.Read'], syncSupported: true, description: 'Import recent Outlook messages as searchable Company Brain documents.' },
@@ -94,12 +105,8 @@ const CONNECTORS: ConnectorDefinition[] = [
   { id: 'jira', name: 'Jira Cloud', category: 'Project Management', emoji: '📋', vendor: 'jira', authMode: 'oauth', scopes: ['read:jira-work', 'read:jira-user', 'offline_access'], syncSupported: true, description: 'Import recent Jira issues from an authorised Jira Cloud site.' },
   { id: 'zoom', name: 'Zoom Meetings', category: 'Meetings', emoji: '🎥', vendor: 'zoom', authMode: 'oauth', scopes: ['user:read:user:admin', 'cloud_recording:read:list_user_recordings:admin'], syncSupported: true, description: 'Import recent meeting and cloud-recording metadata; transcripts are imported when available.' },
   { id: 'hubspot', name: 'HubSpot', category: 'CRM', emoji: '🧡', vendor: 'hubspot', authMode: 'oauth', scopes: ['crm.objects.contacts.read', 'crm.objects.deals.read', 'crm.objects.companies.read'], syncSupported: true, description: 'Import contacts, deals, and companies into searchable CRM snapshots.' },
-  { id: 'salesforce', name: 'Salesforce', category: 'CRM', emoji: '☁️', vendor: 'salesforce', authMode: 'oauth', scopes: ['api', 'refresh_token', 'offline_access', 'id'], syncSupported: true, description: 'Import recent accounts, contacts, and opportunities that the connected user can read.' },
   { id: 'linear', name: 'Linear', category: 'Project Management', emoji: '📐', vendor: 'linear', authMode: 'oauth', scopes: ['read'], syncSupported: true, description: 'Import recent issues and descriptions from Linear.' },
   { id: 'dropbox', name: 'Dropbox', category: 'Storage', emoji: '📦', vendor: 'dropbox', authMode: 'oauth', scopes: ['account_info.read', 'files.metadata.read', 'files.content.read'], syncSupported: true, description: 'Import supported files from the connected Dropbox account.' },
-  { id: 'intercom', name: 'Intercom', category: 'Support', emoji: '💭', vendor: 'intercom', scopes: [], authMode: 'oauth', syncSupported: true, description: 'Import recent contacts and conversation summaries.' },
-  { id: 'pagerduty', name: 'PagerDuty', category: 'Monitoring', emoji: '🚨', vendor: 'pagerduty', authMode: 'oauth', scopes: ['incidents.read', 'services.read', 'users.read'], syncSupported: true, description: 'Import recent incidents visible to the authorised PagerDuty user.' },
-  { id: 'datadog', name: 'Datadog', category: 'Monitoring', emoji: '📊', authMode: 'api_key', syncSupported: true, description: 'Configure a Datadog API key and application key, then import recent events.' },
   { id: 'zapier', name: 'Zapier', category: 'Automation', emoji: '⚡', authMode: 'webhook', syncSupported: false, description: 'Configure a Zapier Catch Hook URL so Lumorius can deliver approved workflow events.' },
   { id: 'make', name: 'Make', category: 'Automation', emoji: '🔄', authMode: 'webhook', syncSupported: false, description: 'Configure a Make custom webhook URL so Lumorius can deliver approved workflow events.' },
 ];
@@ -128,19 +135,27 @@ export class IntegrationsService {
   async listForUser(user: JwtPayload): Promise<IntegrationListItem[]> {
     const connectionResult = await this.db.query<StoredConnection>(
       `SELECT provider, status, account_email, encrypted_credentials,
-              connected_by_user_id, last_synced_at, last_error
+              connected_by_user_id, last_synced_at, last_error, scopes
        FROM integration_connections WHERE organization_id = $1`,
       [user.organizationId],
     );
     const connections = new Map(connectionResult.rows.map((row) => [row.provider, row]));
     const canManage = ['owner', 'admin'].includes(String(user.role || '').toLowerCase());
+    const onPaidPlan = await this.isOnPaidPlan(user.organizationId);
 
+    const encryptedStorageReady = /^[a-f0-9]{64}$/i.test(process.env.INTEGRATION_ENCRYPTION_KEY ?? '');
     const result: IntegrationListItem[] = CONNECTORS.map((connector) => {
       const saved = connections.get(connector.id);
       const ready = connector.vendor ? this.oauthConfigured(connector.vendor) : false;
       let status: IntegrationStatus;
       let statusText: string;
-      if (saved?.status === 'connected' && !saved.last_error) {
+      if (!encryptedStorageReady) {
+        status = 'setup_required';
+        statusText = 'Configure INTEGRATION_ENCRYPTION_KEY on the API server to store and use credentials.';
+      } else if (connector.paidOnly && !onPaidPlan && !saved) {
+        status = 'setup_required';
+        statusText = 'Available on paid plans. Choose a plan in Billing to connect this account.';
+      } else if (saved?.status === 'connected' && !saved.last_error) {
         status = 'connected';
         statusText = connector.syncSupported
           ? saved.last_synced_at ? `Connected. Last sync: ${new Date(saved.last_synced_at).toLocaleString()}.` : 'Connected. Run Sync now to import available content.'
@@ -169,11 +184,16 @@ export class IntegrationsService {
         accountEmail: saved?.account_email ?? null,
         lastSyncedAt: saved?.last_synced_at ?? null,
         canManage,
-        canConnect: Boolean(connector.vendor && ready && canManage && (!saved || saved.status !== 'connected' || Boolean(saved.last_error))),
-        canConfigure: Boolean(connector.authMode !== 'oauth' && canManage),
+        canConnect: Boolean(connector.vendor && ready && canManage && (!connector.paidOnly || onPaidPlan) && (!saved || saved.status !== 'connected' || Boolean(saved.last_error))),
+        canConfigure: Boolean(connector.authMode !== 'oauth' && canManage && encryptedStorageReady),
+        canTest: Boolean(saved && connector.authMode === 'webhook' && canManage && encryptedStorageReady),
+        requestedScopes: connector.scopes ?? [],
+        grantedScopes: canManage ? saved?.scopes ?? [] : undefined,
+        callbackUrl: connector.vendor && canManage ? this.callbackUri(connector.id) : undefined,
         canDisconnect: Boolean(saved && canManage),
-        canSync: Boolean(saved && ['connected', 'error'].includes(saved.status) && connector.syncSupported && canManage),
+        canSync: Boolean(saved && ['connected', 'error'].includes(saved.status) && connector.syncSupported && canManage && encryptedStorageReady),
         authMode: connector.authMode,
+        requiresPaidPlan: connector.paidOnly && !onPaidPlan ? true : undefined,
       };
     });
 
@@ -203,9 +223,24 @@ export class IntegrationsService {
     return result;
   }
 
+  private async isOnPaidPlan(organizationId: string): Promise<boolean> {
+    const res = await this.db.query<WorkspacePlanRow>(
+      'SELECT plan_id::text AS plan_id, trial_ends_at, created_at FROM organizations WHERE id = $1',
+      [organizationId],
+    );
+    return (PAID_PLANS as readonly string[]).includes(resolvePlan(res.rows[0]));
+  }
+
+  private async assertPlanAllows(organizationId: string, connector: ConnectorDefinition) {
+    if (connector.paidOnly && !(await this.isOnPaidPlan(organizationId))) {
+      throw new ForbiddenException({ code: 'upgrade_required', message: connector.name + ' is available on paid plans.', upgradeUrl: '/billing' });
+    }
+  }
+
   async beginConnect(user: JwtPayload, provider: string) {
     this.assertCanManage(user.role);
     const connector = this.getConnector(provider);
+    await this.assertPlanAllows(user.organizationId, connector);
     if (!connector.vendor) throw new BadRequestException('This integration uses its Configure action, not OAuth.');
     if (!this.oauthConfigured(connector.vendor)) {
       throw new ServiceUnavailableException(`Configure ${this.requiredEnvNames(connector)} and INTEGRATION_ENCRYPTION_KEY on the API server first.`);
@@ -248,23 +283,14 @@ export class IntegrationsService {
       const appKey = String(input.appKey || '').trim();
       if (!apiKey || !appKey) throw new BadRequestException('Datadog requires both an API key and an application key.');
       const site = this.datadogBaseUrl();
-      const response = await fetch(`${site}/api/v1/validate`, { headers: { 'DD-API-KEY': apiKey, 'DD-APPLICATION-KEY': appKey } });
+      const response = await fetch(`${site}/api/v1/validate`, { headers: { 'DD-API-KEY': apiKey, 'DD-APPLICATION-KEY': appKey }, signal: AbortSignal.timeout(8000) });
       const body = await response.json().catch(() => ({})) as Record<string, unknown>;
       if (!response.ok || body.valid !== true) throw new BadRequestException('Datadog rejected these credentials. Verify the API key, application key and site.');
       credentials = { apiKey, appKey, site };
       accountName = 'Datadog API credentials';
     } else if (provider === 'zapier' || provider === 'make') {
       const webhookUrl = String(input.webhookUrl || '').trim();
-      let parsed: URL;
-      try { parsed = new URL(webhookUrl); } catch { throw new BadRequestException('Enter a valid HTTPS webhook URL.'); }
-      if (parsed.protocol !== 'https:') throw new BadRequestException('Webhook URLs must use HTTPS.');
-      const host = parsed.hostname.toLowerCase();
-      const allowed = provider === 'zapier'
-        ? host === 'hooks.zapier.com'
-        : (host.endsWith('.make.com') || host === 'hook.make.com') && host.startsWith('hook.');
-      if (!allowed) throw new BadRequestException(provider === 'zapier'
-        ? 'Use a Zapier Catch Hook URL on hooks.zapier.com.'
-        : 'Use a Make custom webhook URL on a hook.*.make.com host.');
+      this.validateWebhookUrl(provider, webhookUrl);
       credentials = { webhookUrl };
       accountName = `${provider === 'zapier' ? 'Zapier' : 'Make'} webhook configured`;
     } else {
@@ -289,6 +315,50 @@ export class IntegrationsService {
       );
     });
     return { configured: true, provider };
+  }
+
+  private validateWebhookUrl(provider: string, webhookUrl: string): URL {
+    let url: URL;
+    try { url = new URL(webhookUrl); } catch { throw new BadRequestException('Enter a valid HTTPS webhook URL.'); }
+    const host = url.hostname.toLowerCase();
+    const allowed = provider === 'zapier'
+      ? host === 'hooks.zapier.com'
+      : provider === 'make' && host.startsWith('hook.') && host.endsWith('.make.com');
+    if (!allowed || url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.pathname === '/') {
+      throw new BadRequestException('Use the HTTPS webhook URL generated by your Zapier or Make account.');
+    }
+    return url;
+  }
+
+  async sendTestEvent(user: JwtPayload, provider: string) {
+    this.assertCanManage(user.role);
+    if (this.getConnector(provider).authMode !== 'webhook') {
+      throw new BadRequestException('Test events are available for webhook connections.');
+    }
+    const stored = await this.db.query<{ encrypted_credentials: string }>(
+      `SELECT encrypted_credentials FROM integration_connections
+        WHERE organization_id = $1 AND provider = $2 AND status IN ('connected', 'error')`,
+      [user.organizationId, provider],
+    );
+    const encrypted = stored.rows[0]?.encrypted_credentials;
+    if (!encrypted) throw new BadRequestException('Configure the webhook before sending a test.');
+    try {
+      const credentials = this.decrypt(encrypted);
+      const destination = this.validateWebhookUrl(provider, String(credentials.webhookUrl ?? ''));
+      const response = await fetch(destination, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000),
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Lumorius-Integration/1.0' },
+        body: JSON.stringify({ event: 'integration.test', occurredAt: new Date().toISOString(), data: { test: true, provider } }),
+      });
+      if (!response.ok) throw new Error('Webhook did not accept test event.');
+    } catch {
+      await this.db.query(`UPDATE integration_connections SET status = 'error', last_error = 'Test delivery failed.', updated_at = NOW()
+        WHERE organization_id = $1 AND provider = $2 AND encrypted_credentials = $3`, [user.organizationId, provider, encrypted]);
+      throw new ServiceUnavailableException('The webhook did not accept the test event. Check the URL and whether the receiving workflow is listening.');
+    }
+    await this.db.query(`UPDATE integration_connections SET status = 'connected', last_error = NULL, updated_at = NOW()
+      WHERE organization_id = $1 AND provider = $2 AND encrypted_credentials = $3`, [user.organizationId, provider, encrypted]);
+    return { delivered: true };
   }
 
   async disconnect(user: JwtPayload, provider: string) {
@@ -353,7 +423,7 @@ export class IntegrationsService {
          ON CONFLICT (organization_id, provider) DO UPDATE SET
            status = 'connected', account_email = EXCLUDED.account_email, encrypted_credentials = EXCLUDED.encrypted_credentials,
            scopes = EXCLUDED.scopes, connected_by_user_id = EXCLUDED.connected_by_user_id,
-           last_error = NULL, updated_at = NOW()`,
+           last_error = NULL, updated_at = NOW(), authorization_revision = gen_random_uuid()`,
         [savedState.organization_id, provider, email, encrypted, scopes, savedState.user_id],
       );
       await client.query(
@@ -368,9 +438,10 @@ export class IntegrationsService {
   async syncForUser(user: JwtPayload, provider: string) {
     this.assertCanManage(user.role);
     const connector = this.getConnector(provider);
+    await this.assertPlanAllows(user.organizationId, connector);
     if (!connector.syncSupported) throw new BadRequestException('This integration sends workflow events and does not sync content.');
     const connectionResult = await this.db.query<StoredConnection>(
-      `SELECT provider, status, account_email, encrypted_credentials, connected_by_user_id, last_synced_at, last_error
+      `SELECT provider, status, account_email, encrypted_credentials, connected_by_user_id, last_synced_at, last_error, authorization_revision
        FROM integration_connections WHERE organization_id = $1 AND provider = $2 LIMIT 1`,
       [user.organizationId, provider],
     );
@@ -391,7 +462,10 @@ export class IntegrationsService {
           `SELECT id FROM integration_sync_items WHERE organization_id = $1 AND provider = $2 AND external_id = $3 LIMIT 1`,
           [user.organizationId, provider, item.externalId],
         );
-        if (exists.rows.length) { skipped++; continue; }
+        if (exists.rows.length) {
+          if (item.crm) await this.storeCrmMetadata(user.organizationId,provider,item,connection.authorization_revision);
+          skipped++; continue;
+        }
         const file = this.toUploadFile(item);
         if (!file) { unsupported++; continue; }
         const uploaded = await this.documents.upload(
@@ -405,6 +479,7 @@ export class IntegrationsService {
            VALUES ($1, $2, $3, $4, $5, $6, NOW()) ON CONFLICT (organization_id, provider, external_id) DO NOTHING`,
           [user.organizationId, provider, item.externalId, uploaded.id, item.url ?? null, item.updatedAt ? new Date(item.updatedAt) : null],
         );
+        if (item.crm) await this.storeCrmMetadata(user.organizationId,provider,item,connection.authorization_revision);
         imported++;
       }
       const syncId = uuidv4();
@@ -439,6 +514,20 @@ export class IntegrationsService {
       );
       throw error;
     }
+  }
+
+  private async storeCrmMetadata(org: string, provider: string, item: RemoteItem, revision?: string) {
+    if (!revision || !item.crm) return;
+    await this.db.query(`UPDATE integration_sync_items i SET crm_metadata=$4, crm_authorization_revision=$5, synced_at=now()
+      FROM integration_connections c WHERE i.organization_id=$1 AND i.provider=$2 AND i.external_id=$3
+      AND c.organization_id=i.organization_id AND c.provider=i.provider AND c.authorization_revision=$5`,
+      [org,provider,item.externalId,JSON.stringify(item.crm),revision]);
+  }
+
+  private crmDate(value: unknown): string | null {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)) return null;
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
   }
 
   // Send small, non-sensitive event envelopes to configured Zapier/Make webhooks.
@@ -501,7 +590,7 @@ export class IntegrationsService {
           const credentials = this.decrypt(row.encrypted_credentials);
           const webhookUrl = String(credentials.webhookUrl || '');
           if (!webhookUrl) continue;
-          const response = await fetch(webhookUrl, {
+          const response = await fetch(this.validateWebhookUrl(row.provider, webhookUrl), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'User-Agent': 'Lumorius-Integration/1.0' },
             body: JSON.stringify({ event: eventName, organizationId, occurredAt: new Date().toISOString(), data }),
@@ -753,8 +842,8 @@ export class IntegrationsService {
 
   private async syncHubSpot(token: string): Promise<RemoteItem[]> {
     const definitions = [
-      { kind: 'contacts', props: 'firstname,lastname,email,company,jobtitle,lifecyclestage,createdate,lastmodifieddate' },
-      { kind: 'deals', props: 'dealname,amount,dealstage,closedate,pipeline,createdate,lastmodifieddate' },
+      { kind: 'contacts', props: 'firstname,lastname,email,company,jobtitle,lifecyclestage,notes_last_contacted,createdate,lastmodifieddate' },
+      { kind: 'deals', props: 'dealname,amount,dealstage,closedate,pipeline,notes_last_contacted,hs_is_closed,createdate,lastmodifieddate' },
       { kind: 'companies', props: 'name,domain,industry,city,country,createdate,hs_lastmodifieddate' },
     ];
     const items: RemoteItem[] = [];
@@ -765,6 +854,10 @@ export class IntegrationsService {
         const properties = record.properties || {};
         const name = properties.dealname || properties.name || [properties.firstname, properties.lastname].filter(Boolean).join(' ') || record.id;
         items.push({ externalId: `${definition.kind}:${record.id}`, title: `HubSpot ${definition.kind.slice(0, -1)} - ${name}`.slice(0, 180), mimeType: 'text/plain', url: record.url || `https://app.hubspot.com/`, updatedAt: properties.lastmodifieddate || properties.hs_lastmodifieddate || null,
+          crm: definition.kind === 'companies' ? undefined : { kind: definition.kind === 'deals' ? 'deal' : 'contact', name:String(name).slice(0,180),
+            stage: String(properties.dealstage || properties.lifecyclestage || '').slice(0,80) || null,
+            lastActivity:this.crmDate(properties.notes_last_contacted), closeDate:this.crmDate(properties.closedate),
+            closed:properties.hs_is_closed === 'true' ? true : properties.hs_is_closed === 'false' ? false : null },
           text: `HubSpot record type: ${definition.kind}\nName: ${name}\nRecord ID: ${record.id}\n${Object.entries(properties).map(([k, v]) => `${k}: ${String(v ?? '')}`).join('\n')}` });
       }
     }
@@ -778,8 +871,8 @@ export class IntegrationsService {
     const version = String(process.env.SALESFORCE_API_VERSION || 'v61.0');
     const queries = [
       { kind: 'Account', soql: 'SELECT Id,Name,Type,Industry,Website,LastModifiedDate FROM Account ORDER BY LastModifiedDate DESC LIMIT 25' },
-      { kind: 'Opportunity', soql: 'SELECT Id,Name,StageName,Amount,CloseDate,LastModifiedDate FROM Opportunity ORDER BY LastModifiedDate DESC LIMIT 25' },
-      { kind: 'Contact', soql: 'SELECT Id,Name,Email,Title,Department,LastModifiedDate FROM Contact ORDER BY LastModifiedDate DESC LIMIT 25' },
+      { kind: 'Opportunity', soql: 'SELECT Id,Name,StageName,Amount,CloseDate,LastActivityDate,IsClosed,LastModifiedDate FROM Opportunity ORDER BY LastModifiedDate DESC LIMIT 25' },
+      { kind: 'Contact', soql: 'SELECT Id,Name,Email,Title,Department,LastActivityDate,LastModifiedDate FROM Contact ORDER BY LastModifiedDate DESC LIMIT 25' },
     ];
     const items: RemoteItem[] = [];
     for (const q of queries) {
@@ -787,6 +880,9 @@ export class IntegrationsService {
       for (const record of (data.records || []) as any[]) {
         const name = String(record.Name || record.Id);
         items.push({ externalId: `${q.kind}:${record.Id}`, title: `Salesforce ${q.kind} - ${name}`.slice(0, 180), mimeType: 'text/plain', url: `${base}/${record.Id}`, updatedAt: record.LastModifiedDate,
+          crm: q.kind === 'Account' ? undefined : { kind:q.kind === 'Opportunity' ? 'deal' : 'contact', name:name.slice(0,180),
+            stage:typeof record.StageName === 'string' ? record.StageName.slice(0,80) : null,
+            lastActivity:this.crmDate(record.LastActivityDate), closeDate:this.crmDate(record.CloseDate), closed:typeof record.IsClosed === 'boolean' ? record.IsClosed : null },
           text: `Salesforce object: ${q.kind}\n${Object.entries(record).filter(([k]) => !k.startsWith('attributes')).map(([k, v]) => `${k}: ${String(v ?? '')}`).join('\n')}` });
       }
     }
@@ -1024,7 +1120,8 @@ export class IntegrationsService {
   private async ensureFreshCredentials(provider: string, connection: StoredConnection, organizationId: string): Promise<Record<string, any>> {
     const credentials = this.decrypt(connection.encrypted_credentials);
     const expiry = Number(credentials.expires_at || 0);
-    if (!expiry || expiry > Date.now() || !credentials.refresh_token) return credentials;
+    if (!expiry || expiry > Date.now()) return credentials;
+    if (!credentials.refresh_token) throw new BadRequestException('This connection has expired. Reconnect the provider and retry.');
     const connector = this.getConnector(provider);
     if (!connector.vendor) return credentials;
     const vendor = connector.vendor;

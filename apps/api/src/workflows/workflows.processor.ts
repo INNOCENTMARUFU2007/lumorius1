@@ -1,6 +1,7 @@
 import { BadRequestException, Logger } from '@nestjs/common';
 import { Process, Processor } from '@nestjs/bull';
 import { Job } from 'bull';
+import type { PoolClient } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
 
@@ -42,7 +43,7 @@ export class WorkflowsProcessor {
   async execute(job: Job<WorkflowJob>): Promise<void> {
     const { runId, workflowId, organizationId } = job.data;
     const loaded = await this.db.query(
-      `SELECT run.id AS run_id, run.input_data, run.status AS run_status,
+      `SELECT run.id AS run_id, run.input_data, run.status AS run_status, run.triggered_by_id,
               workflow.id AS workflow_id, workflow.name, workflow.steps,
               workflow.status::text AS workflow_status, workflow.created_by_id
          FROM workflow_runs run
@@ -158,6 +159,7 @@ export class WorkflowsProcessor {
            VALUES ($1::uuid, $2::uuid, 'workflow.run.completed', 'workflow_run', $3, $4::jsonb)`,
           [organizationId, run.created_by_id, runId, JSON.stringify({ workflowId, stepCount: results.length })],
         );
+        await this.notifyRun(client, organizationId, runId, run, 'completed');
       });
     } catch (error) {
       const attempts = Number(job.opts.attempts ?? 1);
@@ -183,6 +185,7 @@ export class WorkflowsProcessor {
              VALUES ($1::uuid, $2::uuid, 'workflow.run.failed', 'workflow_run', $3, $4::jsonb)`,
             [organizationId, run.created_by_id, runId, JSON.stringify({ workflowId })],
           );
+          await this.notifyRun(client, organizationId, runId, run, 'failed');
         });
       } else {
         await this.db.query(
@@ -198,6 +201,18 @@ export class WorkflowsProcessor {
       this.logger.error(`Workflow ${workflowId} run ${runId} failed${terminal ? ' permanently' : '; retry scheduled'}.`);
       throw error;
     }
+  }
+
+  private async notifyRun(client: PoolClient, organizationId: string, runId: string, run: DataRecord, status: 'completed' | 'failed') {
+    await client.query(
+      `INSERT INTO notifications (id, user_id, organization_id, type, title, action_url, data)
+       SELECT gen_random_uuid(), u.id, u.organization_id, 'workflow', $2, '/workflows', $3::jsonb
+         FROM users u WHERE u.organization_id = $1 AND u.is_active AND u.id IN ($4::uuid, $5::uuid)
+       ON CONFLICT (user_id, (data ->> 'eventKey')) WHERE (data ? 'eventKey') DO NOTHING`,
+      [organizationId, `Workflow ${status}: ${String(run.name ?? 'Workflow').slice(0, 180)}`,
+        JSON.stringify({ eventKey: 'workflow-outcome:' + runId, workflowRunId: runId, status }),
+        run.created_by_id ?? null, run.triggered_by_id ?? null],
+    );
   }
 
   private async createTask(

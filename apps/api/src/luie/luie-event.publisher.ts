@@ -6,7 +6,8 @@ import type { LuieAppendResult, LuieDomainEventInput } from './luie-event.types'
 const EVENT_TYPE_PATTERN = /^[a-z][a-z0-9]*(\.[a-z0-9_-]+)+$/;
 const AGGREGATE_TYPE_PATTERN = /^[a-z][a-z0-9_]{1,79}$/;
 const CONSUMER_NAME_PATTERN = /^[a-z][a-z0-9_.-]{1,99}$/;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// The event references existing PostgreSQL UUIDs, including legacy IDs without RFC version/variant bits.
+const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 
 interface ExistingEventRow {

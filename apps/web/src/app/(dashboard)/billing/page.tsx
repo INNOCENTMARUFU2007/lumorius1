@@ -1,29 +1,20 @@
-
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
-import {
-  Check,
-  CreditCard,
-  FileText,
-  ExternalLink,
-  Shield,
-  Zap,
-  Star,
-  Building2,
-  ArrowRight,
-  type LucideIcon,
-} from 'lucide-react';
-import api from '@/lib/api';
+import { Check, ExternalLink, FileText, Minus } from 'lucide-react';
 import { toast } from 'sonner';
+import api from '@/lib/api';
+import { cn } from '@/lib/utils';
+import { PLAN_LABEL, trialDaysLeft, usePlan } from '@/hooks/use-plan';
+import { SegmentedControl, StatusBadge } from '@/components/ui/primitives';
 
 type BillingInterval = 'monthly' | 'annual';
 
 interface PlanLimits {
   users?: number | string;
   storage_gb?: number | string;
+  storage_bytes?: number | string;
   ai_tokens_monthly?: number | string;
   documents?: number | string;
 }
@@ -31,21 +22,22 @@ interface PlanLimits {
 interface Plan {
   id: string;
   name: string;
-  tier?: string;
-  description?: string;
-  price_monthly: number | string;
-  price_yearly: number | string;
+  price_monthly: number | string | null;
+  price_yearly: number | string | null;
+  checkout_provider?: 'dodo';
+  checkout_available?: Record<BillingInterval, boolean>;
   limits?: PlanLimits | null;
-  features?: unknown;
   stripe_price_monthly?: string | null;
   stripe_price_yearly?: string | null;
   is_active?: boolean;
+  coming_soon?: boolean;
 }
 
 interface Subscription {
   plan_id?: string;
   plan_name?: string;
   status?: string;
+  dodo_customer_id?: string;
   interval?: string;
   current_period_end?: string | null;
   cancel_at_period_end?: boolean;
@@ -62,723 +54,349 @@ interface Invoice {
   invoice_pdf?: string | null;
 }
 
-const PLAN_ICONS: Record<string, LucideIcon> = {
-  free: Zap,
-  starter: Star,
-  professional: Shield,
-  enterprise: Building2,
+const PLAN_ORDER = ['starter', 'growth', 'professional'];
+
+const PLAN_PITCH: Record<string, string> = {
+  starter: 'For small teams getting their work, documents and meetings into one place.',
+  growth: 'For teams that want automation, decision tracking and financial reporting.',
+  professional: 'For larger teams that need governance controls and room to grow.',
 };
 
-function PlanIconDisplay({
-  planId,
-  className,
-}: {
-  planId?: string;
-  className?: string;
-}) {
-  const Icon = planId ? PLAN_ICONS[planId] : undefined;
+/** What each plan unlocks. Mirrors apps/api/src/billing/plan-policy.ts — the API enforces it. */
+const COMPARISON: Array<{ label: string; plans: string[] }> = [
+  { label: 'Tasks, projects and meetings', plans: ['starter', 'growth', 'professional'] },
+  { label: 'Company Brain and AI Advisor', plans: ['starter', 'growth', 'professional'] },
+  { label: 'Chief of Staff, goals and analytics', plans: ['starter', 'growth', 'professional'] },
+  { label: 'Integrations, including Gmail and Drive', plans: ['starter', 'growth', 'professional'] },
+  { label: 'Workflow automation', plans: ['growth', 'professional'] },
+  { label: 'Decision tracking', plans: ['growth', 'professional'] },
+  { label: 'Executive Intelligence (financial reporting)', plans: ['growth', 'professional'] },
+  { label: 'Operations Manager agent', plans: ['growth', 'professional'] },
+  { label: 'Decision governance: approval policies and delegation', plans: ['professional'] },
+];
 
-  if (!Icon) {
-    return <CreditCard className={className} />;
-  }
-
-  return <Icon className={className} />;
-}
-
-const PLAN_GRADIENTS: Record<string, string> = {
-  free: 'from-gray-600 to-gray-700',
-  starter: 'from-slate-600 to-slate-700',
-  professional: 'from-violet-600 to-indigo-600',
-  enterprise: 'from-emerald-600 to-teal-600',
-};
-
-const PLAN_BADGES: Record<string, string | null> = {
-  free: null,
-  starter: null,
-  professional: 'Most Popular',
-  enterprise: null,
-};
-
-const PLAN_DESCRIPTIONS: Record<string, string> = {
-  free: 'Explore Lumorius with the essential tools for getting started.',
-  starter: 'For founders and small teams building their operations.',
-  professional: 'For growing companies that need a unified company workspace.',
-  enterprise: 'For organisations requiring enterprise-level scale and control.',
-};
-
-const FALLBACK_FEATURES: Record<string, string[]> = {
-  free: [
-    'Core Lumorius workspace',
-    'Essential founder tools',
-    'Limited AI usage',
-  ],
-  starter: [
-    'Expanded workspace limits',
-    'Team collaboration',
-    'AI-powered productivity tools',
-  ],
-  professional: [
-    'Advanced workspace limits',
-    'AI-powered workflows',
-    'Company knowledge and analytics',
-  ],
-  enterprise: [
-    'Enterprise-scale workspace',
-    'Advanced administration',
-    'Enterprise support options',
-  ],
-};
-
-function asNumber(value: number | string | null | undefined): number {
+const num = (value: number | string | null | undefined) => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+const money = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 0 });
+
+function limitText(value: number | string | undefined, unit: string) {
+  if (value === undefined || value === null || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  if (n < 0) return `Unlimited ${unit}`;
+  return `${n.toLocaleString('en-US')} ${unit}`;
 }
 
-function formatMoney(value: number): string {
-  return value.toLocaleString('en-US', {
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 0,
-  });
+function storageText(limits: PlanLimits) {
+  const bytes = num(limits.storage_bytes);
+  const gb = bytes > 0 ? bytes / 1024 ** 3 : num(limits.storage_gb);
+  return gb < 0 ? 'Unlimited storage' : `${Number(gb.toFixed(1)).toLocaleString('en-US')} GB storage`;
 }
 
-function formatLimit(
-  value: number | string | undefined,
-  suffix = '',
-): string {
-  if (value === undefined || value === null || value === '') {
-    return '—';
-  }
-
-  const amount = Number(value);
-
-  if (!Number.isFinite(amount)) return '—';
-  if (amount < 0) return 'Unlimited';
-
-  return `${amount.toLocaleString('en-US')}${suffix}`;
+function tokensText(value: number | string | undefined) {
+  const n = num(value);
+  if (n < 0) return 'Unlimited AI usage';
+  const short = n >= 1_000_000 ? `${Number((n / 1_000_000).toFixed(1))}M` : `${Math.round(n / 1000)}k`;
+  return `${short} AI tokens / month`;
 }
 
-function formatTokens(value: number | string | undefined): string {
-  if (value === undefined || value === null || value === '') {
-    return '—';
-  }
-
-  const amount = Number(value);
-
-  if (!Number.isFinite(amount)) return '—';
-  if (amount < 0) return 'Unlimited';
-
-  if (amount >= 1_000_000) {
-    return `${Number((amount / 1_000_000).toFixed(1))}M`;
-  }
-
-  if (amount >= 1_000) {
-    return `${Number((amount / 1_000).toFixed(1))}k`;
-  }
-
-  return amount.toLocaleString('en-US');
-}
-
-function getFeatures(value: unknown, planId: string): string[] {
-  if (Array.isArray(value)) {
-    const strings = value.filter(
-      (item): item is string => typeof item === 'string',
-    );
-
-    return strings.length > 0
-      ? strings
-      : (FALLBACK_FEATURES[planId] ?? []);
-  }
-
-  if (value && typeof value === 'object') {
-    const enabledFeatures = Object.entries(
-      value as Record<string, unknown>,
-    )
-      .filter(([, enabled]) => Boolean(enabled))
-      .map(([name]) =>
-        name
-          .replace(/_/g, ' ')
-          .replace(/\b\w/g, (character) => character.toUpperCase()),
-      );
-
-    return enabledFeatures.length > 0
-      ? enabledFeatures
-      : (FALLBACK_FEATURES[planId] ?? []);
-  }
-
-  return FALLBACK_FEATURES[planId] ?? [];
-}
-
-function PlanCard({
+function PlanColumn({
   plan,
+  interval,
   current,
-  billing,
-  onSubscribe,
-  onContactSales,
+  popular,
   loading,
+  onSubscribe,
 }: {
   plan: Plan;
+  interval: BillingInterval;
   current: boolean;
-  billing: BillingInterval;
-  onSubscribe: (planId: string, interval: BillingInterval) => void;
-  onContactSales: () => void;
+  popular: boolean;
   loading: boolean;
+  onSubscribe: () => void;
 }) {
-  const isEnterprise = plan.id === 'enterprise';
-  const isFree = plan.id === 'free';
-
-  const monthly = asNumber(plan.price_monthly);
-  const annual = asNumber(plan.price_yearly);
-
-  const displayPrice =
-    billing === 'annual' ? Math.round(annual / 12) : monthly;
-
-  const annualSaving = Math.max(0, monthly * 12 - annual);
-  const savingsPercent =
-    monthly > 0
-      ? Math.round((annualSaving / (monthly * 12)) * 100)
-      : 0;
-
-  const badge = PLAN_BADGES[plan.id] ?? null;
-  const gradient =
-    PLAN_GRADIENTS[plan.id] ?? PLAN_GRADIENTS.starter;
-
-  const selectedStripePrice =
-    billing === 'annual'
-      ? plan.stripe_price_yearly
-      : plan.stripe_price_monthly;
-
+  const monthly = num(plan.price_monthly);
+  const yearly = num(plan.price_yearly);
+  const shown = interval === 'annual' ? Math.round(yearly / 12) : monthly;
+  const saving = Math.max(0, monthly * 12 - yearly);
   const limits = plan.limits ?? {};
-  const features = getFeatures(plan.features, plan.id);
+  const checkoutAvailable =
+    plan.checkout_provider === 'dodo'
+      ? Boolean(plan.checkout_available?.[interval])
+      : Boolean(interval === 'annual' ? plan.stripe_price_yearly : plan.stripe_price_monthly);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`relative flex flex-col overflow-hidden rounded-2xl border ${
-        current
-          ? 'border-violet-500 shadow-xl shadow-violet-500/20'
-          : 'border-gray-800'
-      } bg-gray-900`}
+    <section
+      aria-label={`${plan.name} plan`}
+      className={cn(
+        'relative flex flex-col rounded-xl border bg-card p-6',
+        popular ? 'border-primary/60 ring-1 ring-primary/30' : 'border-border',
+      )}
     >
-      {badge && (
-        <div className="absolute left-1/2 top-0 z-10 -translate-x-1/2">
-          <span className="rounded-b-lg bg-violet-600 px-3 py-1 text-[11px] font-bold text-white shadow">
-            {badge}
-          </span>
-        </div>
-      )}
-
-      {current && (
-        <div className="absolute right-3 top-3 z-10">
-          <span className="rounded-full border border-violet-500/30 bg-violet-500/20 px-2.5 py-1 text-[11px] font-semibold text-violet-300">
-            Current Plan
-          </span>
-        </div>
-      )}
-
-      {/* Plan and pricing */}
-      <div className={`bg-gradient-to-br ${gradient} p-5`}>
-        <div className="mb-4 flex items-center gap-2 text-white">
-          <PlanIconDisplay planId={plan.id} className="h-5 w-5" />
-          <span className="text-lg font-bold">{plan.name}</span>
-        </div>
-
-        <div className="flex items-end gap-1 text-white">
-          <span className="text-lg font-medium text-white/80">$</span>
-          <span className="text-4xl font-black">
-            {formatMoney(displayPrice)}
-          </span>
-          <span className="mb-1 text-sm text-white/70">/mo</span>
-        </div>
-
-        {monthly === 0 && annual === 0 ? (
-          <p className="mt-2 text-xs text-white/80">Free forever</p>
-        ) : billing === 'annual' ? (
-          <div className="mt-2 space-y-1">
-            <p className="text-xs text-white/90">
-              Billed ${formatMoney(annual)} per year
-            </p>
-
-            {annualSaving > 0 && (
-              <p className="text-xs text-white/80">
-                2 months free · Save ${formatMoney(annualSaving)} per year
-                {' '}({savingsPercent}% off)
-              </p>
-            )}
-          </div>
-        ) : (
-          <p className="mt-2 text-xs text-white/70">
-            Or ${formatMoney(annual)} per year with 2 months free
-          </p>
-        )}
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-base font-semibold">{plan.name}</h2>
+        {current ? <StatusBadge tone="success">Current plan</StatusBadge> : popular ? <StatusBadge tone="primary" dot={false}>Most popular</StatusBadge> : null}
       </div>
+      <p className="mt-1.5 min-h-10 text-sm text-muted-foreground">{PLAN_PITCH[plan.id]}</p>
 
-      {/* Plan details */}
-      <div className="flex flex-1 flex-col p-5">
-        <p className="mb-4 text-sm text-gray-400">
-          {plan.description ?? PLAN_DESCRIPTIONS[plan.id] ?? ''}
-        </p>
+      <div className="mt-5 flex items-baseline gap-1">
+        <span className="text-4xl font-semibold tracking-tight tabular-nums">${money(shown)}</span>
+        <span className="text-sm text-muted-foreground">/ month</span>
+      </div>
+      <p className="mt-1 h-4 text-xs text-muted-foreground">
+        {interval === 'annual' ? `$${money(yearly)} billed yearly${saving > 0 ? ` · save $${money(saving)}` : ''}` : `or $${money(yearly)} / year`}
+      </p>
 
-        {/* Limits */}
-        <div className="mb-5 grid grid-cols-3 gap-2 text-center">
-          <div className="rounded-lg bg-gray-800 p-2">
-            <p className="text-sm font-bold text-white">
-              {formatLimit(limits.users)}
-            </p>
-            <p className="text-[10px] text-gray-500">Users</p>
-          </div>
-
-          <div className="rounded-lg bg-gray-800 p-2">
-            <p className="text-sm font-bold text-white">
-              {formatLimit(limits.storage_gb, ' GB')}
-            </p>
-            <p className="text-[10px] text-gray-500">Storage</p>
-          </div>
-
-          <div className="rounded-lg bg-gray-800 p-2">
-            <p className="text-sm font-bold text-white">
-              {formatTokens(limits.ai_tokens_monthly)}
-            </p>
-            <p className="text-[10px] text-gray-500">AI tokens/mo</p>
-          </div>
-        </div>
-
-        {/* Features */}
-        <ul className="mb-6 flex-1 space-y-2">
-          {features.map((feature, index) => (
-            <li
-              key={`${plan.id}-${index}`}
-              className="flex items-start gap-2 text-sm text-gray-300"
-            >
-              <Check className="mt-0.5 h-4 w-4 shrink-0 text-violet-400" />
-              <span>{feature}</span>
-            </li>
-          ))}
-        </ul>
-
-        {/* Actions */}
+      <div className="mt-5">
         {current ? (
-          <button
-            disabled
-            className="w-full cursor-default rounded-xl bg-gray-800 py-3 text-sm font-semibold text-gray-400"
-          >
-            ✓ Current Plan
-          </button>
-        ) : isFree ? (
-          <button
-            disabled
-            className="w-full cursor-not-allowed rounded-xl bg-gray-800 py-3 text-sm font-semibold text-gray-500"
-          >
-            Free tier
-          </button>
-        ) : isEnterprise ? (
-          <button
-            onClick={onContactSales}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-500/40 py-3 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/10"
-          >
-            Contact Sales <ArrowRight className="h-4 w-4" />
-          </button>
-        ) : !selectedStripePrice ? (
-          <button
-            disabled
-            className="w-full cursor-not-allowed rounded-xl bg-gray-800 py-3 text-sm font-semibold text-gray-500"
-            title={`Configure the ${billing} Stripe price ID for this plan`}
-          >
-            Stripe price not configured
+          <button disabled className="h-10 w-full rounded-lg border border-border text-sm font-medium text-muted-foreground">You’re on this plan</button>
+        ) : !checkoutAvailable ? (
+          <button disabled title="Payment products are not configured on the server yet." className="h-10 w-full cursor-not-allowed rounded-lg bg-muted text-sm font-medium text-muted-foreground">
+            Checkout not available yet
           </button>
         ) : (
           <button
-            onClick={() => onSubscribe(plan.id, billing)}
+            onClick={onSubscribe}
             disabled={loading}
-            className={`flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r ${gradient} py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50`}
-          >
-            {loading ? (
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-            ) : (
-              <>
-                Subscribe <ArrowRight className="h-4 w-4" />
-              </>
+            className={cn(
+              'h-10 w-full rounded-lg text-sm font-medium transition disabled:opacity-60',
+              popular ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'border border-border-strong hover:bg-muted',
             )}
+          >
+            {loading ? 'Opening checkout…' : `Choose ${plan.name}`}
           </button>
         )}
       </div>
-    </motion.div>
+
+      <ul className="mt-6 space-y-2 border-t border-border pt-5 text-sm">
+        {[limitText(limits.users, num(limits.users) === 1 ? 'team member' : 'team members'), limitText(limits.documents, 'documents'), storageText(limits), tokensText(limits.ai_tokens_monthly)].map((line) => (
+          <li key={line} className="flex items-center gap-2 text-foreground/90">
+            <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            {line}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
 export default function BillingPage() {
-  const [billing, setBilling] = useState<BillingInterval>('monthly');
+  const [interval, setBillingInterval] = useState<BillingInterval>('monthly');
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
+  const [checkoutReturn, setCheckoutReturn] = useState(false);
+  const { data: entitlements } = usePlan();
 
-  const { data: plans = [], isLoading: plansLoading } = useQuery<Plan[]>({
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('checkout') !== 'dodo') return;
+    setCheckoutReturn(true);
+    const timer = setTimeout(() => setCheckoutReturn(false), 90_000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const { data: plans = [], isLoading: plansLoading, isError: plansError } = useQuery<Plan[]>({
     queryKey: ['billing', 'plans'],
     queryFn: async () => {
-      const response = await api.get('/billing/plans');
-      const data = response.data?.data;
-
-      if (!Array.isArray(data)) return [];
-
-      return (data as Plan[]).filter(
-        (plan) =>
-          plan.id !== 'growth' &&
-          plan.id !== 'custom' &&
-          plan.is_active !== false,
-      );
+      const data = (await api.get('/billing/plans')).data?.data;
+      return Array.isArray(data) ? (data as Plan[]).filter((p) => p.is_active !== false) : [];
     },
   });
 
   const { data: subscription } = useQuery<Subscription | null>({
     queryKey: ['billing', 'subscription'],
-    queryFn: async () => {
-      const response = await api.get('/billing/subscription');
-      return response.data?.data ?? null;
-    },
+    refetchInterval: (query) => (checkoutReturn && query.state.data?.status !== 'active' ? 4000 : false),
+    queryFn: async () => (await api.get('/billing/subscription')).data?.data ?? null,
   });
 
   const { data: invoices = [] } = useQuery<Invoice[]>({
     queryKey: ['billing', 'invoices'],
     queryFn: async () => {
-      const response = await api.get('/billing/invoices');
-
-      return Array.isArray(response.data?.data)
-        ? (response.data.data as Invoice[])
-        : [];
+      const data = (await api.get('/billing/invoices')).data?.data;
+      return Array.isArray(data) ? (data as Invoice[]) : [];
     },
   });
 
-  const checkoutMutation = useMutation({
-    mutationFn: async ({
-      planId,
-      interval,
-    }: {
-      planId: string;
-      interval: BillingInterval;
-    }) => {
+  const checkout = useMutation({
+    mutationFn: async ({ planId, interval: chosen }: { planId: string; interval: BillingInterval }) => {
       setLoadingPlan(planId);
-
-      const response = await api.post('/billing/checkout', {
-        planId,
-        interval,
-        successUrl: `${window.location.origin}/billing?success=1`,
-        cancelUrl: `${window.location.origin}/billing?cancel=1`,
-      });
-
-      return response.data.data as { url: string };
+      return (await api.post('/billing/checkout', { planId, interval: chosen })).data.data as { url: string };
     },
     onSuccess: (data) => {
-      if (data?.url) {
-        window.location.href = data.url;
-      } else {
-        toast.error('Checkout did not return a Stripe URL.');
-      }
+      if (data?.url) window.location.href = data.url;
+      else toast.error('Checkout did not return a payment link.');
     },
-    onError: () => {
-      toast.error('Checkout failed. Check your Stripe configuration.');
+    onError: (error) => {
+      const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(typeof message === 'string' ? message : 'Checkout could not be opened.');
     },
-    onSettled: () => {
-      setLoadingPlan(null);
-    },
+    onSettled: () => setLoadingPlan(null),
   });
 
-  const portalMutation = useMutation({
-    mutationFn: async () => {
-      const response = await api.post('/billing/portal', {
-        returnUrl: window.location.href,
-      });
-
-      return response.data.data as { url: string };
-    },
+  const portal = useMutation({
+    mutationFn: async () => (await api.post('/billing/portal', { returnUrl: window.location.href })).data.data as { url: string },
     onSuccess: (data) => {
-      if (data?.url) {
-        window.location.href = data.url;
-      } else {
-        toast.error('The billing portal did not return a URL.');
-      }
+      if (data?.url) window.location.href = data.url;
+      else toast.error('The billing portal did not return a URL.');
     },
-    onError: () => {
-      toast.error('Could not open the billing portal.');
-    },
+    onError: () => toast.error('Could not open the billing portal.'),
   });
 
-  const handleContactSales = () => {
-    window.location.href =
-      'mailto:sales@lumorius.com?subject=Lumorius%20Enterprise%20Plan%20Inquiry';
-  };
-
-  const currentPlanId = subscription?.plan_id;
+  const purchasable = PLAN_ORDER.map((id) => plans.find((p) => p.id === id)).filter((p): p is Plan => Boolean(p));
+  const enterprise = plans.find((p) => p.id === 'enterprise');
+  const currentPlan = entitlements?.plan;
+  const days = trialDaysLeft(entitlements);
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 pb-12">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-violet-500/10 p-2">
-            <CreditCard className="h-6 w-6 text-violet-400" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-white">
-              Billing &amp; Subscriptions
-            </h1>
-            <p className="text-sm text-gray-400">
-              All prices in USD. Annual billing includes two months free.
-            </p>
-          </div>
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Billing</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Prices in US dollars, excluding any local taxes. Cancel any time.</p>
         </div>
-
-        {subscription && (
+        {subscription?.dodo_customer_id && (
           <button
-            onClick={() => portalMutation.mutate()}
-            disabled={portalMutation.isPending}
-            className="flex items-center gap-2 rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 transition hover:bg-gray-800 disabled:opacity-50"
+            onClick={() => portal.mutate()}
+            disabled={portal.isPending}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-strong px-3.5 text-sm font-medium transition hover:bg-muted disabled:opacity-50"
           >
-            <ExternalLink className="h-4 w-4" />
-            Manage Billing
+            <ExternalLink className="h-4 w-4" /> Manage subscription
           </button>
         )}
-      </div>
+      </header>
 
-      {/* Current subscription */}
-      {subscription && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="flex flex-wrap items-center gap-6 rounded-2xl border border-violet-500/20 bg-violet-500/5 p-5"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-500/20">
-              <PlanIconDisplay
-                planId={subscription.plan_id}
-                className="h-5 w-5 text-violet-400"
-              />
-            </div>
-            <div>
-              <p className="text-sm text-gray-400">Active Plan</p>
-              <p className="text-lg font-bold text-white">
-                {subscription.plan_name ??
-                  subscription.plan_id ??
-                  'Unknown'}
-              </p>
-            </div>
-          </div>
-
-          <div className="hidden h-8 w-px bg-gray-700 sm:block" />
-
-          <div>
-            <p className="text-xs text-gray-500">Status</p>
-            <span
-              className={`text-sm font-semibold capitalize ${
-                subscription.status === 'active'
-                  ? 'text-emerald-400'
-                  : 'text-amber-400'
-              }`}
-            >
-              {subscription.status ?? 'Unknown'}
-            </span>
-          </div>
-
-          <div>
-            <p className="text-xs text-gray-500">Billing</p>
-            <p className="text-sm font-semibold capitalize text-white">
-              {subscription.interval ?? '—'}
-            </p>
-          </div>
-
-          <div>
-            <p className="text-xs text-gray-500">Renews</p>
-            <p className="text-sm font-semibold text-white">
-              {subscription.current_period_end
-                ? new Date(
-                    subscription.current_period_end,
-                  ).toLocaleDateString()
-                : '—'}
-            </p>
-          </div>
-
-          {subscription.cancel_at_period_end && (
-            <div className="ml-auto">
-              <span className="rounded-lg border border-red-500/20 bg-red-500/20 px-3 py-1.5 text-xs text-red-400">
-                Cancels at period end
-              </span>
-            </div>
-          )}
-        </motion.div>
+      {checkoutReturn && (
+        <p role="status" className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          {subscription?.status === 'active' ? 'Payment confirmed. Your subscription is active.' : 'Checking your payment… this page updates automatically.'}
+        </p>
       )}
 
-      {/* Billing interval */}
-      <div className="flex flex-col items-center justify-center gap-2">
-        <div className="flex items-center rounded-xl border border-gray-800 bg-gray-900 p-1">
-          <button
-            onClick={() => setBilling('monthly')}
-            aria-pressed={billing === 'monthly'}
-            className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${
-              billing === 'monthly'
-                ? 'bg-violet-600 text-white'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Monthly
-          </button>
+      {entitlements && (
+        <section aria-label="Current plan" className="grid gap-4 rounded-xl border border-border bg-card p-5 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Current plan</p>
+            <p className="mt-1 text-lg font-semibold">{PLAN_LABEL[entitlements.plan]}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {entitlements.status === 'trialing'
+                ? `${days} ${days === 1 ? 'day' : 'days'} left. During the trial you have Growth features with a smaller allowance. Pick a plan any time; it starts immediately.`
+                : entitlements.status === 'expired'
+                  ? 'Your trial has ended. Your data is kept. Choose a plan below to turn your workspace back on.'
+                  : subscription?.current_period_end
+                    ? `${subscription.cancel_at_period_end ? 'Ends' : 'Renews'} on ${new Date(subscription.current_period_end).toLocaleDateString()}.`
+                    : 'Active.'}
+            </p>
+          </div>
+          {entitlements.status !== 'active' && (
+            <StatusBadge tone={entitlements.status === 'expired' ? 'warning' : 'info'}>{entitlements.status === 'expired' ? 'Trial ended' : 'Trial'}</StatusBadge>
+          )}
+        </section>
+      )}
 
-          <button
-            onClick={() => setBilling('annual')}
-            aria-pressed={billing === 'annual'}
-            className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${
-              billing === 'annual'
-                ? 'bg-violet-600 text-white'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Annual
-          </button>
-        </div>
-
-        {billing === 'annual' && (
-          <p className="text-xs text-emerald-400">
-            Pay for 10 months and get 12 months of service.
-          </p>
-        )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-base font-semibold">Plans</h2>
+        <SegmentedControl
+          label="Billing interval"
+          value={interval}
+          onChange={setBillingInterval}
+          options={[
+            { value: 'monthly', label: 'Monthly' },
+            { value: 'annual', label: 'Yearly · 2 months free' },
+          ]}
+        />
       </div>
 
-      {/* Plans */}
       {plansLoading ? (
-        <div className="flex justify-center py-16">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-500/40 border-t-violet-500" />
-        </div>
-      ) : plans.length === 0 ? (
-        <div className="rounded-2xl border border-gray-800 bg-gray-900 p-8 text-center">
-          <p className="font-semibold text-white">
-            No billing plans are available.
-          </p>
-          <p className="mt-2 text-sm text-gray-400">
-            Check that the billing API is running and the plans are active.
-          </p>
-        </div>
+        <div className="grid gap-4 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="lm-skeleton h-96 rounded-xl" />)}</div>
+      ) : plansError || purchasable.length === 0 ? (
+        <p className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">Plans could not be loaded. Check that the API is running.</p>
       ) : (
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {plans.map((plan) => (
-            <PlanCard
+        <div className="grid gap-4 md:grid-cols-3">
+          {purchasable.map((plan) => (
+            <PlanColumn
               key={plan.id}
               plan={plan}
-              current={currentPlanId === plan.id}
-              billing={billing}
-              loading={
-                loadingPlan === plan.id &&
-                checkoutMutation.isPending
-              }
-              onSubscribe={(planId, interval) =>
-                checkoutMutation.mutate({ planId, interval })
-              }
-              onContactSales={handleContactSales}
+              interval={interval}
+              current={currentPlan === plan.id}
+              popular={plan.id === 'growth'}
+              loading={loadingPlan === plan.id && checkout.isPending}
+              onSubscribe={() => checkout.mutate({ planId: plan.id, interval })}
             />
           ))}
         </div>
       )}
 
-      {/* Trust information */}
-      <div className="flex flex-wrap items-center justify-center gap-6 py-2">
-        {[
-          { icon: Shield, text: 'Stripe-secured payments' },
-          { icon: Check, text: 'Cancel anytime' },
-          { icon: Zap, text: 'Flexible billing intervals' },
-        ].map(({ icon: Icon, text }) => (
-          <div
-            key={text}
-            className="flex items-center gap-2 text-sm text-gray-500"
-          >
-            <Icon className="h-4 w-4 text-gray-600" />
-            {text}
-          </div>
-        ))}
-      </div>
+      {purchasable.length > 0 && (
+        <section aria-label="Plan comparison" className="overflow-x-auto rounded-xl border border-border bg-card">
+          <table className="w-full min-w-[560px] text-sm">
+            <caption className="sr-only">What each plan includes</caption>
+            <thead>
+              <tr className="border-b border-border text-left">
+                <th scope="col" className="p-4 font-medium text-muted-foreground">Included</th>
+                {purchasable.map((p) => (
+                  <th key={p.id} scope="col" className="w-32 p-4 text-center font-medium">{p.name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {COMPARISON.map((row) => (
+                <tr key={row.label} className="border-b border-border last:border-0">
+                  <th scope="row" className="p-4 text-left font-normal text-foreground/90">{row.label}</th>
+                  {purchasable.map((p) => (
+                    <td key={p.id} className="p-4 text-center">
+                      {row.plans.includes(p.id) ? (
+                        <Check className="mx-auto h-4 w-4 text-foreground" aria-label="Included" />
+                      ) : (
+                        <Minus className="mx-auto h-4 w-4 text-muted-foreground/50" aria-label="Not included" />
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
 
-      {/* Invoice history */}
+      {enterprise && (
+        <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-dashed border-border-strong p-5">
+          <div>
+            <h2 className="text-sm font-semibold">Enterprise</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Unlimited seats and usage, custom terms and invoicing. Not available for self-serve checkout yet.</p>
+          </div>
+        </section>
+      )}
+
       {invoices.length > 0 && (
         <section>
-          <h2 className="mb-4 text-lg font-semibold text-white">
-            Invoice History
-          </h2>
-
-          <div className="overflow-x-auto rounded-2xl border border-gray-800 bg-gray-900">
+          <h2 className="mb-3 text-base font-semibold">Invoices</h2>
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800">
-                  <th className="p-4 text-left font-medium text-gray-500">
-                    Date
-                  </th>
-                  <th className="p-4 text-left font-medium text-gray-500">
-                    Amount
-                  </th>
-                  <th className="p-4 text-left font-medium text-gray-500">
-                    Status
-                  </th>
-                  <th className="p-4 text-left font-medium text-gray-500">
-                    Invoice
-                  </th>
+                <tr className="border-b border-border text-left">
+                  {['Date', 'Amount', 'Status', 'Invoice'].map((h) => (
+                    <th key={h} className="p-4 font-medium text-muted-foreground">{h}</th>
+                  ))}
                 </tr>
               </thead>
-
               <tbody>
                 {invoices.map((invoice) => {
                   const status = invoice.status ?? 'unknown';
-                  const amount =
-                    status === 'paid'
-                      ? asNumber(
-                          invoice.amount_paid ?? invoice.amount_due,
-                        )
-                      : asNumber(
-                          invoice.amount_due ?? invoice.amount_paid,
-                        );
-
-                  const currency = (
-                    invoice.currency ?? 'USD'
-                  ).toUpperCase();
-
-                  const date =
-                    invoice.paid_at ?? invoice.created_at;
-
+                  const amount = status === 'paid' ? num(invoice.amount_paid ?? invoice.amount_due) : num(invoice.amount_due ?? invoice.amount_paid);
+                  const date = invoice.paid_at ?? invoice.created_at;
                   return (
-                    <tr
-                      key={invoice.id}
-                      className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40"
-                    >
-                      <td className="p-4 text-gray-300">
-                        {date
-                          ? new Date(date).toLocaleDateString()
-                          : '—'}
+                    <tr key={invoice.id} className="border-b border-border last:border-0">
+                      <td className="p-4">{date ? new Date(date).toLocaleDateString() : '—'}</td>
+                      <td className="p-4 font-medium tabular-nums">
+                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: (invoice.currency ?? 'USD').toUpperCase() }).format(amount)}
                       </td>
-
-                      <td className="p-4 font-semibold text-white">
-                        {new Intl.NumberFormat('en-US', {
-                          style: 'currency',
-                          currency,
-                        }).format(amount)}
-                      </td>
-
-                      <td className="p-4">
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${
-                            status === 'paid'
-                              ? 'bg-emerald-500/20 text-emerald-400'
-                              : 'bg-amber-500/20 text-amber-400'
-                          }`}
-                        >
-                          {status.replace(/_/g, ' ')}
-                        </span>
-                      </td>
-
+                      <td className="p-4"><StatusBadge tone={status === 'paid' ? 'success' : 'warning'}>{status.replace(/_/g, ' ')}</StatusBadge></td>
                       <td className="p-4">
                         {invoice.invoice_pdf ? (
-                          <a
-                            href={invoice.invoice_pdf}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 text-violet-400 transition hover:text-violet-300"
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                            Download
+                          <a href={invoice.invoice_pdf} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-primary hover:underline">
+                            <FileText className="h-3.5 w-3.5" /> Download
                           </a>
                         ) : (
-                          <span className="text-gray-600">—</span>
+                          <span className="text-muted-foreground">—</span>
                         )}
                       </td>
                     </tr>

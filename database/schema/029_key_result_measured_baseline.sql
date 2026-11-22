@@ -1,0 +1,4 @@
+BEGIN;
+ALTER TABLE key_results ALTER COLUMN start_value DROP NOT NULL;
+ALTER TABLE key_results ALTER COLUMN current_value DROP NOT NULL;
+COMMIT;

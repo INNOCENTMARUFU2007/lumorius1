@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, LayoutDashboard, Brain, Mic, CheckSquare, Network,
-  TrendingUp, BarChart3, Gauge, Workflow, Sparkles, CreditCard,
+  TrendingUp, BarChart3, Gauge, Workflow, MessageSquareText, CreditCard,
   Settings, ShieldCheck, Users, Bell, Puzzle, ShieldAlert,
   ExternalLink, Hash, ArrowRight, X,
 } from 'lucide-react';
@@ -30,10 +30,13 @@ const NAV_COMMANDS: Command[] = [
   { id: 'cross-meeting-intelligence', label: 'Cross-Meeting Intelligence', group: 'Intelligence', href: '/meetings', icon: Network, keywords: ['cross meeting', 'cross-meeting', 'meeting intelligence', 'transcripts', 'meeting search', 'recurring themes', 'unresolved commitments', 'meeting decisions', 'meeting timeline'] },
   { id: 'meeting-review', label: 'Meeting Review Workspace', group: 'Intelligence', href: '/meetings', icon: Mic, keywords: ['meeting review', 'transcript review', 'action items', 'meeting analysis'] },
   { id: 'decisions', label: 'Decision Intelligence', group: 'Intelligence', href: '/decisions', icon: Network, keywords: ['governance', 'approvals', 'decision register', 'decision portfolio', 'decision outcomes'] },
+  { id: 'agent-command', label: 'AI Agents', group: 'Intelligence', href: '/agent-command', icon: MessageSquareText, keywords: ['agents', 'mission', 'run history', 'approval'] },
+  { id: 'chief-of-staff', label: 'Chief of Staff', group: 'Intelligence', href: '/chief-of-staff', icon: TrendingUp, keywords: ['briefing', 'priority queue', 'commitments', 'approvals'] },
   { id: 'founder-os', label: 'Founder OS', group: 'Intelligence', href: '/founder-os', icon: TrendingUp, keywords: ['strategy', 'goals', 'OKRs', 'objectives', 'founder dashboard', 'key results'] },
+
   { id: 'analytics', label: 'Analytics', group: 'Intelligence', href: '/analytics', icon: BarChart3, keywords: ['business analytics', 'metrics', 'KPIs', 'performance analytics', 'weekly reports'] },
   { id: 'workflows', label: 'Workflows', group: 'Intelligence', href: '/workflows', icon: Workflow, keywords: ['automation', 'workflow autopilot', 'orchestration', 'automated workflows'] },
-  { id: 'ai', label: 'AI Advisor', group: 'Intelligence', href: '/ai', icon: Sparkles, keywords: ['AI strategy advisor', 'AI assistant', 'strategy advisor', 'artificial intelligence'] },
+  { id: 'ai', label: 'AI Advisor', group: 'Intelligence', href: '/ai', icon: MessageSquareText, keywords: ['AI strategy advisor', 'AI assistant', 'strategy advisor', 'artificial intelligence'] },
   { id: 'dashboard', label: 'Dashboard', group: 'Platform', href: '/dashboard', icon: LayoutDashboard, keywords: ['home', 'overview', 'workspace overview'] },
   { id: 'brain', label: 'Company Brain', group: 'Platform', href: '/brain', icon: Brain, keywords: ['documents', 'knowledge base', 'company knowledge', 'knowledge engine', 'document intelligence', 'files'] },
   { id: 'meetings', label: 'Meeting Intelligence', group: 'Platform', href: '/meetings', icon: Mic, keywords: ['meetings', 'transcripts', 'recordings', 'meeting notes', 'meeting workspace'] },
@@ -43,6 +46,7 @@ const NAV_COMMANDS: Command[] = [
   { id: 'notifications', label: 'Notifications', group: 'Workspace', href: '/notifications', icon: Bell, keywords: ['alerts', 'inbox', 'unread notifications'] },
   { id: 'integrations', label: 'Integrations', group: 'Workspace', href: '/integrations', icon: Puzzle, keywords: ['connected apps', 'connectors', 'slack', 'linear', 'dropbox'] },
   { id: 'security', label: 'Security', group: 'Workspace', href: '/security', icon: ShieldCheck, keywords: ['access', 'sessions', 'audit logs', 'security settings'] },
+  { id: 'security-governance', label: 'Security & Governance', group: 'Workspace', href: '/security/governance', icon: ShieldCheck, keywords: ['retention', 'privacy', 'access review', 'export', 'deletion'] },
   { id: 'billing', label: 'Billing', group: 'Workspace', href: '/billing', icon: CreditCard, keywords: ['subscription', 'plan', 'payments', 'invoices'] },
   { id: 'settings', label: 'Settings', group: 'Workspace', href: '/settings', icon: Settings, keywords: ['preferences', 'profile', 'configuration'] },
 ];
@@ -163,7 +167,7 @@ export function CommandPalette() {
           setQuery('');
           setSelectedIndex(0);
         }}
-        className="flex min-h-10 items-center gap-2 rounded-lg border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6577ff]"
+        className="flex h-9 items-center gap-2 rounded-lg border border-border bg-muted/50 px-2.5 text-sm text-muted-foreground transition-colors hover:border-border-strong hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-64 sm:px-3"
         aria-label="Search all Lumorius modules"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -171,8 +175,8 @@ export function CommandPalette() {
         title="Search all modules (Ctrl+K)"
       >
         <Search className="h-4 w-4 shrink-0" />
-        <span className="hidden sm:inline">Search or jump to...</span>
-        <kbd className="hidden rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[12px] text-muted-foreground sm:inline">Ctrl K</kbd>
+        <span className="hidden flex-1 text-left sm:inline">Search or jump to…</span>
+        <kbd className="hidden rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs text-muted-foreground sm:inline">Ctrl K</kbd>
       </button>
 
       {portalReady ? createPortal(
@@ -186,7 +190,7 @@ export function CommandPalette() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.12 }}
-                className="fixed inset-0 z-[1000] cursor-default bg-black/70 backdrop-blur-md"
+                className="fixed inset-0 z-[1000] cursor-default bg-background/70 backdrop-blur-md"
                 onClick={closePalette}
               />
               <div className="pointer-events-none fixed inset-0 z-[1001] flex items-start justify-center overflow-y-auto px-4 py-[10vh]">
@@ -195,7 +199,7 @@ export function CommandPalette() {
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.97, y: -12 }}
                   transition={{ duration: 0.15, ease: 'easeOut' }}
-                  className="pointer-events-auto flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl ring-1 ring-white/10"
+                  className="pointer-events-auto flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-popover shadow-elevated ring-1 ring-primary/10"
                   role="dialog"
                   aria-modal="true"
                   aria-labelledby="lumorius-command-title"
@@ -204,7 +208,7 @@ export function CommandPalette() {
                   onClick={(event) => event.stopPropagation()}
                 >
                   <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-                    <Search className="h-5 w-5 shrink-0 text-[#9ba7ff]" />
+                    <Search className="h-5 w-5 shrink-0 text-primary" />
                     <div className="min-w-0 flex-1">
                       <label id="lumorius-command-title" htmlFor="lumorius-command-input" className="sr-only">Search Lumorius modules and actions</label>
                       <input
@@ -223,7 +227,7 @@ export function CommandPalette() {
                         aria-activedescendant={flat[selectedIndex] ? `lumorius-command-${flat[selectedIndex].id}` : undefined}
                       />
                     </div>
-                    <kbd className="rounded-md border border-border bg-muted px-2 py-1 text-[12px] font-medium text-muted-foreground">ESC</kbd>
+                    <kbd className="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">ESC</kbd>
                     <button type="button" onClick={closePalette} className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Close search"><X className="h-4 w-4" /></button>
                   </div>
 
@@ -232,12 +236,12 @@ export function CommandPalette() {
                       <div className="px-6 py-12 text-center">
                         <Search className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
                         <p className="text-sm font-medium text-foreground">No matching modules or actions</p>
-                        <p className="mt-1 text-[13px] text-muted-foreground">Try "Executive Intelligenceâ€, "Meetingsâ€, "KPIâ€ or "Projectsâ€.</p>
+                        <p className="mt-1 text-sm text-muted-foreground">Try “Executive Intelligence”, “Meetings”, “KPI” or “Projects”.</p>
                       </div>
                     ) : (
                       Object.entries(grouped).map(([group, commands]) => (
                         <section key={group} aria-label={group}>
-                          <p className="flex items-center gap-2 px-5 pb-2 pt-2 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                          <p className="flex items-center gap-2 px-5 pb-2 pt-2 text-xs font-semibold  text-muted-foreground">
                             <Hash className="h-3.5 w-3.5" /> {group}
                           </p>
                           {commands.map((command) => {
@@ -257,18 +261,18 @@ export function CommandPalette() {
                                 onFocus={() => setSelectedIndex(index)}
                                 className={cn(
                                   'flex min-h-12 w-full items-center gap-3 px-5 py-3 text-left text-[15px] transition-colors',
-                                  selected ? 'bg-[#4254f5]/15 text-foreground' : 'text-foreground hover:bg-muted/70',
+                                  selected ? 'bg-primary/[0.12] text-foreground' : 'text-foreground hover:bg-muted/70',
                                 )}
                               >
-                                <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border', selected ? 'border-[#6577ff]/30 bg-[#4254f5]/15 text-[#aab5ff]' : 'border-border bg-muted/60 text-muted-foreground')}>
+                                <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border', selected ? 'border-primary/30 bg-primary/15 text-primary' : 'border-border bg-muted/60 text-muted-foreground')}>
                                   <Icon className="h-4 w-4" />
                                 </span>
                                 <span className="min-w-0 flex-1">
                                   <span className="block break-words leading-5 font-medium">{command.label}</span>
                                   {command.keywords?.length ? <span className="mt-0.5 block whitespace-normal break-words text-xs leading-5 text-muted-foreground">{command.keywords.slice(0, 3).join('  |  ')}</span> : null}
                                 </span>
-                                {command.shortcut ? <kbd className="rounded border border-border bg-muted px-2 py-1 text-[12px] font-mono text-muted-foreground">{command.shortcut}</kbd> : null}
-                                {selected ? <ArrowRight className="h-4 w-4 shrink-0 text-[#9ba7ff]" /> : null}
+                                {command.shortcut ? <kbd className="rounded border border-border bg-muted px-2 py-1 text-xs font-mono text-muted-foreground">{command.shortcut}</kbd> : null}
+                                {selected ? <ArrowRight className="h-4 w-4 shrink-0 text-primary" /> : null}
                               </button>
                             );
                           })}
@@ -277,7 +281,7 @@ export function CommandPalette() {
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-5 py-3 text-[12px] text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-5 py-3 text-xs text-muted-foreground">
                     <span><kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">UP</kbd> <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">DOWN</kbd> Navigate</span>
                     <span><kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">Enter</kbd> Open</span>
                     <span><kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono">Esc</kbd> Close</span>

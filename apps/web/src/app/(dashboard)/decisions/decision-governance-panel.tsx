@@ -1,11 +1,13 @@
 'use client';
 
+import PlanAccess from '@/components/plan-access';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
   ArrowUpRight,
-  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   FileCheck2,
   Loader2,
@@ -14,7 +16,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   Users,
-  Copy,
+
 } from 'lucide-react';
 import api from '@/lib/api';
 import { toast } from 'sonner';
@@ -35,6 +37,7 @@ export type DecisionGovernanceDelegation = {
   id: string;
   principalUserId: string;
   principalName?: string | null;
+  principalRole?: string | null;
   delegateUserId: string;
   delegateName?: string | null;
   decisionType: string;
@@ -50,8 +53,8 @@ export type DecisionGovernanceQueueItem = {
   title: string;
   decisionType: string;
   priority: string;
-  requiredRole: string;
-  approvalDueAt: string;
+  requiredRole: string | null;
+  approvalDueAt: string | null;
   lastEscalatedAt?: string | null;
   escalationCount: number;
   ownerName?: string | null;
@@ -60,14 +63,17 @@ export type DecisionGovernanceQueueItem = {
 };
 
 export type DecisionGovernanceOverview = {
-  summary: { pending: number; overdue: number; dueSoon: number; escalated: number };
+  summary: { pending: number; policyPending: number; withoutPolicy: number; overdue: number; dueSoon: number; escalated: number };
   queue: DecisionGovernanceQueueItem[];
   policies: DecisionGovernancePolicy[];
   delegations: DecisionGovernanceDelegation[];
-  events: Array<{
+  permissions: { managePolicies: boolean; manageOrganisation: boolean; canEscalate: boolean };
+};
+
+type GovernanceAuditPage = {
+  items: Array<{
     id: string;
     eventType: string;
-    details?: Record<string, unknown> | null;
     note?: string | null;
     createdAt: string;
     actorName?: string | null;
@@ -75,7 +81,7 @@ export type DecisionGovernanceOverview = {
     representedUserName?: string | null;
     decisionTitle?: string | null;
   }>;
-  permissions: { managePolicies: boolean; manageOrganisation: boolean; canEscalate: boolean };
+  nextCursor: string | null;
 };
 
 type GovernanceMemberOption = {
@@ -128,6 +134,10 @@ function eventLabel(value: string): string {
   return value.replace(/_/g, ' ');
 }
 
+function localDateInput(date: Date) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
 function parseMembers(value: unknown): GovernanceMemberOption[] {
   const rows = unwrap<unknown>(value);
   if (!Array.isArray(rows)) {
@@ -150,24 +160,24 @@ function parseMembers(value: unknown): GovernanceMemberOption[] {
   });
 }
 
-async function copyMemberId(id: string) {
-  try {
-    await navigator.clipboard.writeText(id);
-    toast.success('User ID copied');
-  } catch {
-    toast.error('Clipboard access is unavailable. Select the ID to copy it manually.');
-  }
-}
-
 const panelClass = 'rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5';
 const fieldClass = 'w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/10';
 const labelClass = 'mb-1.5 block text-xs font-semibold text-muted-foreground';
 const buttonClass = 'inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-3.5 py-2.5 text-xs font-semibold text-white transition hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50';
 const subtleButtonClass = 'inline-flex items-center justify-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold text-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50';
 
-export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDecision: (id: string) => void }) {
+export default function DecisionGovernancePanel(props: { onOpenDecision: (id: string) => void; onViewPending: () => void }) {
+  return <PlanAccess feature="advanced_governance"><GovernanceContent {...props} /></PlanAccess>;
+}
+
+function GovernanceContent({ onOpenDecision, onViewPending }: { onOpenDecision: (id: string) => void; onViewPending: () => void }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const [view, setView] = useState<'queue' | 'controls' | 'audit'>('queue');
+  const [category, setCategory] = useState('all');
+  const [cursors, setCursors] = useState<(string | null)[]>([null]);
+  const [memberSearch, setMemberSearch] = useState('');
+  const cursor = cursors[cursors.length - 1];
   const [policyForm, setPolicyForm] = useState<PolicyForm>(EMPTY_POLICY);
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
   const [delegateUserId, setDelegateUserId] = useState('');
@@ -177,7 +187,8 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
   const [delegationNote, setDelegationNote] = useState('');
 
   const governanceQuery = useQuery<DecisionGovernanceOverview>({
-    queryKey: ['decisions', 'governance'],
+    queryKey: ['decisions', 'governance', user?.organizationId, user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
       const response = await api.get('/knowledge/decisions/governance/overview');
       return unwrap<DecisionGovernanceOverview>(response.data);
@@ -186,8 +197,21 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
     refetchInterval: 60_000,
   });
 
+  const auditQuery = useQuery<GovernanceAuditPage>({
+    queryKey: ['decisions', 'governance-audit', user?.organizationId, user?.id, category, cursor],
+    queryFn: async ({ signal }) => {
+      const response = await api.get('/knowledge/decisions/governance/audit', {
+        signal, params: { category, cursor: cursor ?? undefined },
+      });
+      return unwrap<GovernanceAuditPage>(response.data);
+    },
+    enabled: view === 'audit' && Boolean(user),
+    staleTime: 20_000,
+  });
+
   const membersQuery = useQuery<GovernanceMemberOption[]>({
-    queryKey: ['organization', 'governance-members'],
+    queryKey: ['organization', 'governance-members', user?.organizationId, user?.id],
+    enabled: view === 'controls' && Boolean(user),
     queryFn: async () => {
       const response = await api.get('/organizations/members');
       return parseMembers(response.data);
@@ -196,7 +220,6 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
   });
 
   function refreshGovernance() {
-    queryClient.invalidateQueries({ queryKey: ['decisions', 'governance'] });
     queryClient.invalidateQueries({ queryKey: ['decisions'] });
   }
 
@@ -227,18 +250,21 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
 
   const createDelegationMutation = useMutation({
     mutationFn: async () => {
-      if (!validUntil) throw new Error('Choose an expiry date for this delegation.');
+      const expiry = new Date(validUntil);
+      if (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= Date.now()) throw new Error('Choose a delegation expiry in the future.');
+      if (!selectedDelegate) throw new Error('Select an active teammate.');
       return api.post('/knowledge/decisions/governance/delegations', {
-        delegateUserId: delegateUserId.trim(),
+        delegateUserId: selectedDelegate.id,
         decisionType: delegationType,
         priority: delegationPriority,
-        validUntil: new Date(validUntil).toISOString(),
+        validUntil: expiry.toISOString(),
         note: delegationNote.trim() || undefined,
       });
     },
     onSuccess: () => {
       toast.success('Approval delegation granted');
       setDelegateUserId('');
+      setMemberSearch('');
       setDelegationType('all');
       setDelegationPriority('all');
       setValidUntil('');
@@ -265,6 +291,10 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
   const currentUserId = String(user?.id ?? '');
   const delegateOptions = (membersQuery.data ?? []).filter((member) => member.id !== currentUserId);
   const selectedDelegate = delegateOptions.find((member) => member.id === delegateUserId);
+  const memberTerm = memberSearch.trim().toLowerCase();
+  const visibleMembers = delegateOptions.filter((member) => member.id === delegateUserId ||
+    [member.name, member.email, member.role].some((text) => text.toLowerCase().includes(memberTerm)));
+
 
   function submitPolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -289,13 +319,13 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
   }
 
   return (
-    <section data-v410="decision-governance" className="space-y-4">
+    <section id="decision-governance" className="scroll-mt-5 space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-brand-500" /><h2 className="text-base font-semibold tracking-tight">Decision Governance</h2></div>
           <p className="mt-1 text-xs text-muted-foreground">Approval controls, delegated authority, deadlines and escalation history.</p>
         </div>
-        <button type="button" onClick={() => governanceQuery.refetch()} disabled={governanceQuery.isFetching} className={subtleButtonClass}>
+        <button type="button" onClick={refreshGovernance} disabled={governanceQuery.isFetching || (view === 'audit' && auditQuery.isFetching)} className={subtleButtonClass}>
           <RefreshCw className={`h-3.5 w-3.5 ${governanceQuery.isFetching ? 'animate-spin' : ''}`} /> Refresh governance
         </button>
       </div>
@@ -308,23 +338,32 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
         <>
           <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             {[
-              { label: 'Policy-governed pending', value: summary?.pending ?? 0, icon: FileCheck2 },
-              { label: 'Overdue approvals', value: summary?.overdue ?? 0, icon: AlertCircle },
-              { label: 'Due within 48 hours', value: summary?.dueSoon ?? 0, icon: Clock3 },
-              { label: 'Escalated approvals', value: summary?.escalated ?? 0, icon: ArrowUpRight },
-            ].map((item) => {
-              const Icon = item.icon;
-              return <div key={item.label} className="rounded-2xl border border-border bg-card p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{item.label}</span><Icon className="h-4 w-4 text-muted-foreground" /></div><p className="mt-2 text-2xl font-semibold tabular-nums">{item.value}</p></div>;
-            })}
+              { label: 'Awaiting approval', value: summary?.pending, detail: summary && `${summary.policyPending} under policy · ${summary.withoutPolicy} without policy`, icon: FileCheck2, color: 'bg-violet-500/10 text-violet-600 dark:text-violet-300' },
+              { label: 'Overdue', value: summary?.overdue, detail: 'Policy deadline passed', icon: AlertCircle, color: 'bg-rose-500/10 text-rose-600 dark:text-rose-300' },
+              { label: 'Due within 48 hours', value: summary?.dueSoon, detail: 'Upcoming policy deadlines', icon: Clock3, color: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' },
+              { label: 'Escalated', value: summary?.escalated, detail: 'Still awaiting approval', icon: ArrowUpRight, color: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' },
+            ].map(({ label, value, detail, icon: Icon, color }) => (
+              <div key={label} className="rounded-2xl border border-border bg-card p-4">
+                <span className={`inline-flex rounded-lg p-2 ${color}`}><Icon className="h-4 w-4" /></span>
+                <p className="mt-3 text-2xl font-semibold tabular-nums">{value?.toLocaleString() ?? '—'}</p>
+                <p className="mt-1 text-sm font-semibold">{label}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+              </div>
+            ))}
           </div>
+          <nav aria-label="Governance views" className="flex flex-wrap gap-1 rounded-xl border border-border bg-muted/40 p-1">
+            {([['queue', 'Approval queue'], ['controls', 'Policies and delegation'], ['audit', 'Audit trail']] as const).map(([id, label]) => (
+              <button key={id} type="button" aria-pressed={view === id} onClick={() => setView(id)} className={`rounded-lg px-3 py-2 text-sm ${view === id ? 'bg-card font-semibold shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{label}</button>
+            ))}
+          </nav>
 
-          <div className="grid items-start gap-4 xl:grid-cols-2">
+          {view === 'controls' && <div className="grid items-start gap-4 xl:grid-cols-2">
             <div className={`${panelClass} space-y-4`}>
-              <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Approval policies</h3><p className="mt-1 text-[11px] text-muted-foreground">Rules are snapshotted when a decision is proposed.</p></div><ShieldCheck className="h-4 w-4 text-muted-foreground" /></div>
+              <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Approval policies</h3><p className="mt-1 text-xs text-muted-foreground">Rules are snapshotted when a decision is proposed.</p></div><ShieldCheck className="h-4 w-4 text-muted-foreground" /></div>
               {data?.permissions.managePolicies ? (
                 <>
                   <form onSubmit={submitPolicy} className="space-y-3 rounded-xl border border-border bg-muted/20 p-3">
-                    <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold">{editingPolicyId ? 'Edit policy' : 'New approval policy'}</p>{editingPolicyId && <button type="button" onClick={() => { setEditingPolicyId(null); setPolicyForm(EMPTY_POLICY); }} className="text-[10px] font-semibold text-muted-foreground hover:text-foreground">Cancel edit</button>}</div>
+                    <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold">{editingPolicyId ? 'Edit policy' : 'New approval policy'}</p>{editingPolicyId && <button type="button" onClick={() => { setEditingPolicyId(null); setPolicyForm(EMPTY_POLICY); }} className="text-xs font-semibold text-muted-foreground hover:text-foreground">Cancel edit</button>}</div>
                     <div className="grid grid-cols-2 gap-2">
                       <label><span className={labelClass}>Decision type</span><select value={policyForm.decisionType} onChange={(event) => setPolicyForm((current) => ({ ...current, decisionType: event.target.value }))} className={fieldClass}><option value="all">All types</option>{['strategic','operational','product','technical','financial','customer','people','compliance','other'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
                       <label><span className={labelClass}>Priority</span><select value={policyForm.priority} onChange={(event) => setPolicyForm((current) => ({ ...current, priority: event.target.value }))} className={fieldClass}><option value="all">All priorities</option>{['low','medium','high','critical'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
@@ -338,7 +377,7 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
                   <div className="space-y-2">
                     {(data?.policies ?? []).length === 0 ? <p className="rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">No approval policies configured. Existing decision workflows remain unchanged.</p> : (data?.policies ?? []).map((policy) => (
                       <div key={policy.id} className="rounded-xl border border-border p-3">
-                        <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-semibold capitalize">{policy.decision_type}  |  {policy.priority}</p><p className="mt-1 text-[11px] text-muted-foreground">Requires {policy.required_approver_role}  |  Deadline {policy.approval_due_hours}h  |  Escalation repeat {policy.escalation_repeat_hours}h</p><p className="mt-1 text-[10px] text-muted-foreground">Delegation {policy.allow_delegation ? 'permitted' : 'disabled'}  |  {policy.is_active ? 'Active' : 'Inactive'}</p></div><div className="flex gap-2"><button type="button" onClick={() => editPolicy(policy)} className={subtleButtonClass}>Edit</button>{policy.is_active && <button type="button" onClick={() => deactivatePolicyMutation.mutate(policy.id)} disabled={deactivatePolicyMutation.isPending} className="rounded-xl border border-rose-500/30 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-500/10 disabled:opacity-50">Deactivate</button>}</div></div>
+                        <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-semibold capitalize">{policy.decision_type}  |  {policy.priority}</p><p className="mt-1 text-xs text-muted-foreground">Requires {policy.required_approver_role}  |  Deadline {policy.approval_due_hours}h  |  Escalation repeat {policy.escalation_repeat_hours}h</p><p className="mt-1 text-xs text-muted-foreground">Delegation {policy.allow_delegation ? 'permitted' : 'disabled'}  |  {policy.is_active ? 'Active' : 'Inactive'}</p></div><div className="flex gap-2"><button type="button" onClick={() => editPolicy(policy)} className={subtleButtonClass}>Edit</button>{policy.is_active && <button type="button" onClick={() => deactivatePolicyMutation.mutate(policy.id)} disabled={deactivatePolicyMutation.isPending} className="rounded-xl border border-rose-500/30 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-500/10 disabled:opacity-50">Deactivate</button>}</div></div>
                       </div>
                     ))}
                   </div>
@@ -347,50 +386,35 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
             </div>
 
             <div className={`${panelClass} space-y-4`}>
-              <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Delegated authority</h3><p className="mt-1 text-[11px] text-muted-foreground">Grant another active organisation member scoped approval authority.</p></div><Users className="h-4 w-4 text-muted-foreground" /></div>
+              <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Delegated authority</h3><p className="mt-1 text-xs text-muted-foreground">Grant another active organisation member scoped approval authority.</p></div><Users className="h-4 w-4 text-muted-foreground" /></div>
               <form onSubmit={submitDelegation} className="space-y-3 rounded-xl border border-border bg-muted/20 p-3">
                 <p className="text-xs font-semibold">Grant a delegation</p>
+                <label><span className={labelClass}>Find a teammate</span><input value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Name, email or role" className={fieldClass} /></label>
                 <label>
                   <span className={labelClass}>Delegate member</span>
                   <select
                     required
                     value={delegateUserId}
                     onChange={(event) => setDelegateUserId(event.target.value)}
-                    disabled={membersQuery.isLoading || membersQuery.isError || delegateOptions.length === 0}
+                    disabled={membersQuery.isLoading || membersQuery.isError || visibleMembers.length === 0}
                     className={fieldClass}
                   >
                     <option value="">
-                      {membersQuery.isLoading
-                        ? 'Loading members…'
-                        : delegateOptions.length === 0
-                          ? 'No other active members'
-                          : 'Select an active member'}
+                      {membersQuery.isLoading ? 'Loading members…' : delegateOptions.length === 0 ? 'No other active members' : visibleMembers.length === 0 ? 'No matching teammates' : 'Select an active member'}
                     </option>
-                    {delegateOptions.map((member) => (
+                    {visibleMembers.map((member) => (
                       <option key={member.id} value={member.id}>
                         {member.name} ({member.role}){member.email ? ` · ${member.email}` : ''}
                       </option>
                     ))}
                   </select>
                   {membersQuery.isError ? (
-                    <span role="alert" className="mt-1 flex items-center gap-2 text-[10px] text-rose-600">
+                    <span role="alert" className="mt-1 flex items-center gap-2 text-xs text-rose-600">
                       Members could not be loaded.
                       <button type="button" onClick={() => void membersQuery.refetch()} className="font-semibold underline">Retry</button>
                     </span>
-                  ) : selectedDelegate ? (
-                    <span className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-                      <code className="break-all">{selectedDelegate.id}</code>
-                      <button
-                        type="button"
-                        onClick={() => void copyMemberId(selectedDelegate.id)}
-                        className="inline-flex items-center gap-1 font-semibold text-brand-500 hover:underline"
-                      >
-                        <Copy className="h-3 w-3" aria-hidden="true" />
-                        Copy ID
-                      </button>
-                    </span>
                   ) : (
-                    <span className="mt-1 block text-[10px] leading-4 text-muted-foreground">
+                    <span className="mt-1 block text-xs leading-4 text-muted-foreground">
                       {delegateOptions.length === 0
                         ? 'Invite a teammate and have them accept before assigning approval authority.'
                         : 'Choose an active member of this organisation. You cannot delegate to yourself.'}
@@ -401,7 +425,7 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
                   <label><span className={labelClass}>Decision type</span><select value={delegationType} onChange={(event) => setDelegationType(event.target.value)} className={fieldClass}><option value="all">All types</option>{['strategic','operational','product','technical','financial','customer','people','compliance','other'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
                   <label><span className={labelClass}>Priority</span><select value={delegationPriority} onChange={(event) => setDelegationPriority(event.target.value)} className={fieldClass}><option value="all">All priorities</option>{['low','medium','high','critical'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
                 </div>
-                <label><span className={labelClass}>Delegation expires</span><input required type="datetime-local" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} min={new Date().toISOString().slice(0, 16)} className={fieldClass} /></label>
+                <label><span className={labelClass}>Delegation expires</span><input required type="datetime-local" value={validUntil} onChange={(event) => setValidUntil(event.target.value)} min={localDateInput(new Date())} className={fieldClass} /></label>
                 <label><span className={labelClass}>Reason (optional)</span><input value={delegationNote} onChange={(event) => setDelegationNote(event.target.value)} maxLength={1000} placeholder="Temporary approval coverage" className={fieldClass} /></label>
                 <button type="submit" disabled={createDelegationMutation.isPending || !selectedDelegate || !validUntil} className={buttonClass}>{createDelegationMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}Grant delegation</button>
               </form>
@@ -409,24 +433,61 @@ export default function DecisionGovernancePanel({ onOpenDecision }: { onOpenDeci
                 {(data?.delegations ?? []).length === 0 ? <p className="rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">No delegation records are visible to this account.</p> : (data?.delegations ?? []).map((delegation) => {
                   const expired = new Date(delegation.validUntil).getTime() <= Date.now();
                   const active = !delegation.revokedAt && !expired;
-                  return <div key={delegation.id} className="rounded-xl border border-border p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="break-words text-xs font-semibold">{delegation.principalName || 'Principal'} <ArrowUpRight className="inline h-3 w-3" /> {delegation.delegateName || 'Delegate'}</p><p className="mt-1 text-[10px] text-muted-foreground">{delegation.decisionType}  |  {delegation.priority}  |  Expires {dateLabel(delegation.validUntil)}</p><p className="mt-1 text-[10px] text-muted-foreground">{delegation.principalUserId === delegation.delegateUserId ? 'Invalid self-delegation' : active ? 'Active' : delegation.revokedAt ? 'Revoked' : 'Expired'}</p></div>{active && <button type="button" onClick={() => revokeDelegationMutation.mutate(delegation.id)} disabled={revokeDelegationMutation.isPending} className="shrink-0 rounded-lg border border-rose-500/30 px-2.5 py-1.5 text-[10px] font-semibold text-rose-600 hover:bg-rose-500/10 disabled:opacity-50">Revoke</button>}</div></div>;
+                  return <div key={delegation.id} className="rounded-xl border border-border p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="break-words text-xs font-semibold">{delegation.principalName || 'Principal'} <ArrowUpRight className="inline h-3 w-3" /> {delegation.delegateName || 'Delegate'}</p><p className="mt-1 text-xs text-muted-foreground">{delegation.decisionType}  |  {delegation.priority}  |  Expires {dateLabel(delegation.validUntil)}</p><p className="mt-1 text-xs text-muted-foreground">{delegation.principalUserId === delegation.delegateUserId ? 'Invalid self-delegation' : active ? 'Active' : delegation.revokedAt ? 'Revoked' : 'Expired'}</p></div>{active && <button type="button" onClick={() => revokeDelegationMutation.mutate(delegation.id)} disabled={revokeDelegationMutation.isPending} className="shrink-0 rounded-lg border border-rose-500/30 px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-500/10 disabled:opacity-50">Revoke</button>}</div></div>;
                 })}
               </div>
             </div>
-          </div>
+          </div>}
 
-          <div className={panelClass}>
-            <div className="mb-3 flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Approval queue and escalation</h3><p className="mt-1 text-[11px] text-muted-foreground">Policy-governed proposals due within the next seven days, including overdue records.</p></div><ShieldAlert className="h-4 w-4 text-muted-foreground" /></div>
-            {(data?.queue ?? []).length === 0 ? <p className="rounded-lg border border-dashed border-border p-5 text-center text-xs text-muted-foreground">No policy-governed approvals are due in the current window.</p> : <div className="divide-y divide-border">{(data?.queue ?? []).map((item) => {
-              return <div key={item.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"><button type="button" onClick={() => onOpenDecision(item.id)} className="min-w-0 flex-1 text-left"><span className="block break-words text-xs font-semibold hover:text-brand-500">{item.title}</span><span className="mt-1 block text-[10px] capitalize text-muted-foreground">{item.decisionType}  |  {item.priority} priority  |  {item.requiredRole} approval  |  {item.ownerName || 'Unassigned owner'}</span><span className="mt-1 block text-[10px] text-muted-foreground">Deadline {dateLabel(item.approvalDueAt)}  |  {item.escalationCount} escalation(s)</span></button><div className="flex shrink-0 items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${item.isOverdue ? 'bg-rose-500/10 text-rose-600' : 'bg-amber-500/10 text-amber-700'}`}>{item.isOverdue ? `${item.hoursOverdue}h overdue` : 'Due soon'}</span>{data?.permissions.canEscalate && item.isOverdue && <button type="button" onClick={() => escalateMutation.mutate(item.id)} disabled={escalateMutation.isPending} className={subtleButtonClass}>Escalate</button>}</div></div>;
+          {view === 'queue' && <div className={panelClass}>
+            <div className="mb-3 flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Approval queue and escalation</h3><p className="mt-1 text-xs text-muted-foreground">Proposed decisions, ordered by the earliest approval deadline.</p></div><ShieldAlert className="h-4 w-4 text-muted-foreground" /></div>
+            {(data?.queue ?? []).length === 0 ? <p className="rounded-lg border border-dashed border-border p-5 text-center text-xs text-muted-foreground">No decisions are awaiting approval. A draft enters this queue when it is submitted as a proposal.</p> : <div className="divide-y divide-border">{(data?.queue ?? []).map((item) => {
+              return <div key={item.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"><button type="button" onClick={() => onOpenDecision(item.id)} className="min-w-0 flex-1 text-left"><span className="block break-words text-xs font-semibold hover:text-brand-500">{item.title}</span><span className="mt-1 block text-xs capitalize text-muted-foreground">{item.decisionType}  |  {item.priority} priority  |  {item.requiredRole ? item.requiredRole + ' approval' : 'No policy snapshot'}  |  {item.ownerName || 'Unassigned owner'}</span><span className="mt-1 block text-xs text-muted-foreground">Deadline {dateLabel(item.approvalDueAt)}  |  {item.escalationCount} escalation(s)</span></button><div className="flex shrink-0 items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${item.isOverdue ? 'bg-rose-500/10 text-rose-600' : 'bg-amber-500/10 text-amber-700'}`}>{item.isOverdue ? `${item.hoursOverdue}h overdue` : !item.approvalDueAt ? 'No deadline' : Date.parse(item.approvalDueAt) - Date.now() <= 172_800_000 ? 'Due in 48h' : 'Scheduled'}</span>{data?.permissions.canEscalate && item.isOverdue && <button type="button" onClick={() => escalateMutation.mutate(item.id)} disabled={escalateMutation.isPending} className={subtleButtonClass}>Escalate</button>}</div></div>;
             })}</div>}
-            <p className="mt-3 text-[10px] leading-4 text-muted-foreground">Escalation records an auditable event and updates the escalation counter. It never approves, rejects or otherwise changes the decision status.</p>
-          </div>
+            {!!summary?.pending && <button type="button" onClick={onViewPending} className={subtleButtonClass + ' mt-3'}>View all {summary.pending} proposed decisions <ArrowUpRight className="h-3.5 w-3.5" /></button>}
+          </div>}
 
-          <div className={panelClass}>
-            <div className="mb-3 flex items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Governance audit trail</h3><p className="mt-1 text-[11px] text-muted-foreground">Recent policy, delegation, approval and escalation events.</p></div><CheckCircle2 className="h-4 w-4 text-muted-foreground" /></div>
-            {(data?.events ?? []).length === 0 ? <p className="text-xs text-muted-foreground">No governance events recorded yet.</p> : <div className="space-y-2">{(data?.events ?? []).map((event) => <div key={event.id} className="rounded-xl border border-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold capitalize">{eventLabel(event.eventType)}</p><span className="text-[10px] text-muted-foreground">{dateLabel(event.createdAt)}</span></div><p className="mt-1 text-[11px] text-muted-foreground">{event.actorName || event.actorEmail || 'Organisation user'}{event.representedUserName ? ` acting for ${event.representedUserName}` : ''}{event.decisionTitle ? `  |  ${event.decisionTitle}` : ''}</p>{event.note && <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-foreground/80">{event.note}</p>}</div>)}</div>}
-          </div>
+          {view === 'audit' && <div id="governance-audit" className={panelClass}>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Governance audit trail</h3>
+                <p className="mt-1 text-xs text-muted-foreground">Policy, delegation, approval and escalation events, newest first.</p>
+              </div>
+              <label className="flex items-center gap-2 text-xs font-medium">
+                Event type
+                <select value={category} onChange={(e) => { setCategory(e.target.value); setCursors([null]); }} className={fieldClass}>
+                  <option value="all">All events</option><option value="policy">Policies</option><option value="delegation">Delegations</option>
+                  <option value="decision">Approvals and rejections</option><option value="escalation">Escalations</option>
+                </select>
+              </label>
+            </div>
+            {auditQuery.isLoading ? <p role="status" className="py-5 text-sm text-muted-foreground">Loading audit events…</p> : auditQuery.isError ? (
+              <p role="alert" className="py-5 text-sm text-muted-foreground">Audit events could not be loaded. <button type="button" onClick={() => void auditQuery.refetch()} className="underline">Retry</button></p>
+            ) : auditQuery.data?.items.length ? (
+              <ol className="max-h-[min(28rem,55vh)] divide-y divide-border overflow-y-auto rounded-xl border border-border">
+                {auditQuery.data.items.map((event) => (
+                  <li key={event.id} className="px-4 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                      <p className="text-sm font-medium capitalize">{eventLabel(event.eventType)}</p>
+                      <time dateTime={event.createdAt} className="text-xs tabular-nums text-muted-foreground">{dateLabel(event.createdAt)}</time>
+                    </div>
+                    <p className="mt-1 break-words text-xs text-muted-foreground">{event.actorName || event.actorEmail || 'Organisation user'}{event.representedUserName ? ` · Acting for ${event.representedUserName}` : ''}{event.decisionTitle ? ` · ${event.decisionTitle}` : ''}</p>
+                    {event.note && <details className="mt-1 text-xs"><summary className="cursor-pointer text-brand-500">Event note</summary><p className="mt-1 whitespace-pre-wrap break-words text-foreground/80">{event.note}</p></details>}
+                  </li>
+                ))}
+              </ol>
+            ) : <p className="rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground">No events match this filter.</p>}
+            <nav aria-label="Audit trail pages" className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">Page {cursors.length} · Up to 10 events per page</span>
+              <div className="flex gap-2">
+                <button type="button" disabled={cursors.length <= 1 || auditQuery.isFetching} onClick={() => setCursors((items) => items.slice(0, -1))} className={subtleButtonClass}><ChevronLeft className="h-4 w-4" /> Newer</button>
+                <button type="button" disabled={!auditQuery.data?.nextCursor || auditQuery.isFetching} onClick={() => {
+                  const next = auditQuery.data?.nextCursor;
+                  if (next) setCursors((items) => [...items, next]);
+                }} className={subtleButtonClass}>Older <ChevronRight className="h-4 w-4" /></button>
+              </div>
+            </nav>
+          </div>}
         </>
       )}
     </section>

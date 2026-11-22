@@ -3,13 +3,13 @@ import { DatabaseService } from '../database/database.service';
 import { GdprService } from './gdpr.service';
 
 describe('GdprService', () => {
-  it('exports only records owned by the user in their current organization', async () => {
+  it('exports only accessible records owned by the user in their organization', async () => {
     type ClientMock = { query: jest.Mock };
     const client: ClientMock = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     const db = {
       query: jest.fn()
         .mockResolvedValueOnce({
-          rows: [{ id: 'user-a', organization_id: 'organization-a' }],
+          rows: [{ id: 'user-a', organization_id: 'organization-a', role: 'member' }],
         })
         .mockResolvedValue({ rows: [] }),
       transaction: jest.fn((callback: (transactionClient: ClientMock) => Promise<unknown>) => callback(client)),
@@ -21,17 +21,17 @@ describe('GdprService', () => {
     expect(db.query).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining('uploaded_by_id = $1'),
-      ['user-a', 'organization-a'],
+      ['user-a', 'organization-a', false],
     );
     expect(db.query).toHaveBeenNthCalledWith(
       3,
       expect.stringContaining('m.created_by_id = $1'),
-      ['user-a', 'organization-a'],
+      ['user-a', 'organization-a', false],
     );
     expect(db.query).toHaveBeenNthCalledWith(
       4,
       expect.stringContaining('created_by_id = $1'),
-      ['user-a', 'organization-a'],
+      ['user-a', 'organization-a', false],
     );
     expect(db.query).toHaveBeenNthCalledWith(
       6,

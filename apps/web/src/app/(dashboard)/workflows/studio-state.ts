@@ -1,0 +1,6 @@
+export type StudioView='automations'|'missions'|'results';
+const uuid=(value:string|null)=>value && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)?value:null;
+export function readStudioLocation(search:string){const p=new URLSearchParams(search);return {view:(['missions','results'].includes(p.get('studio')??'')?p.get('studio'):'automations') as StudioView,runId:uuid(p.get('runId')),workflowId:uuid(p.get('workflowId'))};}
+export function taskOutputLink(output:Record<string,unknown>){const id=uuid(typeof output.taskId==='string'?output.taskId:null);return id?'/tasks?task='+id:null;}
+export function stepSummary(status:string,output:Record<string,unknown>){if(status==='failed')return 'Action failed';if(status!=='completed')return 'Action in progress';return typeof output.title==='string'?output.title:typeof output.createdCount==='number'?output.createdCount+' notifications created':'Action completed';}
+export function resultLabel(status:string){return ({succeeded:'Analysis ready',applied:'Approved changes applied',awaiting_approval:'Awaiting approval',queued:'Queued',running:'Running',failed:'Failed',cancelled:'Cancelled'} as Record<string,string>)[status]??status.replaceAll('_',' ');}

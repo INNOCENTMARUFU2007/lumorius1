@@ -1,3 +1,4 @@
+import { RequiresModule } from '../billing/entitlements';
 import {
   Controller, Get, Post, Patch, Delete, Body, Param, UseGuards, Query,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Roles('member')
+@RequiresModule('core')
 @Controller()
 export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
@@ -68,6 +70,13 @@ export class TasksController {
   @ApiOperation({ summary: 'List projects' })
   findProjects(@CurrentUser() user: JwtPayload) {
     return this.tasksService.findProjects(user.organizationId, { userId: user.sub, role: user.role });
+  }
+
+  @Get('projects/teams')
+  @Roles('manager')
+  @ApiOperation({ summary: 'List teams the signed-in manager can select for a project' })
+  findProjectTeams(@CurrentUser() user: JwtPayload) {
+    return this.tasksService.findProjectTeams(user.organizationId, { userId: user.sub, role: user.role });
   }
 
   @Post('projects')

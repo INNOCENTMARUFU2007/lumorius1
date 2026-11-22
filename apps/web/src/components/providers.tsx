@@ -14,6 +14,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
           queries: {
             staleTime: 60 * 1000,
             retry: 1,
+            // Live updates arrive through the change feed; refetching every query on each
+            // tab focus made dashboards feel slow. Queries that need it opt in explicitly.
+            refetchOnWindowFocus: false,
           },
         },
       }),
@@ -21,7 +24,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
+      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
         {children}
         <Toaster richColors position="top-right" />
         <ReactQueryDevtools initialIsOpen={false} />

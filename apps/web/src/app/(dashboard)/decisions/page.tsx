@@ -1,14 +1,15 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  History,
   AlertCircle,
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
   FileText,
-  History,
   Loader2,
   Network,
   Pencil,
@@ -16,16 +17,17 @@ import {
   RefreshCw,
   Scale,
   Search,
-  ShieldCheck,
   CheckCircle2,
   Target,
   Trash2,
   X,
 } from 'lucide-react';
+import { useAuth } from '@/hooks/use-auth';
 import DecisionPortfolioPanel from './decision-portfolio-panel';
 import DecisionGovernancePanel, { type DecisionGovernanceOverview } from './decision-governance-panel';
 import api from '@/lib/api';
 import { toast } from 'sonner';
+import { PageHeader } from '@/components/ui/primitives';
 
 type DecisionStatus = 'draft' | 'proposed' | 'approved' | 'rejected' | 'implemented' | 'reviewed' | 'withdrawn';
 type DecisionType = 'strategic' | 'operational' | 'product' | 'technical' | 'financial' | 'customer' | 'people' | 'compliance' | 'other';
@@ -196,6 +198,8 @@ const PRIORITIES: DecisionPriority[] = ['low', 'medium', 'high', 'critical'];
 const LINK_TYPES: DecisionLinkType[] = ['claim', 'conflict', 'goal', 'objective', 'project', 'task', 'document'];
 const PAGE_SIZE = 25;
 const HISTORY_PAGE_SIZE = 25;
+const APPROVAL_RANK: Record<string, number> = { viewer: 0, member: 1, manager: 2, admin: 3, owner: 4, super_admin: 5 };
+
 const TRANSITIONS: Record<DecisionStatus, DecisionStatus[]> = {
   draft: ['proposed', 'withdrawn'],
   proposed: ['approved', 'rejected', 'withdrawn'],
@@ -275,10 +279,11 @@ function labelClass(): string {
 }
 
 function StatusBadge({ status }: { status: DecisionStatus }) {
-  return <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ${statusStyle(status)}`}>{status}</span>;
+  return <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold  ${statusStyle(status)}`}>{status}</span>;
 }
 
 export default function DecisionsPage() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -286,6 +291,10 @@ export default function DecisionsPage() {
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('decision');
+    if (id && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) setSelectedId(id);
+  }, []);
   const [historyPage, setHistoryPage] = useState(0);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -315,7 +324,8 @@ export default function DecisionsPage() {
   });
 
   const governanceQuery = useQuery<DecisionGovernanceOverview>({
-    queryKey: ['decisions', 'governance'],
+    queryKey: ['decisions', 'governance', user?.organizationId, user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
       const response = await api.get('/knowledge/decisions/governance/overview');
       return unwrap<DecisionGovernanceOverview>(response.data);
@@ -665,39 +675,38 @@ export default function DecisionsPage() {
 
   return (
     <main className="mx-auto w-full max-w-[1600px] space-y-6 pb-10">
-      <section className="relative isolate overflow-hidden rounded-[28px] border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-900 to-[#171d3b] px-6 py-7 text-white shadow-xl shadow-slate-950/10 sm:px-9 sm:py-9">
-        <div className="pointer-events-none absolute -right-20 -top-32 -z-10 h-80 w-80 rounded-full bg-brand-500/25 blur-3xl" />
-        <div className="pointer-events-none absolute bottom-[-150px] right-[28%] -z-10 h-72 w-72 rounded-full bg-cyan-400/10 blur-3xl" />
-        <div className="flex flex-col justify-between gap-7 lg:flex-row lg:items-end">
-          <div className="max-w-3xl">
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.07] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 shadow-[0_0_10px_rgba(103,232,249,0.8)]" />
-              Executive decision system
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="hidden rounded-2xl border border-white/10 bg-white/[0.08] p-3.5 shadow-inner sm:block"><Scale className="h-8 w-8 text-cyan-200" /></div>
-              <div>
-                <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Decision Intelligence</h1>
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">Create accountable decisions, move them through a controlled lifecycle, and connect each outcome to the evidence and operating records behind it.</p>
-              </div>
-            </div>
-          </div>
-          <button type="button" onClick={startCreate} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-brand-500/20 transition hover:bg-brand-600">
+      <PageHeader
+        hero
+        icon={Scale}
+        title="Decision Intelligence"
+        description="Create accountable decisions, move them through a controlled lifecycle, and connect each outcome to the evidence and operating records behind it."
+        actions={
+          <button type="button" onClick={startCreate} className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground shadow-glow-primary transition hover:bg-primary/90">
             <Plus className="h-4 w-4" /> New decision
           </button>
-        </div>
-        <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/10 pt-5 text-xs text-slate-400">
-          <span className="inline-flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-emerald-300" /> Organisation-scoped access</span>
-          <span className="inline-flex items-center gap-2"><Network className="h-4 w-4 text-cyan-300" /> Connected Company Brain records</span>
-          <span className="inline-flex items-center gap-2"><History className="h-4 w-4 text-indigo-300" /> Audited lifecycle history</span>
-        </div>
-      </section>
+        }
+      >
+        <nav aria-label="Decision Intelligence shortcuts" className="flex flex-wrap gap-2">
+          <a href="#decision-governance" className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground">Approval controls</a>
+          <a href="#decision-registry" className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground">Decision registry</a>
+          <a href="#decision-outcomes" className="rounded-lg border border-border bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground">Outcome review</a>
+        </nav>
+      </PageHeader>
 
-      <DecisionGovernancePanel onOpenDecision={setSelectedId} />
+      <DecisionGovernancePanel key={user?.id} onOpenDecision={(id) => {
+        setSelectedId(id);
+        document.getElementById('decision-detail')?.scrollIntoView({ block: 'start' });
+      }} onViewPending={() => {
+        setSearch('');
+        setTypeFilter('all');
+        setPriorityFilter('all');
+        chooseStatus('proposed');
+        document.getElementById('decision-registry')?.scrollIntoView({ block: 'start' });
+      }} />
 
       <DecisionPortfolioPanel />
 
-      <section data-v48="outcome-intelligence" className="space-y-4 rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
+      <section id="decision-outcomes" className="scroll-mt-5 space-y-4 rounded-2xl border border-border bg-card p-4 shadow-sm sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold">Outcome intelligence</h2>
@@ -718,7 +727,7 @@ export default function DecisionsPage() {
             { label: 'Due in 7 days', value: outcomeAnalyticsQuery.data?.dueSoonReviews ?? 0 },
           ].map((item) => (
             <div key={item.label} className="min-w-0 rounded-xl border border-border p-3">
-              <p className="break-words text-[11px] leading-4 text-muted-foreground">{item.label}</p>
+              <p className="break-words text-xs leading-4 text-muted-foreground">{item.label}</p>
               <p className="mt-1 text-xl font-semibold tabular-nums">{item.value}</p>
             </div>
           ))}
@@ -754,7 +763,7 @@ export default function DecisionsPage() {
           <div className="min-w-0 rounded-xl border border-border p-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-xs font-semibold">Review queue</h3>
-              <span className="text-[10px] text-muted-foreground">Overdue and next 14 days</span>
+              <span className="text-xs text-muted-foreground">Overdue and next 14 days</span>
             </div>
             {(outcomeAnalyticsQuery.data?.reviewQueue ?? []).length === 0 ? (
               <p className="mt-3 text-xs text-muted-foreground">No scheduled outcome reviews in this window.</p>
@@ -764,9 +773,9 @@ export default function DecisionsPage() {
                   <button key={item.id} type="button" onClick={() => setSelectedId(item.id)} className="flex w-full min-w-0 items-start justify-between gap-3 rounded-lg border border-border p-3 text-left transition hover:border-brand-500/50 hover:bg-muted/40">
                     <span className="min-w-0 flex-1">
                       <span className="block break-words text-xs font-semibold">{item.title}</span>
-                      <span className="mt-1 block break-words text-[10px] text-muted-foreground">{item.ownerName || 'Unassigned'}  |  Review {formatDate(item.reviewDueAt)}</span>
+                      <span className="mt-1 block break-words text-xs text-muted-foreground">{item.ownerName || 'Unassigned'}  |  Review {formatDate(item.reviewDueAt)}</span>
                     </span>
-                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${item.isOverdue ? 'bg-red-500/10 text-red-600' : 'bg-blue-500/10 text-blue-600'}`}>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${item.isOverdue ? 'bg-red-500/10 text-red-600' : 'bg-blue-500/10 text-blue-600'}`}>
                       {item.isOverdue ? `${item.daysOverdue}d overdue` : 'Upcoming'}
                     </span>
                   </button>
@@ -774,7 +783,7 @@ export default function DecisionsPage() {
               </div>
             )}
             {(outcomeAnalyticsQuery.data?.missingReviewDate ?? 0) > 0 && (
-              <p className="mt-3 text-[10px] text-amber-600">{outcomeAnalyticsQuery.data?.missingReviewDate} implemented decision(s) have no review date.</p>
+              <p className="mt-3 text-xs text-amber-600">{outcomeAnalyticsQuery.data?.missingReviewDate} implemented decision(s) have no review date.</p>
             )}
           </div>
         </div>
@@ -783,7 +792,7 @@ export default function DecisionsPage() {
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
         {STATUSES.map((status) => (
           <button key={status} type="button" onClick={() => chooseStatus(statusFilter === status ? 'all' : status)} className={`rounded-2xl border bg-card p-4 text-left shadow-sm transition hover:border-brand-500/50 ${statusFilter === status ? 'border-brand-500 ring-2 ring-brand-500/10' : 'border-border'}`}>
-            <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{status}</span><span className={`h-2 w-2 rounded-full ${status === 'approved' || status === 'reviewed' ? 'bg-emerald-500' : status === 'rejected' ? 'bg-rose-500' : status === 'proposed' ? 'bg-sky-500' : 'bg-slate-400'}`} /></div>
+            <div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold  text-muted-foreground">{status}</span><span className={`h-2 w-2 rounded-full ${status === 'approved' || status === 'reviewed' ? 'bg-emerald-500' : status === 'rejected' ? 'bg-rose-500' : status === 'proposed' ? 'bg-sky-500' : 'bg-slate-400'}`} /></div>
             <p className="mt-2 text-2xl font-semibold tabular-nums">{countsQuery.isLoading ? '...' : (countsQuery.data?.[status] ?? 0)}</p>
           </button>
         ))}
@@ -807,7 +816,7 @@ export default function DecisionsPage() {
 
           <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
             <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-5">
-              <div><h2 className="text-sm font-semibold">Decision registry</h2><p className="mt-0.5 text-xs text-muted-foreground">{total.toLocaleString()} matching records</p></div>
+              <div><h2 id="decision-registry" className="scroll-mt-24 text-sm font-semibold">Decision registry</h2><p className="mt-0.5 text-xs text-muted-foreground">{total.toLocaleString()} matching records</p></div>
               <button type="button" onClick={() => { listQuery.refetch(); countsQuery.refetch(); }} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition hover:bg-muted"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button>
             </div>
             {listQuery.isLoading ? (
@@ -824,9 +833,9 @@ export default function DecisionsPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2"><span className="truncate text-sm font-semibold text-foreground">{decision.title}</span><StatusBadge status={decision.status} /></div>
                         <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{decision.description || decision.rationale || 'No description or rationale supplied.'}</p>
-                        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground"><span className="capitalize">{decision.decision_type}</span><span className="capitalize">{decision.priority} priority</span><span>{decision.owner_name || (decision.owner_id ? `Owner ${decision.owner_id.slice(0, 8)}...` : 'Unassigned')}</span><span>Updated {formatDate(decision.updated_at)}</span></div>
+                        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="capitalize">{decision.decision_type}</span><span className="capitalize">{decision.priority} priority</span><span>{decision.owner_name || (decision.owner_id ? `Owner ${decision.owner_id.slice(0, 8)}...` : 'Unassigned')}</span><span>Updated {formatDate(decision.updated_at)}</span></div>
                       </div>
-                      <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase tracking-wider ${priorityStyle(decision.priority)}`}>{decision.priority}<ArrowUpRight className="h-3 w-3" /></span>
+                      <span className={`inline-flex shrink-0 items-center gap-1 text-xs font-semibold  ${priorityStyle(decision.priority)}`}>{decision.priority}<ArrowUpRight className="h-3 w-3" /></span>
                     </div>
                   </button>
                 ))}
@@ -839,7 +848,7 @@ export default function DecisionsPage() {
           </div>
         </div>
 
-        <aside className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+        <aside id="decision-detail" className="scroll-mt-5 min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
           {!selectedId ? (
             <div className="px-6 py-16 text-center"><FileText className="mx-auto h-9 w-9 text-muted-foreground/50" /><h2 className="mt-3 text-sm font-semibold">Decision detail</h2><p className="mx-auto mt-1 max-w-xs text-xs leading-5 text-muted-foreground">Select a registry record to inspect its rationale, linked evidence, lifecycle and review history.</p></div>
           ) : detailQuery.isLoading ? (
@@ -849,36 +858,37 @@ export default function DecisionsPage() {
           ) : (
             <div>
               <div className="border-b border-border p-5">
-                <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusBadge status={selected.status} /><span className={`text-[10px] font-semibold uppercase tracking-wider ${priorityStyle(selected.priority)}`}>{selected.priority} priority</span></div><h2 className="mt-3 break-words text-lg font-semibold tracking-tight">{selected.title}</h2><p className="mt-1 text-xs capitalize text-muted-foreground">{selected.decision_type} decision | Updated {formatDate(selected.updated_at)}</p></div><button type="button" onClick={() => { setSelectedId(null); }} aria-label="Close decision details" className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-muted"><X className="h-4 w-4" /></button></div>
-                <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => startEdit(selected)} disabled={!['draft', 'proposed'].includes(selected.status)} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-40"><Pencil className="h-3.5 w-3.5" /> Edit</button>{nextStatuses.map((status) => <button key={status} type="button" onClick={() => { setTransitionTarget(status); setTransitionNote(''); setActualOutcome(''); setOutcomeAssessment(''); setDelegationId(''); }} className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${status === 'rejected' ? 'border border-rose-500/30 text-rose-600 hover:bg-rose-500/10' : status === 'approved' || status === 'reviewed' ? 'bg-brand-500 text-white hover:bg-brand-600' : 'border border-border text-foreground hover:bg-muted'}`}>{transitionLabel(status)}</button>)}</div>
+                <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusBadge status={selected.status} /><span className={`text-xs font-semibold  ${priorityStyle(selected.priority)}`}>{selected.priority} priority</span></div><h2 className="mt-3 break-words text-lg font-semibold tracking-tight">{selected.title}</h2><p className="mt-1 text-xs capitalize text-muted-foreground">{selected.decision_type} decision | Updated {formatDate(selected.updated_at)}</p></div><button type="button" onClick={() => { setSelectedId(null); }} aria-label="Close decision details" className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-muted"><X className="h-4 w-4" /></button></div>
+                <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => startEdit(selected)} disabled={!['draft', 'proposed'].includes(selected.status) || /^Review version \d+ in AI Advisor: \/ai\?agentRun=/.test(selected.description ?? '')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-40"><Pencil className="h-3.5 w-3.5" /> Edit</button>{nextStatuses.map((status) => <button key={status} type="button" onClick={() => { setTransitionTarget(status); setTransitionNote(''); setActualOutcome(''); setOutcomeAssessment(''); setDelegationId(''); }} className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${status === 'rejected' ? 'border border-rose-500/30 text-rose-600 hover:bg-rose-500/10' : status === 'approved' || status === 'reviewed' ? 'bg-brand-500 text-white hover:bg-brand-600' : 'border border-border text-foreground hover:bg-muted'}`}>{transitionLabel(status)}</button>)}</div>
               </div>
 
               <div className="space-y-5 p-5">
-                <div className="grid grid-cols-2 gap-3"><div className="rounded-xl bg-muted/50 p-3"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Owner</span><p className="mt-1 break-all text-xs font-medium">{selected.owner_id ? (selected.owner_id === selected.created_by_id ? 'Decision creator' : selected.owner_id) : 'Unassigned'}</p></div><div className="rounded-xl bg-muted/50 p-3"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Team</span><p className="mt-1 break-all text-xs font-medium">{selected.team_id || 'Organisation-wide'}</p></div><div className="rounded-xl bg-muted/50 p-3"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Due date</span><p className="mt-1 text-xs font-medium">{formatDate(selected.due_date)}</p></div><div className="rounded-xl bg-muted/50 p-3"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Review date</span><p className="mt-1 text-xs font-medium">{formatDate(selected.review_due_at)}</p></div></div>
+                {selected.description?.match(/^Review version \d+ in AI Advisor: (\/ai\?agentRun=[0-9a-f-]{36})\./i)?.[1] && <Link href={selected.description.match(/(\/ai\?agentRun=[0-9a-f-]{36})\./i)![1]} className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-semibold hover:bg-cyan-500/10">Review immutable agent proposal <ArrowUpRight className="h-4 w-4" /></Link>}
+                <div className="grid grid-cols-2 gap-3"><div className="rounded-xl bg-muted/50 p-3"><span className="text-xs font-semibold  text-muted-foreground">Owner</span><p className="mt-1 break-all text-xs font-medium">{selected.owner_id ? (selected.owner_id === selected.created_by_id ? 'Decision creator' : selected.owner_id) : 'Unassigned'}</p></div><div className="rounded-xl bg-muted/50 p-3"><span className="text-xs font-semibold  text-muted-foreground">Team</span><p className="mt-1 break-all text-xs font-medium">{selected.team_id || 'Organisation-wide'}</p></div><div className="rounded-xl bg-muted/50 p-3"><span className="text-xs font-semibold  text-muted-foreground">Due date</span><p className="mt-1 text-xs font-medium">{formatDate(selected.due_date)}</p></div><div className="rounded-xl bg-muted/50 p-3"><span className="text-xs font-semibold  text-muted-foreground">Review date</span><p className="mt-1 text-xs font-medium">{formatDate(selected.review_due_at)}</p></div></div>
 
-                <div className="space-y-3"><div><h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Decision rationale</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.rationale || 'No rationale recorded.'}</p></div><div><h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Description</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.description || 'No description recorded.'}</p></div><div><h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Expected outcome</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.expected_outcome || 'No expected outcome recorded.'}</p></div>{selected.actual_outcome && <div><h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Actual outcome</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.actual_outcome}</p></div>}{selected.rejection_reason && <div><h3 className="text-xs font-semibold uppercase tracking-wider text-rose-600">Rejection explanation</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.rejection_reason}</p></div>}</div>
+                <div className="space-y-3"><div><h3 className="text-xs font-semibold  text-muted-foreground">Decision rationale</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.rationale || 'No rationale recorded.'}</p></div><div><h3 className="text-xs font-semibold  text-muted-foreground">Description</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.description || 'No description recorded.'}</p></div><div><h3 className="text-xs font-semibold  text-muted-foreground">Expected outcome</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.expected_outcome || 'No expected outcome recorded.'}</p></div>{selected.actual_outcome && <div><h3 className="text-xs font-semibold  text-muted-foreground">Actual outcome</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.actual_outcome}</p></div>}{selected.rejection_reason && <div><h3 className="text-xs font-semibold  text-rose-600">Rejection explanation</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{selected.rejection_reason}</p></div>}</div>
 
                                 {(selected.status === 'implemented' || selected.status === 'reviewed') && (
                   <section data-v48="decision-outcome-review" className="space-y-3 rounded-xl border border-border p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-sm font-semibold">Outcome review</h3>
                       {selected.outcome_assessment ? (
-                        <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold capitalize text-emerald-600">{selected.outcome_assessment.replace(/_/g, ' ')}</span>
+                        <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold capitalize text-emerald-600">{selected.outcome_assessment.replace(/_/g, ' ')}</span>
                       ) : (
-                        <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold text-amber-600">Pending assessment</span>
+                        <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-600">Pending assessment</span>
                       )}
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="min-w-0 rounded-lg bg-muted/40 p-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Expected outcome</p>
+                        <p className="text-xs font-semibold  text-muted-foreground">Expected outcome</p>
                         <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5">{selected.expected_outcome || 'No expected outcome recorded.'}</p>
                       </div>
                       <div className="min-w-0 rounded-lg bg-muted/40 p-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Actual outcome</p>
+                        <p className="text-xs font-semibold  text-muted-foreground">Actual outcome</p>
                         <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5">{selected.actual_outcome || 'Not yet recorded.'}</p>
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <span>Review due: {formatDate(selected.review_due_at)}</span>
                       {selected.reviewed_at && <span>Reviewed: {formatDate(selected.reviewed_at)}</span>}
                       <span>Evidence records: {selected.links?.length ?? 0}</span>
@@ -938,15 +948,15 @@ export default function DecisionsPage() {
                           ))}
                         </select>
                         {taskOptionsQuery.isLoading && (
-                          <p className="text-[10px] text-muted-foreground">Searching tasks...</p>
+                          <p className="text-xs text-muted-foreground">Searching tasks...</p>
                         )}
                         {taskOptionsQuery.isError && (
-                          <p className="text-[10px] text-red-600">
+                          <p className="text-xs text-red-600">
                             Tasks could not be loaded. Change the search or retry by revisiting this decision.
                           </p>
                         )}
                         {!taskOptionsQuery.isLoading && !taskOptionsQuery.isError && availableTaskOptions.length === 0 && (
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-xs text-muted-foreground">
                             No unlinked tasks match this search.
                           </p>
                         )}
@@ -975,7 +985,7 @@ export default function DecisionsPage() {
                             ))}
                         </select>
                         {founderOsQuery.isLoading && (
-                          <p className="text-[10px] text-muted-foreground">Loading Founder OS objectives...</p>
+                          <p className="text-xs text-muted-foreground">Loading Founder OS objectives...</p>
                         )}
                       </div>
                     ) : (
@@ -988,7 +998,7 @@ export default function DecisionsPage() {
                     )}
 
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-[10px] leading-4 text-muted-foreground">
+                      <p className="text-xs leading-4 text-muted-foreground">
                         Tasks and objectives are selected by name. Other record types retain UUID validation.
                       </p>
                       <button
@@ -1001,7 +1011,7 @@ export default function DecisionsPage() {
                       </button>
                     </div>
                   </form>
-                  <div className="mt-3 space-y-2">{(selected.links ?? []).length === 0 ? <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">No records linked yet.</p> : (selected.links ?? []).map((link) => <div key={link.id} className="flex items-start justify-between gap-3 rounded-xl border border-border p-3"><div className="min-w-0"><div className="flex items-center gap-2"><span className="rounded-md bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-brand-600 dark:text-brand-300">{link.linkType}</span><span className="truncate text-xs font-medium">{link.linkLabel || link.linkedId}</span></div><p className="mt-1 break-all text-[10px] text-muted-foreground">{link.linkedId}</p></div><button type="button" onClick={() => removeLinkMutation.mutate(link.id)} disabled={removeLinkMutation.isPending} aria-label="Remove linked record" className="rounded-lg p-2 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600"><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>
+                  <div className="mt-3 space-y-2">{(selected.links ?? []).length === 0 ? <p className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">No records linked yet.</p> : (selected.links ?? []).map((link) => <div key={link.id} className="flex items-start justify-between gap-3 rounded-xl border border-border p-3"><div className="min-w-0"><div className="flex items-center gap-2"><span className="rounded-md bg-brand-500/10 px-2 py-0.5 text-xs font-semibold  text-brand-600 dark:text-brand-300">{link.linkType}</span><span className="truncate text-xs font-medium">{link.linkLabel || link.linkedId}</span></div><p className="mt-1 break-all text-xs text-muted-foreground">{link.linkedId}</p></div><button type="button" onClick={() => removeLinkMutation.mutate(link.id)} disabled={removeLinkMutation.isPending} aria-label="Remove linked record" className="rounded-lg p-2 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600"><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>
                 </div>
 
                 <section className="border-t border-border pt-5" data-v45="execution-alignment">
@@ -1010,11 +1020,11 @@ export default function DecisionsPage() {
                     <Target className="h-4 w-4 text-brand-500" />
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="rounded-xl border border-border bg-muted/30 p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Objectives</p><p className="mt-1 text-lg font-semibold tabular-nums">{linkedGoalCount}</p><p className="text-[10px] text-muted-foreground">Goals / objectives linked</p></div>
-                    <div className="rounded-xl border border-border bg-muted/30 p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Evidence</p><p className="mt-1 text-lg font-semibold tabular-nums">{linkedEvidenceCount}</p><p className="text-[10px] text-muted-foreground">Claims / conflicts / docs</p></div>
-                    <div className="rounded-xl border border-border bg-muted/30 p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Tasks</p><p className="mt-1 text-lg font-semibold tabular-nums">{linkedTaskCount}</p><p className="text-[10px] text-muted-foreground">Execution tasks linked</p></div>
+                    <div className="rounded-xl border border-border bg-muted/30 p-3"><p className="text-xs font-semibold  text-muted-foreground">Objectives</p><p className="mt-1 text-lg font-semibold tabular-nums">{linkedGoalCount}</p><p className="text-xs text-muted-foreground">Goals / objectives linked</p></div>
+                    <div className="rounded-xl border border-border bg-muted/30 p-3"><p className="text-xs font-semibold  text-muted-foreground">Evidence</p><p className="mt-1 text-lg font-semibold tabular-nums">{linkedEvidenceCount}</p><p className="text-xs text-muted-foreground">Claims / conflicts / docs</p></div>
+                    <div className="rounded-xl border border-border bg-muted/30 p-3"><p className="text-xs font-semibold  text-muted-foreground">Tasks</p><p className="mt-1 text-lg font-semibold tabular-nums">{linkedTaskCount}</p><p className="text-xs text-muted-foreground">Execution tasks linked</p></div>
                   </div>
-                  <p className="mt-2 text-[10px] leading-4 text-muted-foreground">These counts reflect records currently linked to this decision. They are not an AI-generated score.</p>
+                  <p className="mt-2 text-xs leading-4 text-muted-foreground">These counts reflect records currently linked to this decision. They are not an AI-generated score.</p>
 
                   <div className="mt-4 rounded-xl border border-border p-3">
                     <div className="mb-2 flex items-center gap-2"><Target className="h-3.5 w-3.5 text-brand-500" /><p className="text-xs font-semibold">Align with a Founder OS objective</p></div>
@@ -1070,7 +1080,7 @@ export default function DecisionsPage() {
                   <div className="mt-3 space-y-3 rounded-xl border border-border bg-muted/20 p-3">
                     <div>
                       <p className="text-xs font-semibold">Decision-to-task composer</p>
-                      <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                      <p className="mt-1 text-xs leading-4 text-muted-foreground">
                         Configure the execution task. It will be created in the existing Tasks workspace and linked automatically.
                       </p>
                     </div>
@@ -1115,7 +1125,7 @@ export default function DecisionsPage() {
                         </div>
 
                         <div className="flex flex-wrap items-center justify-between gap-3">
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-xs text-muted-foreground">
                             {selected.owner_id ? 'Decision owner will be assigned.' : 'Task will initially be unassigned.'}
                             {selected.team_id ? ' Decision team will be reused.' : ''}
                           </p>
@@ -1137,7 +1147,7 @@ export default function DecisionsPage() {
                         </div>
                       </>
                     ) : (
-                      <span className="inline-flex rounded-lg border border-border px-3 py-2 text-[10px] font-medium text-muted-foreground">
+                      <span className="inline-flex rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground">
                         Execution task creation becomes available after approval.
                       </span>
                     )}
@@ -1339,7 +1349,7 @@ export default function DecisionsPage() {
                               <span className="text-muted-foreground">to</span>
                               <span className="capitalize">{entry.newStatus}</span>
                             </div>
-                            <p className="mt-1 text-[10px] text-muted-foreground">
+                            <p className="mt-1 text-xs text-muted-foreground">
                               {entry.reviewerName || entry.reviewerEmail || 'Workspace member'} | {formatDate(entry.createdAt)}
                             </p>
                             {entry.reviewNote && (
@@ -1355,7 +1365,7 @@ export default function DecisionsPage() {
                     )}
                   </div>
                   {historyQuery.data && historyQuery.data.total > 0 && (
-                    <div className="mt-3 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                    <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
                       <span>
                         {historyQuery.data.offset + 1}–{Math.min(
                           historyQuery.data.offset + historyQuery.data.items.length,
@@ -1395,7 +1405,7 @@ export default function DecisionsPage() {
                   )}
                 </section>
 
-                <div className="border-t border-border pt-4 text-[10px] text-muted-foreground"><p>Created {formatDate(selected.created_at)} | Decision ID {selected.id}</p><p className="mt-1">Lifecycle actions are permission-checked and audit-logged by the server.</p></div>
+                <div className="border-t border-border pt-4 text-xs text-muted-foreground"><p>Created {formatDate(selected.created_at)} | Decision ID {selected.id}</p><p className="mt-1">Lifecycle actions are permission-checked and audit-logged by the server.</p></div>
               </div>
             </div>
           )}
@@ -1414,7 +1424,7 @@ export default function DecisionsPage() {
               <div><label className={labelClass()}>Expected outcome</label><textarea rows={2} maxLength={8000} value={form.expectedOutcome} onChange={(event) => setForm((current) => ({ ...current, expectedOutcome: event.target.value }))} className={fieldClass()} placeholder="What measurable result should follow?" /></div>
               <div className="grid gap-4 sm:grid-cols-2"><div><label className={labelClass()}>Owner user ID (optional)</label><input value={form.ownerId} onChange={(event) => setForm((current) => ({ ...current, ownerId: event.target.value }))} className={fieldClass()} placeholder="Existing user UUID" /></div><div><label className={labelClass()}>Team ID (optional)</label><input value={form.teamId} onChange={(event) => setForm((current) => ({ ...current, teamId: event.target.value }))} className={fieldClass()} placeholder="Existing team UUID" /></div></div>
               <div className="grid gap-4 sm:grid-cols-2"><div><label className={labelClass()}>Due date</label><input type="date" value={form.dueDate} onChange={(event) => setForm((current) => ({ ...current, dueDate: event.target.value }))} className={fieldClass()} /></div><div><label className={labelClass()}>Review due date</label><input type="date" value={form.reviewDueAt} onChange={(event) => setForm((current) => ({ ...current, reviewDueAt: event.target.value }))} className={fieldClass()} /></div></div>
-              <p className="text-[11px] leading-5 text-muted-foreground">Owner and team IDs are optional. The API verifies that supplied records belong to this organisation and that your role can use them.</p>
+              <p className="text-xs leading-5 text-muted-foreground">Owner and team IDs are optional. The API verifies that supplied records belong to this organisation and that your role can use them.</p>
               <div className="flex flex-col-reverse justify-end gap-2 border-t border-border pt-4 sm:flex-row"><button type="button" onClick={() => setComposerOpen(false)} className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted">Cancel</button><button type="submit" disabled={saveMutation.isPending || !form.title.trim()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50">{saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}{editingId ? 'Save changes' : 'Create decision'}</button></div>
             </form>
           </div>
@@ -1426,7 +1436,7 @@ export default function DecisionsPage() {
           <div className="w-full max-w-lg rounded-2xl border border-border bg-card p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-3"><div><h2 id="transition-title" className="text-base font-semibold">{transitionLabel(transitionTarget)}</h2><p className="mt-1 text-xs text-muted-foreground">Move "{selected.title}" from {selected.status} to {transitionTarget}.</p></div><button type="button" onClick={() => setTransitionTarget(null)} aria-label="Close transition" className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><X className="h-4 w-4" /></button></div>
             <form onSubmit={submitTransition} className="mt-5 space-y-4"><div><label className={labelClass()}>{transitionTarget === 'rejected' ? 'Rejection explanation *' : transitionTarget === 'reviewed' ? 'Review note *' : 'Lifecycle note (optional)'}</label><textarea rows={3} value={transitionNote} onChange={(event) => setTransitionNote(event.target.value)} className={fieldClass()} placeholder="Record the reasoning behind this lifecycle change." /></div>{(transitionTarget === 'implemented' || transitionTarget === 'reviewed') && <div><label className={labelClass()}>{transitionTarget === 'reviewed' ? 'Actual outcome *' : 'Actual outcome (optional)'}</label><textarea rows={2} value={actualOutcome} onChange={(event) => setActualOutcome(event.target.value)} className={fieldClass()} placeholder="What happened after implementation?" /></div>}
-            {transitionTarget === 'reviewed' && <div><label className={labelClass()}>Outcome assessment *</label><select required value={outcomeAssessment} onChange={(event) => setOutcomeAssessment(event.target.value as DecisionOutcomeAssessment | '')} className={fieldClass()}><option value="">Select the result</option><option value="achieved">Achieved</option><option value="partially_achieved">Partially achieved</option><option value="not_achieved">Not achieved</option><option value="inconclusive">Inconclusive</option></select><p className="mt-1 text-[10px] leading-4 text-muted-foreground">Assess the actual result against the expected outcome. This assessment is saved to the decision audit history.</p></div>}
+            {transitionTarget === 'reviewed' && <div><label className={labelClass()}>Outcome assessment *</label><select required value={outcomeAssessment} onChange={(event) => setOutcomeAssessment(event.target.value as DecisionOutcomeAssessment | '')} className={fieldClass()}><option value="">Select the result</option><option value="achieved">Achieved</option><option value="partially_achieved">Partially achieved</option><option value="not_achieved">Not achieved</option><option value="inconclusive">Inconclusive</option></select><p className="mt-1 text-xs leading-4 text-muted-foreground">Assess the actual result against the expected outcome. This assessment is saved to the decision audit history.</p></div>}
               {selected.status === 'proposed' && (transitionTarget === 'approved' || transitionTarget === 'rejected') && selected.approval_required_role && selected.approval_delegation_allowed && (
                 <div>
                   <label className={labelClass()}>Delegated authority (optional)</label>
@@ -1436,12 +1446,13 @@ export default function DecisionsPage() {
                       const valid = !item.revokedAt && new Date(item.validFrom).getTime() <= Date.now() && new Date(item.validUntil).getTime() > Date.now();
                       const typeMatches = item.decisionType === 'all' || item.decisionType === selected.decision_type;
                       const priorityMatches = item.priority === 'all' || item.priority === selected.priority;
-                      return valid && typeMatches && priorityMatches;
+                      return item.delegateUserId === user?.id && valid && typeMatches && priorityMatches &&
+                        (APPROVAL_RANK[item.principalRole ?? ''] ?? 0) >= (APPROVAL_RANK[selected.approval_required_role ?? ''] ?? 0);
                     }).map((item) => (
                       <option key={item.id} value={item.id}>{item.principalName || 'Principal'}{' -> '}{item.delegateName || 'Delegate'}{' | expires '}{formatDate(item.validUntil)}</option>
                     ))}
                   </select>
-                  <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Select a delegation only when you are the named delegate. The server independently validates the delegation, scope, expiry and represented user's role.</p>
+                  <p className="mt-1 text-xs leading-4 text-muted-foreground">Only current delegations that cover this decision are listed.</p>
                 </div>
               )}
 <div className="flex flex-col-reverse justify-end gap-2 border-t border-border pt-4 sm:flex-row"><button type="button" onClick={() => setTransitionTarget(null)} className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold hover:bg-muted">Cancel</button><button type="submit" disabled={transitionMutation.isPending || ((transitionTarget === 'rejected' || transitionTarget === 'reviewed') && transitionNote.trim().length < 8)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50">{transitionMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}Confirm transition</button></div></form>

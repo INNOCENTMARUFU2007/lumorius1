@@ -14,6 +14,8 @@ import {
 } from '@tanstack/react-query';
 import {
   Bot,
+  Copy,
+  Search,
   Loader2,
   MessageSquare,
   Plus,
@@ -278,7 +280,29 @@ function formatConversationDate(value: string): string {
   return formatRelative(value);
 }
 
-export default function AdvisorChat() {
+function renderInline(text: string) {
+  return text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g).map((token, index) => {
+    if (token.startsWith('**') && token.endsWith('**')) return <strong key={index}>{token.slice(2, -2)}</strong>;
+    if (token.startsWith('`') && token.endsWith('`')) return <code key={index} className="rounded bg-muted px-1 py-0.5 text-[0.9em]">{token.slice(1, -1)}</code>;
+    return token;
+  });
+}
+
+function StrategyReply({ content }: { content: string }) {
+  return <div className="space-y-3 break-words text-sm leading-7">
+    {content.split(/^```[^\n]*\n|^```[ \t]*$/gm).map((block, index) => {
+      if (index % 2) return <pre key={index} className="overflow-x-auto rounded-xl bg-muted p-3 text-xs leading-6"><code>{block.trimEnd()}</code></pre>;
+      return block.trim().split(/\n\s*\n/).filter(Boolean).map((part, paragraph) => {
+        const key = index + '-' + paragraph;
+        const lines = part.split('\n');
+        if (lines.every((line) => /^\s*[-*] /.test(line))) return <ul key={key} className="list-disc space-y-1 pl-5">{lines.map((line, row) => <li key={row}>{renderInline(line.replace(/^\s*[-*] /, ''))}</li>)}</ul>;
+        return <div key={key} className="whitespace-pre-wrap">{lines.map((line, row) => /^#{1,6} /.test(line) ? <h3 key={row} className="font-semibold">{renderInline(line.replace(/^#{1,6} /, ''))}</h3> : <p key={row}>{renderInline(line)}</p>)}</div>;
+      });
+    })}
+  </div>;
+}
+
+export default function AdvisorChat({ account }: { account: string }) {
   const queryClient = useQueryClient();
 
   const [activeConversationId, setActiveConversationId] =
@@ -286,6 +310,8 @@ export default function AdvisorChat() {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [conversationSearch, setConversationSearch] = useState('');
+  const composer = useRef<HTMLTextAreaElement>(null);
 
   const [loadingConversationId, setLoadingConversationId] =
     useState<string | null>(null);
@@ -298,7 +324,7 @@ export default function AdvisorChat() {
     Conversation[],
     Error
   >({
-    queryKey: ['ai', 'conversations'],
+    queryKey: ['ai', 'conversations', account],
 
     queryFn: async () => {
       const response = await api.get<unknown>(
@@ -312,6 +338,7 @@ export default function AdvisorChat() {
   });
 
   const conversations = conversationsQuery.data ?? [];
+  const visibleConversations = conversations.filter((item) => (item.title ?? 'New conversation').toLowerCase().includes(conversationSearch.trim().toLowerCase()));
 
   const sendMutation = useMutation<
     ChatResponse,
@@ -359,7 +386,7 @@ export default function AdvisorChat() {
       ]);
 
       void queryClient.invalidateQueries({
-        queryKey: ['ai', 'conversations'],
+        queryKey: ['ai', 'conversations', account],
       });
     },
 
@@ -386,6 +413,7 @@ export default function AdvisorChat() {
     setMessages([]);
     setInput('');
     setLoadingConversationId(null);
+    composer.current?.focus();
   };
 
   const loadConversation = async (
@@ -430,7 +458,7 @@ export default function AdvisorChat() {
 
     const message = input.trim();
 
-    if (!message || sendMutation.isPending) {
+    if (!message || sendMutation.isPending || loadingConversationId) {
       return;
     }
 
@@ -455,7 +483,7 @@ export default function AdvisorChat() {
   return (
     <div className="grid min-h-[560px] grid-cols-1 gap-4 lg:grid-cols-[250px_minmax(0,1fr)]">
       {/* Conversation sidebar */}
-      <aside className="flex min-h-0 flex-col rounded-xl border border-border bg-card p-3">
+      <aside className="flex min-h-0 flex-col rounded-2xl border border-border bg-card p-3">
         <button
           type="button"
           onClick={startNew}
@@ -465,8 +493,13 @@ export default function AdvisorChat() {
           <Plus className="h-4 w-4" />
           New chat
         </button>
+        <label className="relative mt-3 block">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <input value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} aria-label="Search conversation titles" placeholder="Search chats…" className="w-full rounded-lg border border-border bg-background py-2 pl-8 pr-2 text-xs" />
+        </label>
+        {conversationSearch && !visibleConversations.length && <p className="p-2 text-xs text-muted-foreground">No matching chats.</p>}
 
-        <p className="mb-2 mt-4 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <p className="mb-2 mt-4 px-2 text-xs font-semibold  text-muted-foreground">
           Recent conversations
         </p>
 
@@ -503,7 +536,7 @@ export default function AdvisorChat() {
             </div>
           )}
 
-          {conversations.map((conversation) => (
+          {visibleConversations.map((conversation) => (
             <button
               key={conversation.id}
               type="button"
@@ -521,7 +554,7 @@ export default function AdvisorChat() {
                 {conversation.title || 'New conversation'}
               </span>
 
-              <span className="mt-1 block text-[10px] opacity-70">
+              <span className="mt-1 block text-xs opacity-70">
                 {formatConversationDate(
                   conversation.updated_at,
                 )}
@@ -541,24 +574,24 @@ export default function AdvisorChat() {
 
       {/* Chat panel */}
       <section className="flex min-h-[560px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
-        <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-3 border-b border-border bg-muted/35 px-4 py-3">
           <span className="rounded-lg bg-brand-500/10 p-2 text-brand-500">
             <MessageSquare className="h-4 w-4" />
           </span>
 
           <div>
             <h2 className="text-sm font-semibold text-foreground">
-              Lumorius AI Advisor
+              AI Advisor
             </h2>
 
             <p className="text-xs text-muted-foreground">
-              Strategy chat · uses the configured AI provider
+              Saved conversations
             </p>
           </div>
         </div>
 
         <div
-          className="flex-1 space-y-4 overflow-y-auto p-4"
+          className="mx-auto w-full max-w-4xl flex-1 space-y-6 overflow-y-auto px-4 py-5 sm:px-7"
           aria-live="polite"
         >
           {messages.length === 0 &&
@@ -569,24 +602,25 @@ export default function AdvisorChat() {
                 </span>
 
                 <p className="mt-3 text-sm font-semibold text-foreground">
-                  Continue your strategy conversation
+                  What are you working on?
                 </p>
 
                 <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-                  Discuss strategy, priorities, risks and opportunities with
-                  permission-scoped company evidence. Sources appear beneath replies.
+                  Ask about profit, costs, growth, risks or priorities. Answers use your
+                  documents, meetings, decisions, tasks and financial records; sources appear beneath each reply.
                 </p>
 
                 <div className="mt-4 flex flex-wrap justify-center gap-2">
                   {[
-                    'What should I focus on today?',
+                    'What can we do to improve profit?',
+                    'Where are we losing money?',
+                    'What should I focus on this week?',
                     'What risks should I review?',
-                    'Suggest growth opportunities',
                   ].map((suggestion) => (
                     <button
                       key={suggestion}
                       type="button"
-                      onClick={() => setInput(suggestion)}
+                      onClick={() => { setInput(suggestion); composer.current?.focus(); }}
                       className="rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       {suggestion}
@@ -615,7 +649,7 @@ export default function AdvisorChat() {
               <span
                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
                   message.role === 'user'
-                    ? 'bg-brand-500 text-white'
+                    ? 'hidden bg-muted text-foreground sm:flex'
                     : 'bg-muted text-foreground'
                 }`}
               >
@@ -626,19 +660,17 @@ export default function AdvisorChat() {
                 )}
               </span>
 
-              <div className="max-w-[82%] min-w-0">
-                <p
-                  className={`whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm leading-5 ${
-                  message.role === 'user'
-                    ? 'rounded-tr-sm bg-brand-500 text-white'
-                    : 'rounded-tl-sm bg-muted text-foreground'
-                  }`}
-                >
-                  {message.content}
-                </p>
+              <div className={message.role === 'user' ? 'max-w-[85%] min-w-0' : 'min-w-0 flex-1'}>
+                {message.role === 'user'
+                  ? <p className="whitespace-pre-wrap break-words rounded-2xl bg-muted px-4 py-2.5 text-sm leading-6">{message.content}</p>
+                  : <StrategyReply content={message.content} />}
+                {message.role === 'assistant' && <button type="button" onClick={async () => {
+                  try { await navigator.clipboard.writeText(message.content); toast.success('Reply copied'); }
+                  catch { toast.error('Could not copy the reply.'); }
+                }} className="mt-1 inline-flex items-center gap-1 rounded p-1 text-xs text-muted-foreground hover:bg-muted"><Copy className="h-3.5 w-3.5" /> Copy</button>}
                 {message.role === 'assistant' && Boolean(message.sources?.length) && (
                   <div className="mt-2 space-y-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <p className="text-xs font-semibold  text-muted-foreground">
                       Evidence
                     </p>
                     {message.sources?.map((source) => (
@@ -672,8 +704,7 @@ export default function AdvisorChat() {
             role="alert"
             className="border-t border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive"
           >
-            The response failed. Your message remains in the conversation.
-            Check the error notification and try again.
+            {getErrorMessage(sendMutation.error, 'The AI provider could not send a reply. Check the provider and try again.')}
           </p>
         )}
 
@@ -682,6 +713,8 @@ export default function AdvisorChat() {
           className="flex items-end gap-2 border-t border-border p-3"
         >
           <textarea
+            ref={composer}
+            maxLength={4000}
             value={input}
             onChange={(event) =>
               setInput(event.target.value)
@@ -698,7 +731,7 @@ export default function AdvisorChat() {
             }}
             rows={2}
             aria-label="Message the AI Advisor"
-            placeholder="Ask about strategy, priorities, risks or opportunities…"
+            placeholder="Ask about profit, costs, strategy, priorities or risks…"
             className="min-h-11 flex-1 resize-y rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-brand-500"
           />
 

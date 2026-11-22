@@ -10,7 +10,7 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, IsOptional, IsArray, IsDateString, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsDateString, IsInt, IsUUID, MaxLength, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 
 class CreateApiKeyDto {
@@ -20,11 +20,12 @@ class CreateApiKeyDto {
 }
 
 class AuditQueryDto {
-  @IsOptional() @IsString() action?: string;
-  @IsOptional() @IsString() userId?: string;
-  @IsOptional() @IsString() from?: string;
-  @IsOptional() @IsString() to?: string;
+  @IsOptional() @IsString() @MaxLength(120) action?: string;
+  @IsOptional() @IsUUID() userId?: string;
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100000) page?: number;
 }
 
 @ApiTags('security')
@@ -49,6 +50,12 @@ export class SecurityController {
     @Query() query: AuditQueryDto,
   ) {
     return this.securityService.getAuditLogs(user.organizationId!, query);
+  }
+
+  @Get('access-review')
+  @Roles('admin')
+  async accessReview(@CurrentUser() user: JwtPayload, @Query() query: AuditQueryDto) {
+    return this.securityService.accessReview(user.organizationId, query.page ?? 1);
   }
 
   @Post('api-keys')
